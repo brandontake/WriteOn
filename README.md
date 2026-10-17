@@ -133,24 +133,28 @@ Play deadlines: new apps and updates must target API 36 since 2026-08-31 (extens
 ### How the build is verified
 
 Both variants were built on **2026-10-17** with `:app:assembleDebug` and `:app:assembleRelease` (offline,
-JDK 21.0.12.1, Gradle 8.9):
+JDK 21.0.12.1, Gradle 8.9). The figures below are from the **latest** run, after the interaction and
+attribution batch:
 
 | Variant | Size | applicationId | Notes |
 | --- | --- | --- | --- |
-| Debug | **7.47 MB** (7,836,490 bytes) | `com.ezpnix.writeon.debug` | R8 runs, but `isDebuggable` keeps optimisation/obfuscation off; installs alongside the release build |
-| Release | **3.73 MB** (3,910,814 bytes) | `com.ezpnix.writeon` | full R8 optimisation + obfuscation; ships two baseline profiles (API 28–30, 31+) |
+| Debug | **8.58 MB** (8,994,921 bytes) | `com.ezpnix.writeon.debug` | R8 runs, but `isDebuggable` keeps optimisation/obfuscation off; installs alongside the release build |
+| Release | **3.73 MB** (3,912,226 bytes) | `com.ezpnix.writeon` | full R8 optimisation + obfuscation; ships two baseline profiles (API 28–30, 31+) |
 
 Both report `versionCode 10` / `versionName 1.9`, `minSdk 26`, `targetSdk 36`, only the `zh` + default
-locales, and four ABIs. That build run caught and fixed six real compiler errors and produced
-`app/schemas/…/6.json` from the Room schema export.
+locales, and four ABIs. The preceding security batch built the same two variants at 7.47 MB / 3.73 MB
+and caught and fixed six real compiler errors; it also produced `app/schemas/…/6.json` from the Room
+schema export.
 
-Beyond the build: `aapt2 dump badging` on both APKs, `apksigner verify` on both, byte-level inspection of
-`classes*.dex` (release ships one 6.18 MB dex, debug two totalling 15.50 MB), and the R8 mapping files in
+Beyond the build: `aapt2 dump badging` on both APKs, `apksigner verify` on both, `aapt2 dump resources`
+to confirm the new strings actually landed in the packaged resources, and the R8 mapping files in
 `app/build/outputs/mapping/{debug,release}/mapping.txt`.
 
-**Not yet verified:** `lintVitalRelease` was not run, and runtime behaviour — inset padding, the back
-gesture, the lock screen, image export, media-library writes and the widgets — still deserves a pass on a
-real device or emulator.
+`lintVitalRelease` ran on that latest build and reported **No issues found.** (report:
+`app/build/intermediates/lint_vital_intermediate_text_report/release/lintVitalReportRelease/lint-results-release.txt`).
+
+**Not yet verified:** runtime behaviour — inset padding, the back gesture, the lock screen, image
+export, media-library writes and the widgets — still deserves a pass on a real device or emulator.
 
 ---
 
@@ -230,6 +234,7 @@ WriteOn is built on top of other open-source projects. This section records exac
     WriteOn: Simple Notepad
 
     Copyright (C)2024 3zpnix
+    Modifications Copyright (C)2026 Brandontake
     
     This software is free to use, modify, and redistribute under 
     the terms of the GNU General Public License, as published by the 
