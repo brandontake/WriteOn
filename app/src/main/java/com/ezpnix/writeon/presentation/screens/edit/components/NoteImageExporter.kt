@@ -88,6 +88,7 @@ fun NoteImageCapture(
     containerColor: Color,
     cornerRadius: Dp,
     onCaptured: (ImageBitmap) -> Unit,
+    onFailed: (Throwable) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val graphicsLayer = rememberGraphicsLayer()
@@ -163,7 +164,12 @@ fun NoteImageCapture(
 
     LaunchedEffect(noteTitle, noteBody) {
         repeat(CAPTURE_FRAMES) { withFrameNanos { } }
-        runCatching { graphicsLayer.toImageBitmap() }.getOrNull()?.let(onCaptured)
+        // Previously the failure was swallowed here: getOrNull() returned null, onCaptured never
+        // ran, and the save host sat in its "saving" state forever with no message. Report it so the
+        // host can tell the user what actually went wrong.
+        runCatching { graphicsLayer.toImageBitmap() }
+            .onSuccess { onCaptured(it) }
+            .onFailure { onFailed(it) }
     }
 }
 
@@ -187,9 +193,27 @@ fun NoteImageSaveHost(
     val scope = rememberCoroutineScope()
     val alreadySaved = remember { mutableStateOf(false) }
 
+    // Report the outcome exactly once and always leave the saving state, whether the capture
+    // worked, the capture threw, or the write failed.
+    fun finish(message: String) {
+        Toast.makeText(context, message, Toast.LENGTH_LONG).show()
+        onFinished()
+    }
+
     Box(
-        modifier = Modifier.layout { measurable, _ ->
-            val placeable = measurable.measure(Constraints())
+        modifier = Modifier.layout { measurable, constraints ->
+            // `Constraints()` resolves to minWidth = maxWidth = minHeight = maxHeight = 0, which
+            // measured the capture into a 0 x 0 node: the bitmap was empty and every later step
+            // failed. The capture is laid out at its own natural height, so it is measured with
+            // unbounded height and the width this host is given, then reported as a zero sized node
+            // placed off screen so the real UI never moves.
+            val placeable = measurable.measure(
+                constraints.copy(
+                    minWidth = 0,
+                    minHeight = 0,
+                    maxHeight = Constraints.Infinity
+                )
+            )
             layout(0, 0) { placeable.place(IntOffset(OFF_SCREEN_X, 0)) }
         }
     ) {
@@ -211,17 +235,29 @@ fun NoteImageSaveHost(
                             baseName = NoteImageSaver.fileBaseName(noteTitle),
                             backgroundColor = containerColor.toArgb()
                         )
-                        Toast.makeText(
-                            context,
-                            if (location != null) {
-                                context.getString(R.string.msg_image_saved, location)
-                            } else {
-                                context.getString(R.string.msg_image_save_failed)
-                            },
-                            Toast.LENGTH_LONG
-                        ).show()
-                        onFinished()
+                        if (location != null) {
+                            finish(context.getString(R.string.msg_image_saved, location))
+                        } else {
+                            // Surface why: the old code reported a bare "could not save" that gave the
+                            // user nothing to act on, and hid the reason the write had failed.
+                            val reason = NoteImageSaver.lastFailure
+                            finish(
+                                if (reason != null) {
+                                    context.getString(R.string.msg_image_save_failed_reason, reason)
+                                } else {
+                                    context.getString(R.string.msg_image_save_failed)
+                                }
+                            )
+                        }
                     }
+                }
+            },
+            onFailed = { error ->
+                if (!alreadySaved.value) {
+                    alreadySaved.value = true
+                    finish(
+                        context.getString(R.string.msg_image_save_failed_reason, error.message ?: error.javaClass.simpleName)
+                    )
                 }
             }
         )
@@ -247,7 +283,16 @@ object NoteImageSaver {
         return sanitized.ifEmpty { "note" }
     }
 
-    /** Writes [bitmap] as a JPEG; returns the location it was written to, or null when it failed. */
+    /**
+     * Writes [bitmap] as a JPEG; returns the location it was written to, or null when it failed.
+     *
+     * The failure reason is kept in [lastFailure] so the caller can surface it: swallowing it here
+     * is what made "save as image" look like it simply never happened.
+     */
+    @Volatile
+    var lastFailure: String? = null
+        private set
+
     suspend fun save(
         context: Context,
         bitmap: ImageBitmap,
@@ -256,13 +301,20 @@ object NoteImageSaver {
     ): String? =
         withContext(Dispatchers.IO) {
             val fileName = "$baseName-${System.currentTimeMillis()}.jpg"
+            lastFailure = null
             runCatching {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                     saveWithMediaStore(context, bitmap, fileName, backgroundColor)
                 } else {
                     saveToAppPictures(context, bitmap, fileName, backgroundColor)
                 }
-            }.getOrNull()
+            }.fold(
+                onSuccess = { it },
+                onFailure = {
+                    lastFailure = it.message ?: it.javaClass.simpleName
+                    null
+                }
+            )
         }
 
     @RequiresApi(Build.VERSION_CODES.Q)
@@ -283,8 +335,16 @@ object NoteImageSaver {
         val uri = resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
             ?: error("MediaStore rejected the image")
 
-        resolver.openOutputStream(uri)?.use { writeJpeg(bitmap, backgroundColor, it) }
-            ?: error("Could not open $uri for writing")
+        // A failure past this point used to leave a zero byte entry pending forever, which the media
+        // scanner then hides, so a retry piled up invisible rows. Delete the partial entry instead.
+        try {
+            val stream = resolver.openOutputStream(uri)
+                ?: error("Could not open $uri for writing")
+            stream.use { writeJpeg(bitmap, backgroundColor, it) }
+        } catch (e: Throwable) {
+            runCatching { resolver.delete(uri, null, null) }
+            throw e
+        }
 
         values.clear()
         values.put(MediaStore.Images.Media.IS_PENDING, 0)

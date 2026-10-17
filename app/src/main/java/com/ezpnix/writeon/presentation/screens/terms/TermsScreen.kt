@@ -96,7 +96,7 @@ fun getTermsOfService(): String {
         append("${stringResource(R.string.terms_changes_body)}\n\n")
 
         append("### ${stringResource(R.string.terms_privacy_title)}\n")
-        append("${stringResource(R.string.terms_privacy_body)} **https://github.com/3zpnix/WriteOn/**.\n\n")
+        append("${stringResource(R.string.terms_privacy_body)} **${ConnectionConst.GITHUB}/**.\n\n")
 
         append("### ${stringResource(R.string.terms_contact_title)}\n")
         append("${stringResource(R.string.terms_contact_body)} ${ConnectionConst.SUPPORT_MAIL}.\n\n")

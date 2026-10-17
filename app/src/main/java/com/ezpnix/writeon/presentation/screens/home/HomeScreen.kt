@@ -88,6 +88,7 @@ import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.rememberDrawerState
 import androidx.compose.material3.ripple
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
@@ -102,6 +103,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.graphicsLayer
@@ -130,6 +132,7 @@ import com.ezpnix.writeon.presentation.components.SelectAllButton
 import com.ezpnix.writeon.presentation.components.TitleText
 import com.ezpnix.writeon.presentation.components.defaultScreenEnterAnimation
 import com.ezpnix.writeon.presentation.components.defaultScreenExitAnimation
+import com.ezpnix.writeon.presentation.navigation.HomeOverlayState
 import com.ezpnix.writeon.presentation.navigation.NavRoutes
 import com.ezpnix.writeon.presentation.screens.home.viewmodel.HomeViewModel
 import com.ezpnix.writeon.presentation.screens.home.widgets.NoteFilter
@@ -170,6 +173,15 @@ fun HomeView(
     BackHandler(enabled = fabExpanded && viewModel.selectedNotes.isEmpty()) {
         fabExpanded = false
         showDimBackground = false
+    }
+    // A back *gesture* never reaches the two handlers above, so the expanded state is also published
+    // to the activity's PredictiveBackHost. That handler is registered after the navigation library's
+    // and therefore wins, which is what stops a swipe from finishing the activity at the root route.
+    LaunchedEffect(fabExpanded) { HomeOverlayState.publish(fabExpanded) }
+    DisposableEffect(Unit) {
+        // Leaving the home screen (navigating into settings, the editor, ...) must not leave the
+        // overlay marked as open, or the next back gesture on any screen would collapse nothing.
+        onDispose { HomeOverlayState.collapse() }
     }
     // Filtering + sorting the whole note list is a derived value: it is recomputed only when one of
     // its inputs changes, instead of on every recomposition of HomeView (drawer open/close,
@@ -566,6 +578,8 @@ fun HomeViewTopBarWithSearch(
         onCloseSearch()
         focusManager.clearFocus()
     }
+    // Focusing the field activates the bar on its own (see the onFocusChanged below); the magnifier is
+    // only an alternative way in, and stays for users who prefer an explicit target.
     // Material3's SearchBar (material3 1.3.0) lays its 56.dp input field out at a fixed offset from
     // the top of the box it is given (topPadding = unconsumedTopInset + 8.dp), reports
     // constraints.maxHeight once fully active and snaps between its two container heights, so the
@@ -573,7 +587,7 @@ fun HomeViewTopBarWithSearch(
     // hand-composed from a Surface + BasicTextField: the field fills the bar and centres its own
     // content, and the height, container colour and icons all animate smoothly.
     val barHeight by animateDpAsState(
-        targetValue = if (searchActive) 64.dp else 56.dp,
+        targetValue = if (searchActive) 72.dp else 56.dp,
         animationSpec = spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = Spring.StiffnessMediumLow),
         label = "SearchBarHeight"
     )
@@ -588,7 +602,9 @@ fun HomeViewTopBarWithSearch(
             .fillMaxWidth()
             .statusBarsPadding()
             .padding(horizontal = 16.dp, vertical = 8.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp)
+        // The gap to the title row collapses as the bar grows, so activating the search visibly
+        // lifts the bar towards the status bar instead of only changing its colour.
+        verticalArrangement = Arrangement.spacedBy(if (searchActive) 0.dp else 8.dp)
     ) {
         AnimatedVisibility(
             visible = !searchActive,
@@ -667,7 +683,11 @@ fun HomeViewTopBarWithSearch(
                     modifier = Modifier
                         .weight(1f)
                         .fillMaxHeight()
-                        .focusRequester(focusRequester),
+                        .focusRequester(focusRequester)
+                        // Tapping the field is the same gesture as tapping the magnifier: focusing it
+                        // activates the bar (grows it, swaps the leading icon, hides the button), so
+                        // the user no longer has to find the icon to start searching.
+                        .onFocusChanged { if (it.isFocused) searchActive = true },
                     decorationBox = { innerTextField ->
                         Box(
                             modifier = Modifier.fillMaxSize(),
@@ -884,9 +904,13 @@ fun FloatingBottomButtons(
             .navigationBarsPadding(),
         contentAlignment = Alignment.BottomCenter
     ) {
+        // The pill's padding used to be 8.dp, which left the two 56.dp buttons almost touching the edge of
+        // the capsule and 12.dp apart from each other: the icons looked cramped inside it. The padding
+        // is now generous enough for the shape to read as a pill, and the row gap has grown with it.
         val fabSize = 56.dp
-        val spacing = 12.dp
-        val totalWidth = fabSize * 2 + spacing + 16.dp
+        val pillPadding = 18.dp
+        val spacing = 16.dp
+        val totalWidth = fabSize * 2 + spacing + pillPadding * 2
         Column(
             verticalArrangement = Arrangement.spacedBy(12.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
@@ -913,16 +937,16 @@ fun FloatingBottomButtons(
                 modifier = Modifier
                     .clip(appCornerShape())
                     .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.6f))
-                    .padding(8.dp)
+                    .padding(pillPadding)
             ) {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    horizontalArrangement = Arrangement.spacedBy(spacing)
                 ) {
                     FloatingActionButton(
                         onClick = { onNoteClicked(0) },
                         containerColor = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.size(56.dp)
+                        modifier = Modifier.size(fabSize)
                     ) {
                         Icon(
                             imageVector = Icons.Default.Edit,
@@ -935,7 +959,7 @@ fun FloatingBottomButtons(
                         onClick = {},
                         containerColor = MaterialTheme.colorScheme.primary,
                         modifier = Modifier
-                            .size(56.dp)
+                            .size(fabSize)
                             .graphicsLayer { scaleX = scale; scaleY = scale }
                             .pointerInteropFilter {
                                 when (it.action) {

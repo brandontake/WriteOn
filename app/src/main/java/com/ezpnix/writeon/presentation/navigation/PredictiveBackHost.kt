@@ -22,6 +22,13 @@ import kotlinx.coroutines.CancellationException
  * over the back gesture while it is enabled and the navigation library's own predictive handling
  * is bypassed. Disabling the handler (at the root destination) hands control back to the default
  * behaviour, while [showPreview] only decides whether the scale/fade preview is rendered.
+ *
+ * [isOverlayOpen] / [onCollapseOverlay] give a screen one more, purely local layer on top of that:
+ * when a full screen overlay is up (the home quick action bar), a completed gesture closes the
+ * overlay instead of navigating. A screen's own `BackHandler` cannot do this — it is never invoked
+ * for a gesture — which is why an expanded bar used to send the swipe through to the navigation
+ * host and finish the activity at the root destination. The handler is registered whenever either
+ * the destination is not the start one or the overlay is open, so it also covers the root case.
  */
 @Composable
 fun PredictiveBackHost(
@@ -29,6 +36,8 @@ fun PredictiveBackHost(
     showPreview: Boolean,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
+    isOverlayOpen: Boolean = false,
+    onCollapseOverlay: (() -> Unit)? = null,
     content: @Composable () -> Unit
 ) {
     val progress = remember { Animatable(0f) }
@@ -47,15 +56,20 @@ fun PredictiveBackHost(
         content()
     }
 
-    if (enabled) {
+    if (enabled || isOverlayOpen) {
         PredictiveBackHandler {
             focusManager.clearFocus(force = true)
             try {
                 it.collect { event ->
                     if (showPreview) progress.snapTo(event.progress)
                 }
-                // The gesture completed: restore and navigate.
-                onBack()
+                // The gesture completed. Close the overlay first: it belongs to the current screen,
+                // so leaving it up and navigating away would drop the user's place in the back stack.
+                if (isOverlayOpen && onCollapseOverlay != null) {
+                    onCollapseOverlay()
+                } else {
+                    onBack()
+                }
                 progress.snapTo(0f)
             } catch (_: CancellationException) {
                 // The gesture was cancelled: animate the UI back to rest.

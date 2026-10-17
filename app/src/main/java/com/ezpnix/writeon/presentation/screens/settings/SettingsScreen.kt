@@ -179,7 +179,7 @@ fun MainSettings(settingsViewModel: SettingsViewModel, navController: NavControl
                     icon = Icons.Rounded.BuildCircle,
                     shape = shapeManager(radius = settingsViewModel.settings.value.cornerRadius, isFirst = true),
                     actionType = SettingActionType.LINK,
-                    linkClicked = { uriHandler.openUri("https://github.com/3zpnix/WriteOn/issues/new") },
+                    linkClicked = { uriHandler.openUri("${ConnectionConst.GITHUB}/issues/new") },
                     // action = { showDialog = true } // Show pop-up instead of navigation
                 )
             }

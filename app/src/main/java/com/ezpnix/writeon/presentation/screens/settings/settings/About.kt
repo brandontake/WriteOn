@@ -26,9 +26,11 @@ import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.Home
 import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material.icons.rounded.Verified
+import androidx.compose.material.icons.rounded.Code
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -47,6 +49,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.navigation.NavController
 import com.ezpnix.writeon.R
+import com.ezpnix.writeon.core.constant.ConnectionConst
 import com.ezpnix.writeon.presentation.navigation.NavRoutes
 import com.ezpnix.writeon.presentation.screens.settings.SettingsScaffold
 import com.ezpnix.writeon.presentation.screens.settings.TitleText
@@ -82,7 +85,7 @@ fun AboutScreen(navController: NavController, settingsViewModel: SettingsViewMod
                     icon = Icons.Rounded.Download,
                     actionType = ActionType.LINK,
                     radius = shapeManager(isLast = true, radius = settingsViewModel.settings.value.cornerRadius),
-                    linkClicked = { uriHandler.openUri("https://github.com/3zpnix/WriteOn/") }
+                    linkClicked = { uriHandler.openUri(ConnectionConst.GITHUB) }
                 )
                 Spacer(modifier = Modifier.height(18.dp))
             }
@@ -137,6 +140,14 @@ fun AboutScreen(navController: NavController, settingsViewModel: SettingsViewMod
                 )
             }
             item {
+                Spacer(modifier = Modifier.height(18.dp))
+                CreditsSection(
+                    settingsViewModel = settingsViewModel,
+                    onForkClicked = { uriHandler.openUri(ConnectionConst.GITHUB) },
+                    onUpstreamClicked = { uriHandler.openUri(ConnectionConst.UPSTREAM_GITHUB) }
+                )
+            }
+            item {
                 LicenseSection(settingsViewModel, context = LocalContext.current, navController)
             }
         }
@@ -167,6 +178,45 @@ fun ContributorsClicked(
             radius = shapeManager(isFirst = isFirstItem, isLast = isLastItem, radius = settingsViewModel.settings.value.cornerRadius),
             actionType = ActionType.TEXT,
             customText = "✅"
+        )
+    }
+}
+
+/**
+ * Names the two people behind the build instead of leaving the app anonymous: the upstream author
+ * who created WriteOn, and the fork maintainer who adapted it. Both links are explicit callbacks so
+ * the fork and the upstream project stay separately reachable.
+ */
+@Composable
+fun CreditsSection(
+    settingsViewModel: SettingsViewModel,
+    onForkClicked: () -> Unit,
+    onUpstreamClicked: () -> Unit
+) {
+    val radius = settingsViewModel.settings.value.cornerRadius
+    Column(modifier = Modifier.fillMaxWidth()) {
+        SettingsBox(
+            title = stringResource(R.string.credits_title),
+            description = stringResource(R.string.credits_body),
+            icon = Icons.Rounded.Code,
+            actionType = ActionType.TEXT,
+            radius = shapeManager(isFirst = true, radius = radius)
+        )
+        SettingsBox(
+            title = stringResource(R.string.credits_fork),
+            description = ConnectionConst.GITHUB,
+            icon = Icons.Rounded.Download,
+            actionType = ActionType.LINK,
+            radius = shapeManager(radius = radius),
+            linkClicked = { onForkClicked() }
+        )
+        SettingsBox(
+            title = stringResource(R.string.credits_upstream),
+            description = ConnectionConst.UPSTREAM_GITHUB,
+            icon = Icons.Rounded.Home,
+            actionType = ActionType.LINK,
+            radius = shapeManager(isLast = true, radius = radius),
+            linkClicked = { onUpstreamClicked() }
         )
     }
 }
@@ -306,7 +356,7 @@ fun LicenseSection(settingsViewModel: SettingsViewModel, context: Context, navCo
                                         )
                                     ),
                                     onClick = {
-                                        val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://github.com/3zpnix/WriteOn"))
+                                        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(ConnectionConst.GITHUB))
                                         context.startActivity(intent)
                                     }
                         )

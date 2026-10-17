@@ -6,7 +6,11 @@ object ConnectionConst {
 
     const val YOUTUBE = "https://youtube.com/@3zpnix/"
 
-    const val GITHUB = "https://github.com/3zpnix/WriteOn/"
+    // The fork this build is published from. The upstream project lives at
+    // https://github.com/3zpnix/WriteOn and stays credited in the about screen.
+    const val GITHUB = "https://github.com/Brandontake/Writeon"
+
+    const val UPSTREAM_GITHUB = "https://github.com/3zpnix/WriteOn/"
 
     const val KOFI = "https://ko-fi.com/3zpnix"
 

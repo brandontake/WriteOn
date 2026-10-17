@@ -11,6 +11,10 @@
     <string name="android_description">详情</string>
     <string name="about">关于</string>
     <string name="description_about">GitHub • 版本 • 邮箱</string>
+    <string name="credits_title">致谢</string>
+    <string name="credits_body">WriteOn 由 @3zpnix 创作——一位喜欢制作小型开源应用与游戏的电子工程专业大学生。\n\n本版本由 @Brandontake 维护。这是一名 vibecoding 初学者的个人项目：应用经过 fork 后，完全出于自身需求进行调整与改进。每一处改动都是逐行手写完成的。</string>
+    <string name="credits_fork">本分支</string>
+    <string name="credits_upstream">上游项目</string>
     <string name="startup">“帮助 ~ 创作 ~ 分享”</string>
     <string name="enter_placeholder">首页问候语</string>
     <string name="enter_placeholder_description">输入你喜欢的任意文字</string>
@@ -31,6 +35,7 @@
     <string name="save_as_image">保存为图片</string>
     <string name="msg_image_saved">图片已保存至 %1$s</string>
     <string name="msg_image_save_failed">保存图片失败</string>
+    <string name="msg_image_save_failed_reason">保存图片失败：%1$s</string>
     <string name="grid_view">网格布局</string>
     <string name="column_view">列表布局</string>
     <string name="columns">网格列数</string>
@@ -264,7 +269,7 @@
     <string name="export_successful">导出成功</string>
     <string name="faq_a_auto_backup_files">它们目前位于 Android/data 文件夹中。遗憾的是，受当前 Android 政策限制，部分用户无法访问该目录。</string>
     <string name="faq_a_delete_note">在首页长按一条笔记即可看到可用选项。你还能发现其他隐藏功能，例如左右滑动来编辑/预览笔记。</string>
-    <string name="faq_a_developer">本应用由 @3zpnix 开发。他是一名电子工程专业的大学生，喜欢制作小型开源应用和游戏。</string>
+    <string name="faq_a_developer">WriteOn 由 @3zpnix 创作——一名喜欢制作小型开源应用与游戏的电子工程专业大学生。本版本由 @Brandontake 维护，这是一名 vibecoding 初学者，为自身需求 fork 并加以改进。</string>
     <string name="faq_a_feature_requests">当然！欢迎任何反馈或改进建议。开发者通常会在一两天内回复。</string>
     <string name="faq_a_lost_data">这种情况通常是由笔记数据库处理方式的改动引起的。要恢复数据，请使用旧版本应用中的恢复功能。</string>
     <string name="faq_a_open_source">是的！你可以随意 fork 并修改代码。这里没有任何见不得人的东西——没有病毒，没有强制广告——只有一款干净的开源应用。</string>
@@ -328,7 +333,7 @@
     <string name="nav_pinned_notes">置顶笔记</string>
     <string name="nav_tags">标签</string>
     <string name="nav_trash">回收站</string>
-    <string name="note_filter_support">(^-^) 感谢你的支持！https://github.com/3zpnix/WriteOn/</string>
+    <string name="note_filter_support">(^-^) 感谢你的支持！https://github.com/Brandontake/Writeon</string>
     <string name="notif_channel_pinned_notes">置顶笔记</string>
     <string name="notif_channel_pinned_notes_description">持续显示置顶的笔记</string>
     <string name="notif_no_content">无内容</string>

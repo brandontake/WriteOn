@@ -10,6 +10,10 @@
     <string name="android_description">details</string>
     <string name="about">About</string>
     <string name="description_about">Github • Version •  Email</string>
+    <string name="credits_title">Credits</string>
+    <string name="credits_body">WriteOn was created by @3zpnix — an electronic engineering university student who makes small open-source apps and games.\n\nThis build is maintained by @Brandontake. It is the personal project of a vibecoding beginner: the app was forked, adjusted and improved purely for personal needs. Every change here is made by hand, from the source code.</string>
+    <string name="credits_fork">This fork</string>
+    <string name="credits_upstream">Upstream project</string>
 
     <!-- Welcome / Greeting -->
         <string name="startup">"Help ~ Create ~ Share"</string>
@@ -34,6 +38,7 @@
     <string name="save_as_image">Save as image</string>
     <string name="msg_image_saved">Image saved to %1$s</string>
     <string name="msg_image_save_failed">Could not save the image</string>
+    <string name="msg_image_save_failed_reason">Could not save the image: %1$s</string>
 
     <!-- Sort & View -->
     <string name="grid_view">Grid Layout</string>
@@ -303,7 +308,7 @@
     <string name="export_successful">Export successful</string>
     <string name="faq_a_auto_backup_files">They are currently located in the Android/data folder, which, unfortunately, is inaccessible to some because of the current android policy</string>
     <string name="faq_a_delete_note">Long-press a note on your home screen to see the available options. You may also discover other hidden features as well such as the swipe to edit/preview note.</string>
-    <string name="faq_a_developer">This app was developed by @3zpnix, an electronic engineering university student who creates small open-source apps and games.</string>
+    <string name="faq_a_developer">WriteOn was created by @3zpnix, an electronic engineering university student who creates small open-source apps and games. This build is maintained by @Brandontake, a vibecoding beginner who forked it and improved it for their own needs.</string>
     <string name="faq_a_feature_requests">Of course! Any feedback or suggestions for improvement are welcome. The developer usually replies within a day or two.</string>
     <string name="faq_a_lost_data">Often times this happens due to some changes within that involves handling the notes database. To restore it back, use the outdated recovery feature from the previous versions of the app.</string>
     <string name="faq_a_open_source">Yes! You may fork it, modify codes to your liking. There\'s nothing shady—no virus, no forced ads—just a clean, open-source app.</string>
@@ -367,7 +372,7 @@
     <string name="nav_pinned_notes">Pinned Notes</string>
     <string name="nav_tags">Tags</string>
     <string name="nav_trash">Trash</string>
-    <string name="note_filter_support">(^-^) Your support would be appreciated! https://github.com/3zpnix/WriteOn/</string>
+    <string name="note_filter_support">(^-^) Your support would be appreciated! https://github.com/Brandontake/Writeon</string>
     <string name="notif_channel_pinned_notes">Pinned Notes</string>
     <string name="notif_channel_pinned_notes_description">Show pinned notes persistently</string>
     <string name="notif_no_content">No content</string>

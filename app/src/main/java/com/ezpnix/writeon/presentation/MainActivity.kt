@@ -21,6 +21,7 @@ import com.ezpnix.writeon.presentation.components.registerGalleryObserver
 import com.ezpnix.writeon.presentation.components.unregisterGalleryObserver
 import com.ezpnix.writeon.presentation.lock.LockGate
 import com.ezpnix.writeon.presentation.navigation.AppNavHost
+import com.ezpnix.writeon.presentation.navigation.HomeOverlayState
 import com.ezpnix.writeon.presentation.navigation.NavRoutes
 import com.ezpnix.writeon.presentation.navigation.PredictiveBackHost
 import com.ezpnix.writeon.presentation.screens.settings.model.SettingsViewModel
@@ -96,7 +97,11 @@ class MainActivity : AppCompatActivity() {
                                 PredictiveBackHost(
                                     enabled = backStackEntry?.destination?.route != startDestination,
                                     showPreview = predictiveBackEnabled,
-                                    onBack = { navController.popBackStack() }
+                                    onBack = { navController.popBackStack() },
+                                    // The home quick action bar is an overlay, not a destination.
+                                    // A back gesture closes it rather than leaving the app.
+                                    isOverlayOpen = HomeOverlayState.expanded,
+                                    onCollapseOverlay = { HomeOverlayState.collapse() }
                                 ) {
                                     AppNavHost(
                                         settingsViewModel = settingsViewModel,

@@ -4,7 +4,7 @@
 # WriteOn: Simple Notepad ✅
 A clean, intuitive note-taking app with *Material You* design — open source and privacy-respecting.
 
-[<img src=".github/github.png" alt="Get it on GitHub" height="55">](https://github.com/3zpnix/WriteOn/releases)
+[<img src=".github/github.png" alt="Get it on GitHub" height="55">](https://github.com/Brandontake/Writeon/releases)
 &nbsp;
 [<img src=".github/fdroid.png" alt="Get it on F-Droid" height="55">](https://f-droid.org/en/packages/com.ezpnix.writeon/)
 </div>
@@ -64,7 +64,7 @@ foreground services, and only the permissions the features actually need.
 
 ## 📥 Download
 
-- **GitHub Releases:** <https://github.com/3zpnix/WriteOn/releases>
+- **GitHub Releases:** <https://github.com/Brandontake/Writeon/releases>
 - **F-Droid:** <https://f-droid.org/en/packages/com.ezpnix.writeon/>
 
 Both APK variants are minified and shrunk, so the download stays in the low single-digit megabytes.
@@ -185,8 +185,15 @@ The complete list of what changed in this release lives in [v1.9变动.md](v1.9�
 
 ## 💬 Contact
 
-- *Email:* 3zpnix@proton.me
-- *Twitter:* [@3zpnix](https://twitter.com/3zpnix)
+- *Fork maintainer:* [@Brandontake](https://github.com/Brandontake) — <https://github.com/Brandontake/Writeon>
+- *Upstream author:* [@3zpnix](https://github.com/3zpnix) — <https://github.com/3zpnix/WriteOn> — 3zpnix@proton.me
+- *Upstream Twitter:* [@3zpnix](https://twitter.com/3zpnix)
+
+---
+
+## 🙋 Credits & Fork Notice
+
+WriteOn was created by [@3zpnix](https://github.com/3zpnix) — an electronic engineering university student who makes small open-source apps and games. **This build is maintained by [@Brandontake](https://github.com/Brandontake)**: it is the personal project of a vibecoding beginner who forked the app, adjusted it and improved it purely for their own needs. Upstream authorship is credited in full, here and in the app's About screen.
 
 ---
 
