@@ -38,12 +38,20 @@
 - [x] About screen credits both the upstream author (@3zpnix) and this fork's maintainer (@Brandontake, vibecoding beginner)
 - [x] `lintVitalRelease` ran for the first time: **No issues found.**
 - [x] Rebuilt both variants: debug 8.58 MB, release 3.73 MB, badging and signature re-checked
-- [ ] Push `a5d2017` and `c1ffe93` to `origin` — both are still local only
+- [x] Pushed to `origin`: `7b4eb05..deee1f6`
+
+## Done since 10/17/2026 (correction batch + release, `deee1f6`)
+- [x] **Save-as-image root cause corrected.** It was never the 0×0 measurement — it was a hardware bitmap. The RenderNode-backed capture layer produces a hardware bitmap that a software `Canvas` cannot draw, throwing `IllegalArgumentException: Software rendering doesn't support hardware bitmaps`. Fixed with `CompositingStrategy.Offscreen` on the capture layer plus an ARGB_8888 software copy in the JPEG writer.
+- [x] **Back gesture root cause corrected.** `OnBackPressedDispatcher` runs the *last* registered enabled callback, and the navigation host registers after `PredictiveBackHost` — so the navigation handler always won and the root route finished. A new `overlayBackHandler` now registers from `HomeView` while an overlay is expanded and takes precedence.
+- [x] "Check for updates" pointed at the original author; now `ConnectionConst.RELEASES`. Issue link moved to `ConnectionConst.ISSUES`.
+- [x] Generated a dedicated release keystore (`writeon-upload.jks`, RSA 4096, 10950 days, not committed); release APK is signed with `CN=Brandontake, OU=WriteOn, O=WriteOn` instead of the debug certificate
+- [x] Published **GitHub Release v1.9** — <https://github.com/brandontake/WriteOn/releases/tag/v1.9>, asset `app-release.apk` 3,911,482 bytes, SHA-256 re-downloaded and matched
 
 ## Open since 10/17/2026
-- [ ] A real release keystore — without `keystore.properties` the release APK falls back to the debug certificate, so it cannot be published or replace a shipped build
+- [ ] **Device regression pass** — the three fixes above are build-verified only. Two earlier rounds failed precisely by treating "it compiles" as "it works", so these need a real device before v1.10.
 - [ ] Unit tests for the vault KDF, the atomic restore and the DAO transaction
 - [ ] detekt / ktlint / CI gating
-- [ ] Device or emulator regression pass (lock screen, widgets, image export, media writes, back gesture)
 
 Contact me if you have any suggestions or feedbacks about the current/upcoming changes. Upstream: @3zpnix <ezpnix@proton.me>. This fork: @Brandontake <https://github.com/Brandontake/Writeon>
+
+⚠️ The release keystore lives only in this workspace. Back it up — without it you cannot publish an update that replaces v1.9.

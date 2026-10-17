@@ -78,17 +78,29 @@ Gradle wrapper that ships in this repository (Gradle 8.9, AGP 8.7.0).
 
 ```bash
 ./gradlew assembleDebug      # debug APK  (R8 + resource shrinking, debug keystore)
-./gradlew assembleRelease    # release APK (debug keystore unless keystore.properties exists)
+./gradlew assembleRelease    # release APK (upload keystore when keystore.properties exists)
 ```
 
 The project produces **APK files only** — there is no App Bundle task in the release flow.
 
-Release signing is optional: create `keystore.properties` in the repository root with
+Release signing is optional for local builds: create `keystore.properties` in the repository root with
 `storeFile`, `storePassword`, `keyAlias` and `keyPassword`, and the release build type picks it up.
 Without that file the release APK is signed with the debug keystore so that local builds stay
-installable. ⚠️ That fallback is why the release APK produced on 2026-10-17 carries a `CN=Android Debug`
-certificate — it installs and runs, but it cannot be uploaded to a store or replace an already published
-build. Configure a real keystore before shipping.
+installable — that fallback is still there, but **v1.9 was signed with a real key**
+(`CN=Brandontake, OU=WriteOn, O=WriteOn`).
+
+Two things to get right when you create that file:
+
+- **Write it without a BOM.** Windows PowerShell 5.1's `Set-Content -Encoding UTF8` emits a BOM, which
+  `Properties.load()` folds into the first key name, so `storeFile` comes back `null` and the build dies
+  with `path may not be null or empty string. path='null'`. Use `-Encoding ascii`, or write it from an
+  editor that saves UTF-8 without a BOM.
+- **`storeFile` is relative to the repository root**, not to `app/`, because `app/build.gradle.kts`
+  resolves it with `rootProject.file(...)`. For a keystore at the repo root, use `writeon-upload.jks`,
+  not `../writeon-upload.jks`.
+
+Both `*.jks` and `keystore.properties` are gitignored — keep them that way, and back the keystore up
+somewhere safe. Without it you cannot publish an update that replaces a shipped build.
 
 ### Toolchain notes
 
@@ -138,8 +150,11 @@ attribution batch:
 
 | Variant | Size | applicationId | Notes |
 | --- | --- | --- | --- |
-| Debug | **8.58 MB** (8,994,921 bytes) | `com.ezpnix.writeon.debug` | R8 runs, but `isDebuggable` keeps optimisation/obfuscation off; installs alongside the release build |
-| Release | **3.73 MB** (3,912,226 bytes) | `com.ezpnix.writeon` | full R8 optimisation + obfuscation; ships two baseline profiles (API 28–30, 31+) |
+| Debug | **7.47 MB** (7,837,158 bytes) | `com.ezpnix.writeon.debug` | R8 runs, but `isDebuggable` keeps optimisation/obfuscation off; installs alongside the release build |
+| Release | **3.73 MB** (3,911,482 bytes) | `com.ezpnix.writeon` | full R8 optimisation + obfuscation; ships two baseline profiles (API 28–30, 31+); signed with the project's upload key, not the debug certificate |
+
+SHA-256: debug `594B534E2E2CCA07F0FD0E61FDB7F7BEF9B63587B22B5E20CAF0D399E0481961`, release
+`33C7FD51645742440A218D723C0A70F5722BBBB5FACA1E8CD7FDB0C3FD5B74EC`.
 
 Both report `versionCode 10` / `versionName 1.9`, `minSdk 26`, `targetSdk 36`, only the `zh` + default
 locales, and four ABIs. The preceding security batch built the same two variants at 7.47 MB / 3.73 MB
@@ -150,8 +165,11 @@ Beyond the build: `aapt2 dump badging` on both APKs, `apksigner verify` on both,
 to confirm the new strings actually landed in the packaged resources, and the R8 mapping files in
 `app/build/outputs/mapping/{debug,release}/mapping.txt`.
 
-`lintVitalRelease` ran on that latest build and reported **No issues found.** (report:
+`lintVitalRelease` ran and reported **No issues found.** (report:
 `app/build/intermediates/lint_vital_intermediate_text_report/release/lintVitalReportRelease/lint-results-release.txt`).
+
+**Published:** [Release v1.9](https://github.com/brandontake/WriteOn/releases/tag/v1.9) carries exactly
+this release APK (SHA-256 re-downloaded and matched).
 
 **Not yet verified:** runtime behaviour — inset padding, the back gesture, the lock screen, image
 export, media-library writes and the widgets — still deserves a pass on a real device or emulator.
