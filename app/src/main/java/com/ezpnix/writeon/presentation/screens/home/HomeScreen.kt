@@ -134,6 +134,7 @@ import com.ezpnix.writeon.presentation.components.defaultScreenEnterAnimation
 import com.ezpnix.writeon.presentation.components.defaultScreenExitAnimation
 import com.ezpnix.writeon.presentation.navigation.HomeOverlayState
 import com.ezpnix.writeon.presentation.navigation.NavRoutes
+import com.ezpnix.writeon.presentation.navigation.overlayBackHandler
 import com.ezpnix.writeon.presentation.screens.home.viewmodel.HomeViewModel
 import com.ezpnix.writeon.presentation.screens.home.widgets.NoteFilter
 import com.ezpnix.writeon.presentation.screens.settings.model.SettingsViewModel
@@ -174,10 +175,17 @@ fun HomeView(
         fabExpanded = false
         showDimBackground = false
     }
-    // A back *gesture* never reaches the two handlers above, so the expanded state is also published
-    // to the activity's PredictiveBackHost. That handler is registered after the navigation library's
-    // and therefore wins, which is what stops a swipe from finishing the activity at the root route.
+    // A back *gesture* never reaches the two BackHandlers above, and the activity level host
+    // registers its handler before the navigation library's, so the swipe used to fall through to
+    // NavHost and finish the activity at the root route. This handler is composed here, inside the
+    // screen that owns the overlay, so it is the deepest and therefore last registered: it is the
+    // callback that runs. HomeOverlayState keeps PredictiveBackHost.isOverlayOpen in sync, which
+    // disables the activity level handler for exactly as long as this one is active.
     LaunchedEffect(fabExpanded) { HomeOverlayState.publish(fabExpanded) }
+    overlayBackHandler(enabled = fabExpanded && viewModel.selectedNotes.isEmpty()) {
+        fabExpanded = false
+        showDimBackground = false
+    }
     DisposableEffect(Unit) {
         // Leaving the home screen (navigating into settings, the editor, ...) must not leave the
         // overlay marked as open, or the next back gesture on any screen would collapse nothing.

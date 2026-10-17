@@ -38,6 +38,7 @@ import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asAndroidBitmap
+import androidx.compose.ui.graphics.layer.CompositingStrategy
 import androidx.compose.ui.graphics.layer.drawLayer
 import androidx.compose.ui.graphics.rememberGraphicsLayer
 import androidx.compose.ui.graphics.toArgb
@@ -106,6 +107,13 @@ fun NoteImageCapture(
             .clip(RoundedCornerShape(cornerRadius))
             .background(containerColor)
             .drawWithContent {
+                // Capture the content into a *software* layer. The default layer strategy uses a
+                // RenderNode, whose readback is a hardware bitmap; drawing that onto the software
+                // canvas used by the JPEG encoder throws
+                // IllegalArgumentException "Software rendering doesn't support hardware bitmaps".
+                // CompositingStrategy.OffscreenGraphicsLayer records into a bitmap-backed layer
+                // instead, so toImageBitmap() returns a bitmap the encoder can consume.
+                graphicsLayer.compositingStrategy = CompositingStrategy.Offscreen
                 graphicsLayer.record { this@drawWithContent.drawContent() }
                 drawLayer(graphicsLayer)
             }
@@ -371,13 +379,31 @@ object NoteImageSaver {
         return file.absolutePath
     }
 
-    /** JPEG has no alpha channel, so the capture is flattened onto [backgroundColor] first. */
+    /**
+     * JPEG has no alpha channel, so the capture is flattened onto [backgroundColor] first.
+     *
+     * A captured layer can come back as a hardware bitmap. Drawing one onto the software canvas
+     * used for encoding is what raises
+     * `IllegalArgumentException: Software rendering doesn't support hardware bitmaps`, so a
+     * `HARDWARE` bitmap is copied through a software canvas before it is flattened. The copy is
+     * best effort: if it fails the original is still drawn, and the error then surfaces as before.
+     */
     private fun writeJpeg(bitmap: ImageBitmap, backgroundColor: Int, output: OutputStream) {
-        val source = bitmap.asAndroidBitmap()
+        val raw = bitmap.asAndroidBitmap()
+        val source = if (raw.config == Bitmap.Config.HARDWARE) raw.toSoftwareBitmapOrSelf() else raw
         val flattened = Bitmap.createBitmap(source.width, source.height, Bitmap.Config.ARGB_8888)
         flattened.eraseColor(backgroundColor)
         Canvas(flattened).drawBitmap(source, 0f, 0f, null)
         flattened.compress(Bitmap.CompressFormat.JPEG, JPEG_QUALITY, output)
         output.flush()
+    }
+
+    /** Converts a hardware bitmap to an ARGB_8888 copy, or returns it unchanged on failure. */
+    private fun Bitmap.toSoftwareBitmapOrSelf(): Bitmap = try {
+        val copy = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+        Canvas(copy).drawBitmap(this, 0f, 0f, null)
+        copy
+    } catch (_: Throwable) {
+        this
     }
 }

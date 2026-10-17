@@ -27,8 +27,18 @@ import kotlinx.coroutines.CancellationException
  * when a full screen overlay is up (the home quick action bar), a completed gesture closes the
  * overlay instead of navigating. A screen's own `BackHandler` cannot do this — it is never invoked
  * for a gesture — which is why an expanded bar used to send the swipe through to the navigation
- * host and finish the activity at the root destination. The handler is registered whenever either
- * the destination is not the start one or the overlay is open, so it also covers the root case.
+ * host and finish the activity at the root destination.
+ *
+ * **Ordering caveat.** `PredictiveBackHandler` registers itself on the activity's
+ * `OnBackPressedDispatcher` at the point of composition, and the dispatcher runs the *last*
+ * registered enabled callback first. This composable is emitted *before* `content`, so the
+ * navigation library's own handler — registered while `NavHost` composes — is registered after
+ * this one and therefore wins. Relying on "last wins" only works if nothing else registers later.
+ *
+ * That is why the overlay case is additionally covered by [overlayBackHandler], which is composed
+ * *inside* the screen that owns the overlay. Being the deepest composable to register, it is the
+ * last one enabled and therefore the one that receives the gesture; the activity level handler stays
+ * disabled while an overlay is open so the two can never both act on one swipe.
  */
 @Composable
 fun PredictiveBackHost(
@@ -56,8 +66,10 @@ fun PredictiveBackHost(
         content()
     }
 
+    // While an overlay owns the gesture, [overlayBackHandler] inside that screen is the registered
+    // callback and must not be raced by this one.
     if (enabled || isOverlayOpen) {
-        PredictiveBackHandler {
+        PredictiveBackHandler(enabled = !isOverlayOpen) {
             focusManager.clearFocus(force = true)
             try {
                 it.collect { event ->
@@ -76,5 +88,29 @@ fun PredictiveBackHost(
                 progress.animateTo(0f, tween(durationMillis = 150))
             }
         }
+    }
+}
+
+/**
+ * Handles a completed system back *gesture* for a full screen overlay owned by the current screen.
+ *
+ * A screen's `BackHandler` is never invoked for a gesture, and the activity level
+ * [PredictiveBackHost] registers *before* the navigation library's handler, so the swipe reaches
+ * `NavHost` and finishes the activity at the root destination. Composing this inside the screen
+ * that owns the overlay makes it the deepest, last-registered handler while enabled, so it is the
+ * one that runs; the caller must keep [PredictiveBackHost.isOverlayOpen] in sync so the activity
+ * level handler stays disabled at the same time.
+ *
+ * The gesture is consumed without a progress callback on purpose: the overlay has no shared
+ * preview to animate, it simply collapses on completion. A cancelled gesture does nothing, which
+ * matches how the overlay already behaves.
+ */
+@Composable
+fun overlayBackHandler(
+    enabled: Boolean,
+    onCollapse: () -> Unit
+) {
+    PredictiveBackHandler(enabled = enabled) {
+        onCollapse()
     }
 }

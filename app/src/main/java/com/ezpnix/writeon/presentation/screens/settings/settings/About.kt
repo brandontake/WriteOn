@@ -76,7 +76,7 @@ fun AboutScreen(navController: NavController, settingsViewModel: SettingsViewMod
                     icon = Icons.Rounded.Verified,
                     actionType = ActionType.LINK,
                     radius = shapeManager(isFirst = true, radius = settingsViewModel.settings.value.cornerRadius),
-                    linkClicked = { uriHandler.openUri("https://f-droid.org/en/packages/com.ezpnix.writeon/") }
+                    linkClicked = { uriHandler.openUri(ConnectionConst.RELEASES) }
                 )
             }
             item {
@@ -197,7 +197,6 @@ fun CreditsSection(
     Column(modifier = Modifier.fillMaxWidth()) {
         SettingsBox(
             title = stringResource(R.string.credits_title),
-            description = stringResource(R.string.credits_body),
             icon = Icons.Rounded.Code,
             actionType = ActionType.TEXT,
             radius = shapeManager(isFirst = true, radius = radius)

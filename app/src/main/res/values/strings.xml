@@ -11,7 +11,6 @@
     <string name="about">About</string>
     <string name="description_about">Github • Version •  Email</string>
     <string name="credits_title">Credits</string>
-    <string name="credits_body">WriteOn was created by @3zpnix — an electronic engineering university student who makes small open-source apps and games.\n\nThis build is maintained by @Brandontake. It is the personal project of a vibecoding beginner: the app was forked, adjusted and improved purely for personal needs. Every change here is made by hand, from the source code.</string>
     <string name="credits_fork">This fork</string>
     <string name="credits_upstream">Upstream project</string>
 
