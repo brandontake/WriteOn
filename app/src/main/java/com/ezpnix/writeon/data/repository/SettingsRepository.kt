@@ -54,34 +54,24 @@ class SettingsRepositoryImpl (private val context: Context) : SettingsRepository
         val preferencesKey = booleanPreferencesKey(key)
         context.dataStore.edit { preferences ->
             preferences[preferencesKey] = value
-            if (key == "termsOfService") {
-                println("Saved termsOfService: $value")
-            }
         }
     }
 
     override suspend fun getBoolean(key: String): Boolean? {
         val preferencesKey = booleanPreferencesKey(key)
         val preferences = context.dataStore.data.first()
-        val value = preferences[preferencesKey]
-        if (key == "termsOfService") {
-            println("Retrieved termsOfService: $value")
-        }
-        return value
+        return preferences[preferencesKey]
     }
 
     suspend fun saveTermsOfService(accepted: Boolean) {
         context.dataStore.edit { preferences ->
             preferences[TERMS_OF_SERVICE_KEY] = accepted
-            println("Saved termsOfService: $accepted")
         }
     }
 
     fun getTermsOfService(): Flow<Boolean> {
         return context.dataStore.data.map { preferences ->
-            val value = preferences[TERMS_OF_SERVICE_KEY] ?: false
-            println("Retrieved termsOfService (Flow): $value")
-            value
+            preferences[TERMS_OF_SERVICE_KEY] ?: false
         }
     }
 

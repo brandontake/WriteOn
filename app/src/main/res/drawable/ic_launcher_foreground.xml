@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  WriteOn adaptive icon - FOREGROUND layer.
+  Design source: icon/ic_launcher_foreground.svg (identical coordinates).
+  108 x 108 viewport; safe zone is the r=33 circle centred on (54,54);
+  the artwork's maximum extent from the centre is 30.9, so it survives every
+  Android mask shape (circle, squircle, rounded square, pebble) uncropped.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- note body, top-right corner cut away for the folded corner -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M39,28 L63.5,28 L74.5,39 L74.5,74.5 A5.5,5.5 0 0 1 69,80 L39,80 A5.5,5.5 0 0 1 33.5,74.5 L33.5,33.5 A5.5,5.5 0 0 1 39,28 Z"/>
+
+    <!-- folded-over corner; hypotenuse offset 0.5 outward to hide any antialiasing seam -->
+    <path
+        android:fillColor="#FFB300"
+        android:pathData="M63.5,27.5 L75,39 L63.5,39 Z"/>
+
+    <!-- two lines of writing -->
+    <path
+        android:strokeColor="#49454F"
+        android:strokeWidth="3"
+        android:strokeLineCap="round"
+        android:pathData="M40,51 L68,51 M40,63 L57.5,63"/>
+
+    <!-- pen stroke -->
+    <path
+        android:strokeColor="#4F7CFF"
+        android:strokeWidth="3.4"
+        android:strokeLineCap="round"
+        android:pathData="M61,72.5 L69,64.5"/>
+
+</vector>

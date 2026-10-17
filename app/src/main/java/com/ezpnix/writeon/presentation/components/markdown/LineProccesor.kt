@@ -73,14 +73,12 @@ class ListItemProcessor : MarkdownLineProcessor {
 
 class ImageInsertionProcessor : MarkdownLineProcessor {
     override fun canProcessLine(line: String): Boolean {
-        val canProcess = line.trim().startsWith("!(") && line.trim().endsWith(")")
-        android.util.Log.d("ImageInsertionProcessor", "Can process line: $line -> $canProcess")
-        return canProcess
+        val trimmed = line.trim()
+        return trimmed.startsWith("!(") && trimmed.endsWith(")")
     }
 
     override fun processLine(line: String, builder: MarkdownBuilder) {
-        val photoUri = line.substringAfter("!(", "").substringBefore(")")
-        android.util.Log.d("ImageInsertionProcessor", "Processing image URI: $photoUri")
+        val photoUri = line.trim().substringAfter("!(", "").substringBefore(")")
         builder.add(ImageInsertion(photoUri))
     }
 }

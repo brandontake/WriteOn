@@ -9,7 +9,11 @@ import com.ezpnix.writeon.domain.model.Note
 @Database(
     entities = [Note::class],
     version = DatabaseConst.NOTES_DATABASE_VERSION,
-    exportSchema = false
+    // Room writes the generated DDL into app/schemas on every build. Without it there is no record
+    // of what a given version's schema actually looked like, so a migration cannot be tested
+    // offline and schema drift cannot be detected without running the app on two devices. The
+    // directory is checked in deliberately; see schemaDirectory in build.gradle.kts.
+    exportSchema = true
 )
 abstract class NoteDatabase : RoomDatabase() {
 

@@ -19,14 +19,14 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.input.VisualTransformation
-import androidx.compose.ui.unit.dp
+import com.ezpnix.writeon.presentation.theme.appCornerShape
 
 @Composable
 fun CustomTextField(
     value: TextFieldValue,
     onValueChange: (TextFieldValue) -> Unit,
     placeholder: String,
-    shape: RoundedCornerShape = RoundedCornerShape(0.dp),
+    shape: RoundedCornerShape = appCornerShape(),
     interactionSource: MutableInteractionSource = MutableInteractionSource(),
     singleLine: Boolean = false,
     modifier: Modifier = Modifier,
@@ -54,8 +54,10 @@ fun CustomTextField(
         colors = TextFieldDefaults.colors(
             focusedContainerColor = Color.Transparent,
             unfocusedContainerColor = Color.Transparent,
+            disabledContainerColor = Color.Transparent,
             unfocusedIndicatorColor = Color.Transparent,
             focusedIndicatorColor = Color.Transparent,
+            disabledIndicatorColor = Color.Transparent,
         ),
         placeholder = {
             Text(placeholder)

@@ -49,7 +49,7 @@ fun ToolsScreen(navController: NavController, settingsViewModel: SettingsViewMod
     settingsViewModel.noteUseCase.observe()
     var showSearchDialog by remember { mutableStateOf(false) }
     var showFontSizeDialog by remember { mutableStateOf(false) }
-    var dynamicPlaceholderInput by remember { mutableStateOf("Simple Notepad") }
+    var dynamicPlaceholderInput by remember { mutableStateOf(context.getString(R.string.app_subtitle)) }
     SettingsScaffold(
         settingsViewModel = settingsViewModel,
         title = stringResource(id = R.string.tools),
@@ -94,9 +94,9 @@ fun ToolsScreen(navController: NavController, settingsViewModel: SettingsViewMod
                         settingsViewModel.update(settingsViewModel.settings.value.copy(editMode = isEnabled))
 
                         val message = if (isEnabled) {
-                            "<Edit Mode>"
+                            context.getString(R.string.tools_edit_mode)
                         } else {
-                            "<View Mode>"
+                            context.getString(R.string.tools_view_mode)
                         }
                         Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
                     }
@@ -117,9 +117,9 @@ fun ToolsScreen(navController: NavController, settingsViewModel: SettingsViewMod
                             )
                         )
                         val message = if (isEnabled) {
-                            "Enabled (Recommended)"
+                            context.getString(R.string.tools_enabled_recommended)
                         } else {
-                            "Disabled"
+                            context.getString(R.string.tools_disabled)
                         }
                         Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
                     }
@@ -143,9 +143,9 @@ fun ToolsScreen(navController: NavController, settingsViewModel: SettingsViewMod
                             )
                         )
                         val message = if (isEnabled) {
-                            "<Title Only>"
+                            context.getString(R.string.tools_title_only)
                         } else {
-                            "<Title With Description>"
+                            context.getString(R.string.tools_title_with_desc)
                         }
                         Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
                     }
@@ -185,8 +185,8 @@ fun ToolsScreen(navController: NavController, settingsViewModel: SettingsViewMod
             }
             item {
                 SettingsBox(
-                    title = "Auto-hide visibility button",
-                    description = "Hides the button when the keyboard is visible while editing a note.",
+                    title = stringResource(R.string.tools_autohide_title),
+                    description = stringResource(R.string.tools_autohide_desc),
                     icon = Icons.Rounded.VisibilityOff,
                     actionType = ActionType.SWITCH,
                     radius = shapeManager(
@@ -223,7 +223,7 @@ fun ToolsScreen(navController: NavController, settingsViewModel: SettingsViewMod
         if (showSearchDialog) {
             AlertDialog(
                 onDismissRequest = { showSearchDialog = true },
-                title = { Text("Example: Hello!") },
+                title = { Text(stringResource(R.string.tools_example_text)) },
                 text = {
                     TextField(
                         value = dynamicPlaceholderInput,
@@ -238,10 +238,10 @@ fun ToolsScreen(navController: NavController, settingsViewModel: SettingsViewMod
                         repeat(2) {
                             navController.popBackStack(NavRoutes.Home.route, inclusive = false)
                         }
-                        Toast.makeText(context, "Text Updated!", Toast.LENGTH_SHORT)
+                        Toast.makeText(context, context.getString(R.string.tools_text_updated), Toast.LENGTH_SHORT)
                             .show()
                     }) {
-                        Text("Save")
+                        Text(context.getString(R.string.action_save))
                     }
                 },
                 dismissButton = {
@@ -249,10 +249,10 @@ fun ToolsScreen(navController: NavController, settingsViewModel: SettingsViewMod
                         repeat(2) {
                             navController.popBackStack(NavRoutes.Home.route, inclusive = false)
                         }
-                        Toast.makeText(context, "Text Not Updated!", Toast.LENGTH_SHORT)
+                        Toast.makeText(context, context.getString(R.string.tools_text_not_updated), Toast.LENGTH_SHORT)
                             .show()
                     }) {
-                        Text("Exit")
+                        Text(context.getString(R.string.action_exit))
                     }
                 }
             )
@@ -292,7 +292,7 @@ fun ToolsScreen(navController: NavController, settingsViewModel: SettingsViewMod
                         repeat(2) {
                             navController.popBackStack(NavRoutes.Home.route, inclusive = false)
                         }
-                        Toast.makeText(context, "Saved!", Toast.LENGTH_SHORT)
+                        Toast.makeText(context, context.getString(R.string.tools_saved_exclaim), Toast.LENGTH_SHORT)
                             .show()
                     }) {
                         Text(stringResource(id = R.string.save_and_exit))

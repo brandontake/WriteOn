@@ -12,6 +12,7 @@ import androidx.compose.material.icons.rounded.BubbleChart
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.Done
+import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.PushPin
 import androidx.compose.material.icons.rounded.SelectAll
 import androidx.compose.material.icons.rounded.Settings
@@ -25,10 +26,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.vectorResource
 import com.ezpnix.writeon.R
+import androidx.compose.ui.res.stringResource
 
 @Composable
 fun CloseButton(
-    contentDescription: String = "Close",
+    contentDescription: String = stringResource(R.string.action_close),
     onCloseClicked:  () -> Unit
 ) {
     IconButton(onClick = onCloseClicked) {
@@ -43,7 +45,7 @@ fun CloseButton(
 @Composable
 fun MoreButton(onClick: () -> Unit) {
     IconButton(onClick = { onClick() }) {
-        Icon(Icons.Rounded.BubbleChart, contentDescription = "Info")
+        Icon(Icons.Rounded.MoreVert, contentDescription = stringResource(R.string.cd_info))
     }
 }
 
@@ -52,7 +54,7 @@ fun SaveButton(onSaveClicked: () -> Unit) {
     IconButton(onClick = onSaveClicked) {
         Icon(
             imageVector = Icons.Rounded.Done,
-            contentDescription = "Done",
+            contentDescription = stringResource(R.string.action_done),
             tint = MaterialTheme.colorScheme.onBackground
         )
     }
@@ -63,7 +65,7 @@ fun UndoButton(onUndoClicked: () -> Unit) {
     IconButton(onClick = onUndoClicked) {
         Icon(
             imageVector = Icons.AutoMirrored.Rounded.Undo,
-            contentDescription = "Undo",
+            contentDescription = stringResource(R.string.cd_undo),
             tint = MaterialTheme.colorScheme.outlineVariant
         )
     }
@@ -74,7 +76,7 @@ fun RedoButton(onRedoClicked: () -> Unit) {
     IconButton(onClick = onRedoClicked) {
         Icon(
             imageVector = Icons.AutoMirrored.Rounded.Redo,
-            contentDescription = "Redo",
+            contentDescription = stringResource(R.string.cd_redo),
             tint = MaterialTheme.colorScheme.outlineVariant
         )
     }
@@ -86,7 +88,7 @@ fun NavigationIcon(onBackNavClicked: () -> Unit) {
     IconButton(onClick = onBackNavClicked) {
         Icon(
             imageVector = Icons.AutoMirrored.Rounded.ArrowBack,
-            contentDescription = "Back",
+            contentDescription = stringResource(R.string.cd_back),
             tint = MaterialTheme.colorScheme.onBackground
         )
     }
@@ -97,7 +99,7 @@ fun SettingsButton(onSettingsClicked: () -> Unit) {
     IconButton(onClick = onSettingsClicked) {
         Icon(
             imageVector = Icons.Rounded.Settings,
-            contentDescription = "Settings",
+            contentDescription = stringResource(R.string.screen_settings),
             tint = MaterialTheme.colorScheme.onBackground
         )
     }
@@ -108,7 +110,7 @@ fun PrivacyButton(onSettingsClicked: () -> Unit) {
     IconButton(onClick = onSettingsClicked) {
         Icon(
             ImageVector.vectorResource(id = R.drawable.incognito_fill),
-            contentDescription = "Settings",
+            contentDescription = stringResource(R.string.screen_settings),
             tint = MaterialTheme.colorScheme.onBackground
         )
     }
@@ -130,7 +132,7 @@ fun TitleText(titleText: String) {
 @Composable
 fun PinButton(isPinned: Boolean, onClick: () -> Unit) {
     IconButton(onClick = { onClick() }) {
-        Icon(if (isPinned) Icons.Rounded.PushPin else Icons.Outlined.PushPin, contentDescription = "Pin")
+        Icon(if (isPinned) Icons.Rounded.PushPin else Icons.Outlined.PushPin, contentDescription = stringResource(R.string.pin))
     }
 }
 
@@ -141,7 +143,7 @@ fun DeleteButton(onClick: () -> Unit) {
     ) {
         Icon(
             imageVector =  Icons.Rounded.Delete,
-            contentDescription = "Delete",
+            contentDescription = stringResource(R.string.delete),
         )
     }
 }
@@ -154,7 +156,7 @@ fun SelectAllButton(enabled: Boolean, onClick: () -> Unit) {
         ) {
             Icon(
                 imageVector =  Icons.Rounded.SelectAll,
-                contentDescription = "Select All",
+                contentDescription = stringResource(R.string.cd_select_all),
             )
         }
     }
@@ -165,7 +167,7 @@ fun MainButton(onSettingsClicked: () -> Unit) {
     IconButton(onClick = onSettingsClicked) {
         Icon(
             imageVector =  Icons.Rounded.BubbleChart,
-            contentDescription = "Settings",
+            contentDescription = stringResource(R.string.screen_settings),
             tint = MaterialTheme.colorScheme.onBackground
         )
     }

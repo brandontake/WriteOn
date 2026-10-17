@@ -150,9 +150,13 @@ fun ContributorsClicked(
     settingsViewModel: SettingsViewModel,
     onExit: () -> Unit
 ) {
+    val context = LocalContext.current
+    val localizedList = list.map { (version, date) ->
+        version to if (date == stringResource(R.string.app_list_latest)) context.getString(R.string.app_list_latest) else date
+    }
     ListDialog(
         text = stringResource(R.string.app_list),
-        list = list,
+        list = localizedList,
         settingsViewModel = settingsViewModel,
         onExit = onExit,
         extractDisplayData = { it }
@@ -219,7 +223,7 @@ fun LicenseSection(settingsViewModel: SettingsViewModel, context: Context, navCo
                     }) {
                         Icon(
                             imageVector = if (isExpanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
-                            contentDescription = if (isExpanded) "Collapse" else "Expand"
+                            contentDescription = if (isExpanded) stringResource(R.string.action_collapse) else stringResource(R.string.action_expand)
                         )
                     }
                 }
@@ -234,7 +238,7 @@ fun LicenseSection(settingsViewModel: SettingsViewModel, context: Context, navCo
                         val context = LocalContext.current
                         ClickableText(
                             text = AnnotatedString(
-                                        "AndroidX Libraries:\n" +
+                                        stringResource(R.string.about_androidx_libraries) +
                                         "\n" +
                                         "androidx.datastore:datastore-preferences\n" +
                                         "\n" +
@@ -279,13 +283,13 @@ fun LicenseSection(settingsViewModel: SettingsViewModel, context: Context, navCo
                                         "Android Developers\n" +
                                         "+2\n" +
                                         "\n" +
-                                        "Google Dagger Hilt:\n" +
+                                        stringResource(R.string.about_google_dagger_hilt) +
                                         "\n" +
                                         "com.google.dagger:hilt-android\n" +
                                         "\n" +
                                         "com.google.dagger:hilt-android-compiler\n" +
                                         "\n" +
-                                        "Third-Party Libraries:\n" +
+                                        stringResource(R.string.about_third_party_libraries) +
                                         "\n" +
                                         "io.coil-kt:coil-compose\n" +
                                         "\n" +
@@ -295,7 +299,7 @@ fun LicenseSection(settingsViewModel: SettingsViewModel, context: Context, navCo
                                         "\n" +
                                         "com.stevdza-san:messagebarkmp\n" +
                                         "\n" +
-                                        "Most of the libraries listed are licensed under the Apache License 2.0, a permissive open-source license that allows you to freely use, modify, and distribute the software.\n",
+                                        stringResource(R.string.about_apache_note),
                                 spanStyle = SpanStyle(
                                     color = MaterialTheme.colorScheme.primary,
                                     textDecoration = TextDecoration.Underline

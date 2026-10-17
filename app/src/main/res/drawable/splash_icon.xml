@@ -1,5 +1,64 @@
-<vector xmlns:android="http://schemas.android.com/apk/res/android" android:height="24dp" android:tint="#FFFFFF" android:viewportHeight="24" android:viewportWidth="24" android:width="24dp">
-      
-    <path android:fillColor="@android:color/white" android:pathData="M18.85,10.39l1.06,-1.06c0.78,-0.78 0.78,-2.05 0,-2.83L18.5,5.09c-0.78,-0.78 -2.05,-0.78 -2.83,0l-1.06,1.06L18.85,10.39zM13.19,7.56L4,16.76V21h4.24l9.19,-9.19L13.19,7.56zM19,17.5c0,2.19 -2.54,3.5 -5,3.5c-0.55,0 -1,-0.45 -1,-1s0.45,-1 1,-1c1.54,0 3,-0.73 3,-1.5c0,-0.47 -0.48,-0.87 -1.23,-1.2l1.48,-1.48C18.32,15.45 19,16.29 19,17.5zM4.58,13.35C3.61,12.79 3,12.06 3,11c0,-1.8 1.89,-2.63 3.56,-3.36C7.59,7.18 9,6.56 9,6c0,-0.41 -0.78,-1 -2,-1C5.74,5 5.2,5.61 5.17,5.64C4.82,6.05 4.19,6.1 3.77,5.76C3.36,5.42 3.28,4.81 3.62,4.38C3.73,4.24 4.76,3 7,3c2.24,0 4,1.32 4,3c0,1.87 -1.93,2.72 -3.64,3.47C6.42,9.88 5,10.5 5,11c0,0.31 0.43,0.6 1.07,0.86L4.58,13.35z"/>
-    
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  WriteOn splash icon (windowSplashScreenAnimatedIcon in values/themes.xml and
+  values-v31/themes.xml). Kept in sync with the launcher icon.
+
+  Why this is a nested tile instead of re-using the adaptive icon:
+  a splash icon is scaled into an icon area in which only the central 2/3 is guaranteed to be
+  visible - the outer sixth on every side can be cropped by a circular mask. The launcher
+  artwork is therefore composed inside the inner 72 x 72 of this 108 x 108 canvas:
+
+    amber tile          x/y 18..90, corner radius 16
+                        (16/72 = 22% of the tile, the proportion Android's rounded-square
+                         launcher mask uses)
+    launcher artwork    drawn at its design scale about the canvas centre (54,54), so the note
+                        keeps the proportions it has inside the adaptive icon: the card is 41
+                        of the 72 dp tile = 57%, against 41 of the 66 dp guaranteed circle =
+                        62% in the adaptive icon.
+
+  Nothing is clipped under either convention:
+    - no mask      -> an amber rounded square, 106.7 dp inside the 160 dp icon area
+    - circle mask  -> tile corners at sqrt(2) * 36 = 50.9 <= 54 (half of this canvas), i.e.
+                      75.4 dp <= 80 dp against the mapped 160 dp circle
+    - the artwork stays within 30.9 dp of the centre, 5.1 dp clear of the tile edge.
+  The tile is drawn rounded rather than full-bleed so the icon also reads correctly on
+  launchers and API levels that do not mask the splash icon.
+  The coordinates below are identical to drawable/ic_launcher_foreground.xml.
+  Design source: icon/splash_icon.svg
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- amber tile: the brand field of the launcher icon -->
+    <path
+        android:fillColor="#FFC107"
+        android:pathData="M34,18 L74,18 A16,16 0 0 1 90,34 L90,74 A16,16 0 0 1 74,90 L34,90 A16,16 0 0 1 18,74 L18,34 A16,16 0 0 1 34,18 Z"/>
+
+    <!-- note body, top-right corner cut away for the folded corner -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M39,28 L63.5,28 L74.5,39 L74.5,74.5 A5.5,5.5 0 0 1 69,80 L39,80 A5.5,5.5 0 0 1 33.5,74.5 L33.5,33.5 A5.5,5.5 0 0 1 39,28 Z"/>
+
+    <!-- folded-over corner; hypotenuse offset 0.5 outward to hide any antialiasing seam -->
+    <path
+        android:fillColor="#FFB300"
+        android:pathData="M63.5,27.5 L75,39 L63.5,39 Z"/>
+
+    <!-- two lines of writing -->
+    <path
+        android:strokeColor="#49454F"
+        android:strokeWidth="3"
+        android:strokeLineCap="round"
+        android:pathData="M40,51 L68,51 M40,63 L57.5,63"/>
+
+    <!-- pen stroke -->
+    <path
+        android:strokeColor="#4F7CFF"
+        android:strokeWidth="3.4"
+        android:strokeLineCap="round"
+        android:pathData="M61,72.5 L69,64.5"/>
+
 </vector>

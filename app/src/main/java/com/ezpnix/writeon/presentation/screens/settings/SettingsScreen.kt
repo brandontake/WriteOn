@@ -22,6 +22,7 @@ import androidx.compose.material.icons.rounded.Coffee
 import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material.icons.rounded.Palette
 import androidx.compose.material.icons.rounded.TextFields
+import androidx.compose.material.icons.rounded.Translate
 import androidx.compose.material.icons.rounded.Verified
 import androidx.compose.material.icons.rounded.VolunteerActivism
 import androidx.compose.material3.AlertDialog
@@ -141,6 +142,18 @@ fun MainSettings(settingsViewModel: SettingsViewModel, navController: NavControl
             }
             item {
                 SettingCategory(
+                    title = stringResource(id = R.string.language),
+                    subTitle = stringResource(id = R.string.language_description),
+                    icon = Icons.Rounded.Translate,
+                    shape = shapeManager(
+                        radius = settingsViewModel.settings.value.cornerRadius,
+                        isFirst = false
+                    ),
+                    action = { navController.navigate(NavRoutes.Language.route) }
+                )
+            }
+            item {
+                SettingCategory(
                     title = stringResource(id = R.string.tools),
                     subTitle = stringResource(R.string.description_tools),
                     icon = Icons.Rounded.TextFields,
@@ -206,13 +219,13 @@ fun ExperimentalFeatureLockedDialog(showDialog: Boolean, onDismiss: () -> Unit) 
                 ) {
                     Icon(
                         imageVector = Icons.Filled.Lock,
-                        contentDescription = "Locked",
+                        contentDescription = stringResource(R.string.settings_locked),
                         tint = MaterialTheme.colorScheme.primary,
                         modifier = Modifier.size(48.dp)
                     )
                     Spacer(modifier = Modifier.height(8.dp))
                     Text(
-                        text = "This section is currently locked by the developer.. apologies!",
+                        text = stringResource(R.string.settings_locked_message),
                         textAlign = TextAlign.Center,
                         style = MaterialTheme.typography.bodyLarge
                     )
@@ -224,7 +237,7 @@ fun ExperimentalFeatureLockedDialog(showDialog: Boolean, onDismiss: () -> Unit) 
                     horizontalArrangement = Arrangement.Center
                 ) {
                     TextButton(onClick = onDismiss) {
-                        Text("> Okay, I understand <")
+                        Text(stringResource(R.string.settings_locked_ok))
                     }
                 }
             }

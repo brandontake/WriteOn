@@ -1,13 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?><!--
-   Sample backup rules file; uncomment and customize as necessary.
-   See https://developer.android.com/guide/topics/data/autobackup
-   for details.
+   Note text is encrypted with a device bound Android Keystore key, so an auto backup copy of the
+   note database could never be decrypted on another device. Notes travel with the app's own
+   Backup / Restore feature (Settings -> Cloud), which stores the database in a portable form.
+   See https://developer.android.com/guide/topics/data/autobackup for details.
    Note: This file is ignored for devices older that API 31
    See https://developer.android.com/about/versions/12/backup-restore
 -->
 <full-backup-content>
-    <!--
-   <include domain="sharedpref" path="."/>
-   <exclude domain="sharedpref" path="device.xml"/>
--->
+    <exclude domain="database" path="note-list.db" />
+    <exclude domain="database" path="note-list.db-wal" />
+    <exclude domain="database" path="note-list.db-shm" />
 </full-backup-content>

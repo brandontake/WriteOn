@@ -42,24 +42,28 @@ fun AndroidScreen(
     val availableStorage = formatStorage(stat.availableBytes)
 
     val deviceInfo = listOf(
-        "Manufacturer" to Build.MANUFACTURER,
-        "Model" to Build.MODEL,
-        "Brand" to Build.BRAND,
-        "Device" to Build.DEVICE,
-        "Board" to Build.BOARD,
-        "Hardware" to Build.HARDWARE,
-        "CPU ABI" to Build.SUPPORTED_ABIS.joinToString(),
-        "Android Version" to Build.VERSION.RELEASE,
-        "SDK Level" to Build.VERSION.SDK_INT.toString(),
-        "Security Patch" to (Build.VERSION.SECURITY_PATCH ?: "Unknown"),
-        "Storage" to "$availableStorage free / $totalStorage total",
-        "Display" to Build.DISPLAY,
-        "Host" to Build.HOST,
-        "Bootloader" to Build.BOOTLOADER,
-        "Fingerprint" to Build.FINGERPRINT,
-        "Build ID" to Build.ID,
-        "Build Time" to formatBuildTime(Build.TIME),
-        "Radio Version" to (Build.getRadioVersion() ?: "Unknown")
+        stringResource(R.string.device_manufacturer) to Build.MANUFACTURER,
+        stringResource(R.string.device_model) to Build.MODEL,
+        stringResource(R.string.device_brand) to Build.BRAND,
+        stringResource(R.string.device_device) to Build.DEVICE,
+        stringResource(R.string.device_board) to Build.BOARD,
+        stringResource(R.string.device_hardware) to Build.HARDWARE,
+        stringResource(R.string.device_cpu_abi) to Build.SUPPORTED_ABIS.joinToString(),
+        stringResource(R.string.device_android_version) to Build.VERSION.RELEASE,
+        stringResource(R.string.device_sdk_level) to Build.VERSION.SDK_INT.toString(),
+        stringResource(R.string.device_security_patch) to (Build.VERSION.SECURITY_PATCH ?: stringResource(R.string.unknown)),
+        stringResource(R.string.device_storage) to stringResource(
+            R.string.storage_free_of_total,
+            availableStorage,
+            totalStorage
+        ),
+        stringResource(R.string.device_display) to Build.DISPLAY,
+        stringResource(R.string.device_host) to Build.HOST,
+        stringResource(R.string.device_bootloader) to Build.BOOTLOADER,
+        stringResource(R.string.device_fingerprint) to Build.FINGERPRINT,
+        stringResource(R.string.device_build_id) to Build.ID,
+        stringResource(R.string.device_build_time) to formatBuildTime(Build.TIME),
+        stringResource(R.string.device_radio_version) to (Build.getRadioVersion() ?: stringResource(R.string.unknown))
     )
 
     SettingsScaffold(

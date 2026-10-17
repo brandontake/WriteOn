@@ -3,6 +3,7 @@ package com.ezpnix.writeon.presentation.screens.settings.model
 import android.content.Context
 import android.content.SharedPreferences
 import android.net.Uri
+import android.util.Log
 import android.widget.Toast
 import androidx.compose.runtime.State
 import androidx.compose.runtime.mutableStateOf
@@ -30,12 +31,14 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import org.xmlpull.v1.XmlPullParser
 import org.xmlpull.v1.XmlPullParserException
 import java.io.IOException
 import java.util.concurrent.TimeUnit
 import javax.inject.Inject
+import androidx.compose.ui.res.stringResource
 
 @HiltViewModel
 class SettingsViewModel @Inject constructor(
@@ -48,13 +51,17 @@ class SettingsViewModel @Inject constructor(
     private val settingsPreferences: SettingsPreferences,
 ) : ViewModel() {
 
+    private companion object {
+        const val TAG = "SettingsViewModel"
+    }
+
     private val _savedNote = MutableStateFlow("")
     val savedNote: String get() = _savedNote.value
 
     val databaseUpdate = mutableStateOf(false)
     var password: String? = null
 
-    private val _dynamicPlaceholder = MutableStateFlow("Simple Notepad")
+    private val _dynamicPlaceholder = MutableStateFlow(context.getString(R.string.app_subtitle))
     val dynamicPlaceholder: StateFlow<String> = _dynamicPlaceholder.asStateFlow()
 
     private val sharedPreferences: SharedPreferences =
@@ -65,19 +72,32 @@ class SettingsViewModel @Inject constructor(
 
     init {
         viewModelScope.launch {
-            val baseSettings = settingsUseCase.loadSettingsFromRepository()
-            _settings.value = baseSettings
-            settingsRepository.getTermsOfService().collect { termsAccepted ->
-                _settings.value = _settings.value.copy(termsOfService = termsAccepted)
+            // Apply the persisted snapshot first, then the values that live in their own preference
+            // file. Both collectors used to sit *after* the termsOfService.collect {} below, which
+            // never returns, so they never ran at all: the column count the user had picked was
+            // replaced by the default on every launch (and the home subtitle never loaded).
+            _settings.value = settingsUseCase.loadSettingsFromRepository()
+            _settings.value = _settings.value.copy(
+                columnsCount = settingsPreferences.columnsCount.first()
+            )
+            _dynamicPlaceholder.value = settingsPreferences.dynamicPlaceholder.first()
+            if (_settings.value.autoBackupEnabled) {
+                startAutoBackup(context)
             }
-            settingsPreferences.columnsCount.collect { count ->
-                _settings.value = _settings.value.copy(columnsCount = count)
-                if (_settings.value.autoBackupEnabled) {
-                    startAutoBackup(context)
+
+            // Keep observing so changes made while the app is running are reflected immediately.
+            launch {
+                settingsPreferences.columnsCount.collect { count ->
+                    _settings.value = _settings.value.copy(columnsCount = count)
                 }
             }
-            settingsPreferences.dynamicPlaceholder.collect { placeholder ->
-                _dynamicPlaceholder.value = placeholder
+            launch {
+                settingsPreferences.dynamicPlaceholder.collect { placeholder ->
+                    _dynamicPlaceholder.value = placeholder
+                }
+            }
+            settingsRepository.getTermsOfService().collect { termsAccepted ->
+                _settings.value = _settings.value.copy(termsOfService = termsAccepted)
             }
         }
     }
@@ -191,10 +211,12 @@ class SettingsViewModel @Inject constructor(
                 xpp.next()
             }
         } catch (e: XmlPullParserException) {
-            e.printStackTrace()
+            Log.w(TAG, "Could not parse locales_config", e)
         } catch (e: IOException) {
-            e.printStackTrace()
+            Log.w(TAG, "Could not read locales_config", e)
         }
+        // An unreadable resource still yields a usable (possibly empty) list rather than throwing
+        // out of the settings screen.
         return LocaleListCompat.forLanguageTags(tagsList.joinToString(","))
     }
 
@@ -209,8 +231,8 @@ class SettingsViewModel @Inject constructor(
 
     private fun handleBackupResult(result: BackupResult, context: Context) {
         when (result) {
-            is BackupResult.Success -> showToast("Successful Backup", context)
-            is BackupResult.Error -> showToast("Error", context)
+            is BackupResult.Success -> showToast(context.getString(R.string.backup_successful), context)
+            is BackupResult.Error -> showToast(context.getString(R.string.error), context)
             BackupResult.BadPassword -> showToast(context.getString(R.string.database_restore_error), context)
         }
     }

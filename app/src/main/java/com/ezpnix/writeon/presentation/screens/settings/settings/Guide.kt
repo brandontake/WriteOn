@@ -15,32 +15,35 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavController
+import com.ezpnix.writeon.R
 import com.ezpnix.writeon.presentation.screens.settings.SettingsScaffold
 import com.ezpnix.writeon.presentation.screens.settings.model.SettingsViewModel
+import com.ezpnix.writeon.presentation.theme.appCornerShape
 
 @Composable
 fun GuideScreen(navController: NavController, settingsViewModel: SettingsViewModel) {
 
     val faqList = listOf(
-        "What is WriteOn?" to "WriteOn is a simple app for taking notes—nothing special. You can add images and many more.",
-        "How do I delete a note?" to "Long-press a note on your home screen to see the available options. You may also discover other hidden features as well such as the swipe to edit/preview note.",
-        "Can I recover deleted notes?" to "Yes, you can now restore them from your recycle bin found in your navigation drawer or quick action menu.",
-        "How often are updates released?" to "The developer usually releases updates every one to two months, depending on how busy the developer is with real life and stuff.",
-        "How do I report an issue or bug?" to "You can visit the official GitHub page or come chat with the Developer on his social media account(s).",
-        "I lost my data during an update?" to "Often times this happens due to some changes within that involves handling the notes database. To restore it back, use the outdated recovery feature from the previous versions of the app.",
-        "Do you accept feature requests?" to "Of course! Any feedback or suggestions for improvement are welcome. The developer usually replies within a day or two.",
-        "Automatic backup files stored?" to "They are currently located in the Android/data folder, which, unfortunately, is inaccessible to some because of the current android policy",
-        "Is this app fully open-source?" to "Yes! You may fork it, modify codes to your liking. There’s nothing shady—no virus, no forced ads—just a clean, open-source app.",
-        "Who developed this app?" to "This app was developed by @3zpnix, an electronic engineering university student who creates small open-source apps and games."
+        stringResource(R.string.faq_q_what_is_writeon) to stringResource(R.string.faq_a_what_is_writeon),
+        stringResource(R.string.faq_q_delete_note) to stringResource(R.string.faq_a_delete_note),
+        stringResource(R.string.faq_q_recover_deleted) to stringResource(R.string.faq_a_recover_deleted),
+        stringResource(R.string.faq_q_update_frequency) to stringResource(R.string.faq_a_update_frequency),
+        stringResource(R.string.faq_q_report_issue) to stringResource(R.string.faq_a_report_issue),
+        stringResource(R.string.faq_q_lost_data) to stringResource(R.string.faq_a_lost_data),
+        stringResource(R.string.faq_q_feature_requests) to stringResource(R.string.faq_a_feature_requests),
+        stringResource(R.string.faq_q_auto_backup_files) to stringResource(R.string.faq_a_auto_backup_files),
+        stringResource(R.string.faq_q_open_source) to stringResource(R.string.faq_a_open_source),
+        stringResource(R.string.faq_q_developer) to stringResource(R.string.faq_a_developer)
     )
 
     var expandedStates by remember { mutableStateOf(List(faqList.size) { false }) }
 
     SettingsScaffold(
         settingsViewModel = settingsViewModel,
-        title = "Guide & FAQ",
+        title = stringResource(R.string.guide_faq_title),
         onBackNavClicked = { navController.navigateUp() }
     ) {
         LazyColumn(
@@ -59,7 +62,8 @@ fun GuideScreen(navController: NavController, settingsViewModel: SettingsViewMod
                             }
                         },
                     elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                    shape = appCornerShape()
                 ) {
                     Column(modifier = Modifier.padding(16.dp)) {
                         Row(
@@ -74,7 +78,7 @@ fun GuideScreen(navController: NavController, settingsViewModel: SettingsViewMod
                             )
                             androidx.compose.material3.Icon(
                                 imageVector = if (expandedStates[index]) Icons.Rounded.ExpandLess else Icons.Rounded.ExpandMore,
-                                contentDescription = "Expand/Collapse",
+                                contentDescription = stringResource(R.string.expand_collapse),
                                 tint = MaterialTheme.colorScheme.onSurface
                             )
                         }

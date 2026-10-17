@@ -64,18 +64,27 @@ fun splitByDelimiter(input: String, delimiter: String): List<Pair<Int, Int>> {
 }
 
 /**
- * Checks if a given index is within any of the provided segments.
+ * A run of consecutive characters that share the same set of active inline styles.
  */
-fun isInSegments(index: Int, segments: List<Pair<Int, Int>>): Boolean {
-    return segments.any { segment -> index in segment.first until segment.second }
-}
-
+private class StyledRun(val start: Int, val endExclusive: Int, val styleMask: Int)
 
 /**
  * Builds an AnnotatedString with styles applied based on markdown-like syntax.
+ *
+ * The original walked the text one character at a time and, for each one, re-scanned every style
+ * segment's ranges and pushed a fresh span around a single character. A few hundred characters of
+ * prose turned into hundreds of style spans and thousands of range comparisons, which is why long
+ * notes stuttered while scrolling. This resolves each character's styles once, collapses
+ * consecutive characters that share them into a run, and emits one span per run, so uniform text
+ * costs one span instead of one per character.
+ *
+ * Rendering is unchanged: styles are merged in the same order, and characters that form part of any
+ * delimiter are still dropped from the output.
  */
 fun buildString(input: String, defaultFontWeight: FontWeight = FontWeight.Normal): AnnotatedString {
-    val textStyleSegments: List<TextStyleSegment> = listOf(
+    if (input.isEmpty()) return AnnotatedString("")
+
+    val segments: List<TextStyleSegment> = listOf(
         BoldSegment(),
         ItalicSegment(),
         HighlightSegment(),
@@ -83,22 +92,58 @@ fun buildString(input: String, defaultFontWeight: FontWeight = FontWeight.Normal
         Underline()
     )
 
-    val allSegments = textStyleSegments.associateWith { splitByDelimiter(input, it.delimiter) }
+    // Mark which offsets each style covers in one pass per style, rather than asking every style
+    // whether it contains the current index while iterating over the characters.
+    val covered = Array(segments.size) { BooleanArray(input.length) }
+    val delimiterChars = HashSet<Char>()
+    segments.forEachIndexed { index, segment ->
+        delimiterChars.addAll(segment.delimiter.toList())
+        splitByDelimiter(input, segment.delimiter).forEach { (start, end) ->
+            for (offset in start until end) covered[index][offset] = true
+        }
+    }
 
-    /**
-     * Determines the SpanStyle for a given index based on its presence in style segments.
-     */
-    fun getSpanStyle(index: Int): SpanStyle {
-        val styles = textStyleSegments.filter { segment -> isInSegments(index, allSegments[segment]!!) }
-        return styles.fold(SpanStyle(fontWeight = defaultFontWeight)) { acc, segment -> acc.merge(segment.getSpanStyle()) }
+    fun styleMaskAt(index: Int): Int {
+        var mask = 0
+        for (segment in segments.indices) {
+            if (covered[segment][index]) mask = mask or (1 shl segment)
+        }
+        return mask
+    }
+
+    val runs = mutableListOf<StyledRun>()
+    var runStart = -1
+    var runMask = 0
+    for (index in input.indices) {
+        if (input[index] in delimiterChars) {
+            if (runStart != -1) {
+                runs.add(StyledRun(runStart, index, runMask))
+                runStart = -1
+            }
+            continue
+        }
+        val mask = styleMaskAt(index)
+        if (runStart != -1 && mask == runMask) continue
+        if (runStart != -1) runs.add(StyledRun(runStart, index, runMask))
+        runStart = index
+        runMask = mask
+    }
+    if (runStart != -1) runs.add(StyledRun(runStart, input.length, runMask))
+
+    if (runs.isEmpty()) return AnnotatedString("")
+
+    val baseStyle = SpanStyle(fontWeight = defaultFontWeight)
+    val styleCache = HashMap<Int, SpanStyle>()
+    fun styleFor(mask: Int): SpanStyle = styleCache.getOrPut(mask) {
+        segments.foldIndexed(baseStyle) { index, acc, segment ->
+            if (mask and (1 shl index) != 0) acc.merge(segment.getSpanStyle()) else acc
+        }
     }
 
     return buildAnnotatedString {
-        input.forEachIndexed { index, letter ->
-            if (textStyleSegments.none { segment -> segment.delimiter.contains(letter) }) {
-                withStyle(style = getSpanStyle(index)) {
-                    append(letter)
-                }
+        runs.forEach { run ->
+            withStyle(style = styleFor(run.styleMask)) {
+                append(input, run.start, run.endExclusive)
             }
         }
     }

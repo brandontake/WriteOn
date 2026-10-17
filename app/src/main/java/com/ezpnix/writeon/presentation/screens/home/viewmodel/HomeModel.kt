@@ -1,7 +1,6 @@
 package com.ezpnix.writeon.presentation.screens.home.viewmodel
 
 import android.content.Context
-import android.util.Log
 import android.widget.Toast
 import androidx.compose.runtime.State
 import androidx.compose.runtime.mutableStateListOf
@@ -16,9 +15,8 @@ import com.ezpnix.writeon.presentation.components.EncryptionHelper
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.flow.firstOrNull
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.runBlocking
 import javax.inject.Inject
 
 @HiltViewModel
@@ -34,8 +32,6 @@ class HomeViewModel @Inject constructor(
     val isPasswordPromptVisible: State<Boolean> get() = _isPasswordPromptVisible
     private val _isVaultMode = mutableStateOf(false)
     val isVaultMode: State<Boolean> get() = _isVaultMode
-    private val _isTrashMode = mutableStateOf(false)
-    val isTrashMode: State<Boolean> get() = _isTrashMode
     private val _searchQuery = mutableStateOf("")
     val searchQuery: State<String> get() = _searchQuery
     var showTagDialog = mutableStateOf(false)
@@ -45,7 +41,6 @@ class HomeViewModel @Inject constructor(
     var currentFilter = mutableStateOf("all")
 
     init {
-        Log.d("HomeViewModel", "Initializing HomeViewModel, observing notes")
         noteUseCase.observe()
     }
 
@@ -65,10 +60,6 @@ class HomeViewModel @Inject constructor(
         _isPasswordPromptVisible.value = enabled
     }
 
-    fun toggleTrashMode(enabled: Boolean) {
-        _isTrashMode.value = enabled
-    }
-
     fun changeSearchQuery(newValue: String) {
         _searchQuery.value = newValue
     }
@@ -78,26 +69,42 @@ class HomeViewModel @Inject constructor(
     }
 
     fun pinOrUnpinNotes() {
+        // Every selected note is set to the same target so a mixed selection pins as a group.
+        val pinTo = selectedNotes.any { !it.pinned }
+        updateSelectedNotes { it.copy(pinned = pinTo) }
+    }
+
+    fun pinOrUnpinNote(note: Note) {
         viewModelScope.launch(Dispatchers.IO) {
-            val updatedNotes = selectedNotes.map { note ->
-                note.copy(pinned = selectedNotes.any { !it.pinned })
-            }
-            Log.d("HomeViewModel", "Pinning/unpinning notes: ${updatedNotes.map { it.id to it.pinned }}")
-            noteUseCase.batchUpdateNotes(updatedNotes)
+            noteUseCase.batchUpdateNotes(listOf(note.copy(pinned = !note.pinned)))
             launch(Dispatchers.Main) {
-                selectedNotes.clear()
                 noteUseCase.observe()
             }
         }
     }
 
     fun moveSelectedNotesToTrash() {
+        updateSelectedNotes { it.copy(trashed = true) }
+    }
+
+    /**
+     * Shared write path for the selection toolbar: applies [update] to a snapshot of the current
+     * selection, persists it as one batch and refreshes the list on the main thread, clearing the
+     * selection afterwards. Pin, trash and restore all used to carry their own copy of this
+     * coroutine scaffolding.
+     */
+    private fun updateSelectedNotes(update: (Note) -> Note) = mutateSelection { notes ->
+        noteUseCase.batchUpdateNotes(notes.map(update))
+    }
+
+    /** Same write path for toolbar actions that act per note instead of persisting a batch. */
+    private fun forEachSelectedNote(action: suspend (Note) -> Unit) = mutateSelection { notes ->
+        notes.forEach { action(it) }
+    }
+
+    private fun mutateSelection(write: suspend (List<Note>) -> Unit) {
         viewModelScope.launch(Dispatchers.IO) {
-            val updatedNotes = selectedNotes.map { note ->
-                note.copy(trashed = true)
-            }
-            Log.d("HomeViewModel", "Moving notes to trash: ${updatedNotes.map { it.id to it.trashed }}")
-            noteUseCase.batchUpdateNotes(updatedNotes)
+            write(selectedNotes.toList())
             launch(Dispatchers.Main) {
                 selectedNotes.clear()
                 noteUseCase.observe()
@@ -111,7 +118,6 @@ class HomeViewModel @Inject constructor(
             viewModelScope.launch(Dispatchers.IO) {
                 val updatedNotes = selectedNotes.map { note ->
                     if (trimmedTag !in note.tags.map { it.lowercase() }) {
-                        Log.d("HomeViewModel", "Adding tag '$trimmedTag' to note ${note.id}")
                         note.copy(tags = note.tags + trimmedTag)
                     } else {
                         note
@@ -122,7 +128,7 @@ class HomeViewModel @Inject constructor(
                     launch(Dispatchers.Main) {
                         Toast.makeText(
                             context,
-                            "Tag '$trimmedTag' added to ${updatedNotes.size} note(s)",
+                            context.getString(R.string.tag_added_count, trimmedTag, updatedNotes.size),
                             Toast.LENGTH_SHORT
                         ).show()
                         selectedNotes.clear()
@@ -133,7 +139,7 @@ class HomeViewModel @Inject constructor(
                     launch(Dispatchers.Main) {
                         Toast.makeText(
                             context,
-                            "Tag '$trimmedTag' already exists on all selected notes",
+                            context.getString(R.string.tag_already_exists, trimmedTag),
                             Toast.LENGTH_SHORT
                         ).show()
                     }
@@ -142,7 +148,7 @@ class HomeViewModel @Inject constructor(
         } else {
             Toast.makeText(
                 context,
-                "Tag name cannot be empty",
+                context.getString(R.string.tag_name_empty),
                 Toast.LENGTH_SHORT
             ).show()
         }
@@ -152,7 +158,7 @@ class HomeViewModel @Inject constructor(
         if (selectedTagsToRemove.isEmpty()) {
             Toast.makeText(
                 context,
-                "No tags selected to remove",
+                context.getString(R.string.tag_none_selected),
                 Toast.LENGTH_SHORT
             ).show()
             return
@@ -161,7 +167,6 @@ class HomeViewModel @Inject constructor(
             val updatedNotes = selectedNotes.map { note ->
                 val updatedTags = note.tags.filterNot { it.lowercase() in selectedTagsToRemove.map { it.lowercase() } }
                 if (updatedTags != note.tags) {
-                    Log.d("HomeViewModel", "Removing tags ${selectedTagsToRemove} from note ${note.id}: ${note.tags} -> $updatedTags")
                     note.copy(tags = updatedTags)
                 } else {
                     note
@@ -169,28 +174,16 @@ class HomeViewModel @Inject constructor(
             }.filter { it.tags != selectedNotes.find { n -> n.id == it.id }?.tags }
             if (updatedNotes.isNotEmpty()) {
                 noteUseCase.batchUpdateNotes(updatedNotes)
-                val currentNotes = runBlocking { noteUseCase.getAllNotesFlow().firstOrNull() ?: emptyList() }
-                val processedNotes = currentNotes.mapNotNull { note ->
-                    if (note.encrypted) {
-                        val (decryptedName, nameResult) = encryptionHelper.decrypt(note.name)
-                        val (decryptedDescription, descriptionResult) = encryptionHelper.decrypt(note.description)
-                        if (nameResult == DecryptionResult.SUCCESS && descriptionResult == DecryptionResult.SUCCESS) {
-                            note.copy(name = decryptedName ?: "", description = decryptedDescription ?: "")
-                        } else {
-                            null
-                        }
-                    } else {
-                        note
-                    }
-                }
+                // The tag index has to be rebuilt from the persisted rows, so re-read them instead
+                // of patching in memory. `first()` is a suspend call, so this reads the flow
+                // without blocking a thread the way `runBlocking` did.
+                val currentNotes = noteUseCase.getAllNotesFlow().first()
                 val newTags = currentNotes.flatMap { it.tags }.map { it.trim().lowercase() }.distinct().sorted()
-                noteUseCase.updateNotes(processedNotes)
                 noteUseCase.updateTags(newTags)
-                Log.d("HomeViewModel", "Fallback refresh: notes=${processedNotes.map { it.id to it.tags }}, tags=$newTags")
                 launch(Dispatchers.Main) {
                     Toast.makeText(
                         context,
-                        "Removed ${selectedTagsToRemove.size} tag(s) from ${updatedNotes.size} note(s)",
+                        context.getString(R.string.tag_removed_count, selectedTagsToRemove.size, updatedNotes.size),
                         Toast.LENGTH_SHORT
                     ).show()
                     selectedNotes.clear()
@@ -201,7 +194,7 @@ class HomeViewModel @Inject constructor(
                 launch(Dispatchers.Main) {
                     Toast.makeText(
                         context,
-                        "No tags were removed",
+                        context.getString(R.string.tag_none_removed),
                         Toast.LENGTH_SHORT
                     ).show()
                     selectedNotes.clear()
@@ -218,7 +211,7 @@ class HomeViewModel @Inject constructor(
             launch(Dispatchers.Main) {
                 Toast.makeText(
                     context,
-                    if (noteUseCase.tags.contains(tag.lowercase())) "Tag '$tag' still in use on some notes" else "Tag '$tag' deleted",
+                    if (noteUseCase.tags.contains(tag.lowercase())) context.getString(R.string.tag_still_in_use, tag) else context.getString(R.string.tag_deleted, tag),
                     Toast.LENGTH_SHORT
                 ).show()
                 if (currentFilter.value.lowercase() == tag.lowercase()) {
@@ -248,57 +241,10 @@ class HomeViewModel @Inject constructor(
     }
 
     fun restoreSelectedNotes() {
-        viewModelScope.launch(Dispatchers.IO) {
-            val updatedNotes = selectedNotes.map { note ->
-                note.copy(trashed = false)
-            }
-            Log.d("HomeViewModel", "Restoring notes: ${updatedNotes.map { it.id to it.trashed }}")
-            noteUseCase.batchUpdateNotes(updatedNotes)
-            launch(Dispatchers.Main) {
-                selectedNotes.clear()
-                noteUseCase.observe()
-            }
-        }
+        updateSelectedNotes { it.copy(trashed = false) }
     }
 
     fun permanentlyDeleteSelectedNotes() {
-        viewModelScope.launch(Dispatchers.IO) {
-            selectedNotes.forEach { note ->
-                noteUseCase.permanentlyDeleteNoteById(note.id)
-            }
-            launch(Dispatchers.Main) {
-                selectedNotes.clear()
-                noteUseCase.observe()
-            }
-        }
-    }
-
-    fun getAllNotes(): List<Note> {
-        val filteredNotes = if (_isTrashMode.value) {
-            runBlocking { noteUseCase.getTrashedNotesFlow().firstOrNull() ?: emptyList() }
-        } else {
-            noteUseCase.notes.filter {
-                it.encrypted == isVaultMode.value && !it.trashed
-            }
-        }
-        when (noteUseCase.decryptionResult) {
-            DecryptionResult.LOADING -> { /* Do nothing */ }
-            DecryptionResult.EMPTY -> {
-                if (!encryptionHelper.isPasswordEmpty()) toggleIsVaultMode(true)
-            }
-            DecryptionResult.BAD_PASSWORD,
-            DecryptionResult.BLANK_DATA,
-            DecryptionResult.INVALID_DATA -> {
-                toggleIsVaultMode(false)
-                Toast.makeText(
-                    context,
-                    context.getString(R.string.invalid_password),
-                    Toast.LENGTH_SHORT
-                ).show()
-                encryptionHelper.removePassword()
-            }
-            else -> toggleIsVaultMode(true)
-        }
-        return filteredNotes
+        forEachSelectedNote { noteUseCase.permanentlyDeleteNoteById(it.id) }
     }
 }

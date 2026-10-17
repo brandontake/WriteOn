@@ -38,8 +38,15 @@ import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavController
 import com.ezpnix.writeon.R
+import com.ezpnix.writeon.presentation.lock.PatternSetupDialog
+import com.ezpnix.writeon.presentation.lock.PatternVerifyDialog
+import com.ezpnix.writeon.presentation.lock.PinSetupDialog
+import com.ezpnix.writeon.presentation.lock.PinVerifyDialog
+import com.ezpnix.writeon.presentation.lock.isBiometricAvailable
+import com.ezpnix.writeon.presentation.lock.rememberLockManager
 import com.ezpnix.writeon.presentation.navigation.NavRoutes
 import com.ezpnix.writeon.presentation.screens.edit.components.CustomTextField
 import com.ezpnix.writeon.presentation.screens.settings.SettingsScaffold
@@ -52,6 +59,15 @@ import java.time.format.DateTimeFormatter
 @Composable
 fun PrivacyScreen(navController: NavController, settingsViewModel: SettingsViewModel) {
     val context = LocalContext.current
+    val lockManager = rememberLockManager()
+    val biometricLockEnabled by lockManager.biometricEnabled.collectAsStateWithLifecycle()
+    val patternLockEnabled by lockManager.patternEnabled.collectAsStateWithLifecycle()
+    val pinLockEnabled by lockManager.pinEnabled.collectAsStateWithLifecycle()
+
+    var showPinSetup by remember { mutableStateOf(false) }
+    var showPinVerify by remember { mutableStateOf(false) }
+    var showPatternSetup by remember { mutableStateOf(false) }
+    var showPatternVerify by remember { mutableStateOf(false) }
     val exportBackupLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.CreateDocument("*/.zip"),
         onResult = { uri ->
@@ -71,47 +87,59 @@ fun PrivacyScreen(navController: NavController, settingsViewModel: SettingsViewM
     ) {
         LazyColumn {
             item {
-                var biometricEnabled by remember { mutableStateOf(false) }
                 SettingsBox(
                     title = stringResource(id = R.string.biometric_authentication),
-                    description = stringResource(id = R.string.biometric_authentication_description),
+                    description = stringResource(id = R.string.lock_biometric_description),
                     icon = Icons.Filled.Fingerprint,
                     radius = shapeManager(radius = settingsViewModel.settings.value.cornerRadius, isFirst = true),
                     actionType = ActionType.SWITCH,
-                    variable = biometricEnabled,
+                    variable = biometricLockEnabled,
                     switchEnabled = { isEnabled ->
-                        biometricEnabled = isEnabled
-                        Toast.makeText(context, "Biometric coming soon", Toast.LENGTH_SHORT).show()
+                        if (isEnabled) {
+                            if (isBiometricAvailable(context)) {
+                                lockManager.setBiometricEnabled(true)
+                                Toast.makeText(context, context.getString(R.string.lock_biometric_enabled), Toast.LENGTH_SHORT).show()
+                            } else {
+                                Toast.makeText(context, context.getString(R.string.lock_biometric_unavailable), Toast.LENGTH_SHORT).show()
+                            }
+                        } else {
+                            lockManager.setBiometricEnabled(false)
+                            Toast.makeText(context, context.getString(R.string.lock_biometric_disabled), Toast.LENGTH_SHORT).show()
+                        }
                     }
                 )
             }
             item {
-                var patternEnabled by remember { mutableStateOf(false) }
                 SettingsBox(
                     title = stringResource(id = R.string.pattern_authentication),
-                    description = stringResource(id = R.string.pattern_authentication_description),
+                    description = stringResource(id = R.string.lock_pattern_description),
                     icon = Icons.Filled.Pattern,
                     radius = shapeManager(radius = settingsViewModel.settings.value.cornerRadius, isFirst = false),
                     actionType = ActionType.SWITCH,
-                    variable = patternEnabled,
+                    variable = patternLockEnabled,
                     switchEnabled = { isEnabled ->
-                        patternEnabled = isEnabled
-                        Toast.makeText(context, "Pattern coming soon", Toast.LENGTH_SHORT).show()
+                        if (isEnabled) {
+                            showPatternSetup = true
+                        } else {
+                            showPatternVerify = true
+                        }
                     }
                 )
             }
             item {
-                var pinEnabled by remember { mutableStateOf(false) }
                 SettingsBox(
                     title = stringResource(id = R.string.pin_authentication),
-                    description = stringResource(id = R.string.pin_authentication_description),
+                    description = stringResource(id = R.string.lock_pin_description),
                     icon = Icons.Filled.Pin,
                     radius = shapeManager(radius = settingsViewModel.settings.value.cornerRadius, isLast = true),
                     actionType = ActionType.SWITCH,
-                    variable = pinEnabled,
+                    variable = pinLockEnabled,
                     switchEnabled = { isEnabled ->
-                        pinEnabled = isEnabled
-                        Toast.makeText(context, "PIN coming soon", Toast.LENGTH_SHORT).show()
+                        if (isEnabled) {
+                            showPinSetup = true
+                        } else {
+                            showPinVerify = true
+                        }
                     }
                 )
                 Spacer(modifier = Modifier.height(18.dp))
@@ -127,9 +155,9 @@ fun PrivacyScreen(navController: NavController, settingsViewModel: SettingsViewM
                     switchEnabled = { isEnabled ->
                         settingsViewModel.update(settingsViewModel.settings.value.copy(screenProtection = isEnabled))
                         val message = if (isEnabled) {
-                            "Screen Protected"
+                            context.getString(R.string.privacy_screen_protected)
                         } else {
-                            "Screen Unprotected"
+                            context.getString(R.string.privacy_screen_unprotected)
                         }
                         Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
                     }
@@ -146,9 +174,9 @@ fun PrivacyScreen(navController: NavController, settingsViewModel: SettingsViewM
                     switchEnabled = { isEnabled ->
                         settingsViewModel.update(settingsViewModel.settings.value.copy(encryptBackup = isEnabled))
                         val message = if (isEnabled) {
-                            "Database Encryption Enabled"
+                            context.getString(R.string.privacy_db_encryption_enabled)
                         } else {
-                            "Database Encryption Disabled"
+                            context.getString(R.string.privacy_db_encryption_disabled)
                         }
                         Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
                     }
@@ -168,6 +196,49 @@ fun PrivacyScreen(navController: NavController, settingsViewModel: SettingsViewM
                 )
             }
         }
+    }
+
+    if (showPinSetup) {
+        PinSetupDialog(
+            lockManager = lockManager,
+            onDismiss = { showPinSetup = false },
+            onEnabled = {
+                showPinSetup = false
+                Toast.makeText(context, context.getString(R.string.lock_pin_enabled), Toast.LENGTH_SHORT).show()
+            }
+        )
+    }
+    if (showPinVerify) {
+        PinVerifyDialog(
+            lockManager = lockManager,
+            onDismiss = { showPinVerify = false },
+            onVerified = {
+                showPinVerify = false
+                lockManager.clearPin()
+                Toast.makeText(context, context.getString(R.string.lock_pin_disabled), Toast.LENGTH_SHORT).show()
+            }
+        )
+    }
+    if (showPatternSetup) {
+        PatternSetupDialog(
+            lockManager = lockManager,
+            onDismiss = { showPatternSetup = false },
+            onEnabled = {
+                showPatternSetup = false
+                Toast.makeText(context, context.getString(R.string.lock_pattern_enabled), Toast.LENGTH_SHORT).show()
+            }
+        )
+    }
+    if (showPatternVerify) {
+        PatternVerifyDialog(
+            lockManager = lockManager,
+            onDismiss = { showPatternVerify = false },
+            onVerified = {
+                showPatternVerify = false
+                lockManager.clearPattern()
+                Toast.makeText(context, context.getString(R.string.lock_pattern_disabled), Toast.LENGTH_SHORT).show()
+            }
+        )
     }
 }
 

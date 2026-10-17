@@ -1,9 +1,12 @@
 package com.ezpnix.writeon.presentation.screens.settings
 
+import android.app.Application
 import android.content.Context
+import android.util.Log
 import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
 import com.ezpnix.writeon.core.constant.DatabaseConst
+import com.ezpnix.writeon.data.local.database.NoteDatabaseProvider
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -19,6 +22,8 @@ import javax.crypto.SecretKeyFactory
 import javax.crypto.spec.IvParameterSpec
 import javax.crypto.spec.PBEKeySpec
 import javax.crypto.spec.SecretKeySpec
+
+private const val TAG = "BackupWorker"
 
 class BackupWorker(
     context: Context,
@@ -40,7 +45,7 @@ class BackupWorker(
 
             Result.success()
         } catch (e: Exception) {
-            e.printStackTrace()
+            Log.e(TAG, "Backup failed", e)
             Result.failure()
         }
     }
@@ -49,14 +54,23 @@ class BackupWorker(
         withContext(Dispatchers.IO) {
             val databaseFile = applicationContext.getDatabasePath(DatabaseConst.NOTES_DATABASE_FILE_NAME)
             val tempZipFile = File.createTempFile("backup", ".zip", applicationContext.cacheDir)
+            val portableFile = File.createTempFile("portable", ".db", applicationContext.cacheDir)
+            val provider = NoteDatabaseProvider(applicationContext as Application)
 
-            ZipOutputStream(FileOutputStream(tempZipFile)).use { zipOut ->
-                FileInputStream(databaseFile).use { fis ->
-                    val entry = ZipEntry(databaseFile.name)
-                    zipOut.putNextEntry(entry)
-                    fis.copyTo(zipOut)
-                    zipOut.closeEntry()
+            try {
+                provider.writePortableDatabaseCopy(portableFile)
+
+                ZipOutputStream(FileOutputStream(tempZipFile)).use { zipOut ->
+                    FileInputStream(portableFile).use { fis ->
+                        val entry = ZipEntry(databaseFile.name)
+                        zipOut.putNextEntry(entry)
+                        fis.copyTo(zipOut)
+                        zipOut.closeEntry()
+                    }
                 }
+            } finally {
+                provider.close()
+                portableFile.delete()
             }
 
             val zipData = tempZipFile.readBytes()

@@ -1,4 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="ic_launcher_background">#2F2D2D</color>
+    <!-- WriteOn brand background colour; keep in sync with drawable/ic_launcher_background.xml -->
+    <color name="ic_launcher_background">#FFC107</color>
 </resources>

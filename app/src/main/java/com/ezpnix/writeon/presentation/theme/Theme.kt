@@ -11,6 +11,8 @@ import androidx.compose.material3.Typography
 import androidx.compose.material3.dynamicDarkColorScheme
 import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
@@ -44,20 +46,35 @@ fun LeafNotesTheme(
     settingsModel: SettingsViewModel,
     content: @Composable () -> Unit
 ) {
-    if (settingsModel.settings.value.automaticTheme) {
-        settingsModel.update(settingsModel.settings.value.copy(dynamicTheme = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S))
-        settingsModel.update(settingsModel.settings.value.copy(darkTheme = isSystemInDarkTheme()))
+    val settings = settingsModel.settings.value
+    val systemInDarkTheme = isSystemInDarkTheme()
+    val supportsDynamic = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
+
+    // These two used to be written straight from the composable body. `update()` also persists the
+    // settings and (re)schedules the auto-backup work, so every recomposition — a drawer slide, a
+    // FAB animation — wrote to disk. Writing only when the derived value actually differs keeps
+    // the setting in step with the system without the side effect.
+    LaunchedEffect(settings.automaticTheme, systemInDarkTheme, supportsDynamic) {
+        if (!settings.automaticTheme) return@LaunchedEffect
+        val target = settings.copy(dynamicTheme = supportsDynamic, darkTheme = systemInDarkTheme)
+        if (target.dynamicTheme != settings.dynamicTheme || target.darkTheme != settings.darkTheme) {
+            settingsModel.update(target)
+        }
     }
 
     val context = LocalContext.current
     val activity = LocalView.current.context as Activity
-    WindowCompat.getInsetsController(activity.window, activity.window.decorView).apply {
-        isAppearanceLightStatusBars = !settingsModel.settings.value.darkTheme
-    }
-    if (settingsModel.settings.value.screenProtection) {
-        activity.window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
-    } else {
-        activity.window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
+    // Both of these touch the window, so they also belong in an effect rather than in the body:
+    // recomposition can run this function many times per frame.
+    SideEffect {
+        WindowCompat.getInsetsController(activity.window, activity.window.decorView).apply {
+            isAppearanceLightStatusBars = !settingsModel.settings.value.darkTheme
+        }
+        if (settingsModel.settings.value.screenProtection) {
+            activity.window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
+        } else {
+            activity.window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
+        }
     }
 
     MaterialTheme(

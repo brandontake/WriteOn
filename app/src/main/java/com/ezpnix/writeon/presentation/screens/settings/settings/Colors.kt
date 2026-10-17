@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.Reply
 import androidx.compose.material.icons.rounded.Battery1Bar
 import androidx.compose.material.icons.rounded.Colorize
 import androidx.compose.material.icons.rounded.DarkMode
@@ -50,6 +51,7 @@ import com.ezpnix.writeon.presentation.screens.settings.SettingsScaffold
 import com.ezpnix.writeon.presentation.screens.settings.model.SettingsViewModel
 import com.ezpnix.writeon.presentation.screens.settings.widgets.ActionType
 import com.ezpnix.writeon.presentation.screens.settings.widgets.SettingsBox
+import com.ezpnix.writeon.presentation.theme.appCornerShape
 import kotlin.math.roundToInt
 
 fun shapeManager(isBoth: Boolean = false,isLast: Boolean = false,isFirst: Boolean = false,radius: Int): RoundedCornerShape {
@@ -246,6 +248,26 @@ fun ColorStylesScreen(navController: NavController, settingsViewModel: SettingsV
             }
             item {
                 SettingsBox(
+                    title = stringResource(id = R.string.predictive_back),
+                    description = stringResource(id = R.string.predictive_back_description),
+                    icon = Icons.AutoMirrored.Rounded.Reply,
+                    radius = shapeManager(
+                        radius = settingsViewModel.settings.value.cornerRadius,
+                        isFirst = false
+                    ),
+                    actionType = ActionType.SWITCH,
+                    variable = settingsViewModel.settings.value.predictiveBackEnabled,
+                    switchEnabled = {
+                        settingsViewModel.update(
+                            settingsViewModel.settings.value.copy(
+                                predictiveBackEnabled = it
+                            )
+                        )
+                    }
+                )
+            }
+            item {
+                SettingsBox(
                     isBig = true,
                     title = stringResource(id = R.string.homepage),
                     icon = Icons.Rounded.Home,
@@ -274,12 +296,12 @@ fun OnColumnsClicked(
     Dialog(onDismissRequest = { onConfirm(count) }) {
         Column(
             modifier = Modifier
-                .background(MaterialTheme.colorScheme.surfaceContainerLow, RoundedCornerShape(8.dp))
+                .background(MaterialTheme.colorScheme.surfaceContainerLow, appCornerShape())
                 .padding(16.dp)
         ) {
-            Text("Select number of columns", fontWeight = FontWeight.Bold, modifier = Modifier.align(CenterHorizontally))
+            Text(stringResource(R.string.columns_dialog_title), fontWeight = FontWeight.Bold, modifier = Modifier.align(CenterHorizontally))
             Spacer(Modifier.height(12.dp))
-            Text("$count columns", textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
+            Text(stringResource(R.string.columns_dialog_count, count), textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
             Slider(
                 value = sliderPos,
                 onValueChange = { sliderPos = it },
@@ -289,7 +311,7 @@ fun OnColumnsClicked(
             )
             Spacer(Modifier.height(16.dp))
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                TextButton(onClick = { onConfirm(count) }) { Text("OK") }
+                TextButton(onClick = { onConfirm(count) }) { Text(stringResource(R.string.action_ok)) }
             }
         }
     }

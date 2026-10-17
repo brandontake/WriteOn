@@ -36,6 +36,9 @@ import com.ezpnix.writeon.R
 import com.ezpnix.writeon.domain.model.Note
 import com.ezpnix.writeon.presentation.components.markdown.MarkdownText
 import com.ezpnix.writeon.presentation.screens.settings.model.SettingsViewModel
+import com.ezpnix.writeon.presentation.theme.appCornerShape
+import com.ezpnix.writeon.presentation.theme.CornerFraction
+import androidx.compose.ui.res.stringResource
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -49,6 +52,10 @@ fun NoteCard(
     onLongClick: () -> Unit,
     onNoteUpdate: (Note) -> Unit
 ) {
+    // One snapshot read per card instead of one per settings lookup: every `settings.value`
+    // read subscribes this card to the settings state, so re-reading it six times made each
+    // card recompose on unrelated settings writes.
+    val settings = settingsViewModel.settings.value
     ElevatedCard(
         modifier = Modifier
             .padding(bottom = 12.dp)
@@ -78,7 +85,11 @@ fun NoteCard(
             if (note.name.isNotBlank()) {
                 MarkdownText(
                     isPreview = false,
-                    isEnabled = settingsViewModel.settings.value.isMarkdownEnabled,
+                    // Cards render into a grid item, so the body must not nest a second lazy
+                    // list inside the grid's: a plain column renders the same elements without
+                    // a scroll container (and without swallowing the grid's drag gestures).
+                    useLazyColumn = false,
+                    isEnabled = settings.isMarkdownEnabled,
                     markdown = note.name,
                     containerColor = containerColor,
                     modifier = Modifier
@@ -89,19 +100,20 @@ fun NoteCard(
                     spacing = 0.dp,
                     onContentChange = { onNoteUpdate(note.copy(name = it)) },
                     fontSize = 20.sp,
-                    radius = settingsViewModel.settings.value.cornerRadius,
+                    radius = settings.cornerRadius,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
             }
-            if (note.name.isNotBlank() && note.description.isNotBlank() && !settingsViewModel.settings.value.showOnlyTitle) {
+            if (note.name.isNotBlank() && note.description.isNotBlank() && !settings.showOnlyTitle) {
                 Spacer(modifier = Modifier.height(8.dp))
             }
-            if (note.description.isNotBlank() && !settingsViewModel.settings.value.showOnlyTitle) {
+            if (note.description.isNotBlank() && !settings.showOnlyTitle) {
                 MarkdownText(
                     isPreview = false,
+                    useLazyColumn = false,
                     markdown = note.description,
-                    isEnabled = settingsViewModel.settings.value.isMarkdownEnabled,
+                    isEnabled = settings.isMarkdownEnabled,
                     spacing = 0.dp,
                     containerColor = containerColor,
                     modifier = Modifier
@@ -110,7 +122,7 @@ fun NoteCard(
                         .heightIn(max = dimensionResource(R.dimen.max_description_height)),
                     onContentChange = { onNoteUpdate(note.copy(description = it)) },
                     fontSize = 14.sp,
-                    radius = settingsViewModel.settings.value.cornerRadius
+                    radius = settings.cornerRadius
                 )
             }
             if (note.tags.isNotEmpty()) {
@@ -119,7 +131,7 @@ fun NoteCard(
                         .padding(top = 8.dp, start = 4.dp, end = 4.dp)
                         .background(
                             color = MaterialTheme.colorScheme.primary.copy(alpha = 0.1f),
-                            shape = RoundedCornerShape(4.dp)
+                            shape = appCornerShape(CornerFraction.TINY)
                         )
                         .padding(horizontal = 6.dp, vertical = 4.dp),
                     verticalAlignment = Alignment.CenterVertically,
@@ -127,7 +139,7 @@ fun NoteCard(
                 ) {
                     Icon(
                         imageVector = Icons.AutoMirrored.Filled.Label,
-                        contentDescription = "Tagged Note",
+                        contentDescription = stringResource(R.string.tagged_note),
                         tint = MaterialTheme.colorScheme.primary,
                         modifier = Modifier.size(16.dp)
                     )

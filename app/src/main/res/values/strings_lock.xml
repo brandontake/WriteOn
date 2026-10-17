@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- App lock -->
+    <string name="lock_title">WriteOn is locked</string>
+    <string name="lock_subtitle_pin">Enter your PIN to continue</string>
+    <string name="lock_subtitle_pattern">Draw your pattern to continue</string>
+    <string name="lock_subtitle_biometric">Unlock with your biometric credential</string>
+    <string name="lock_unlock">Unlock</string>
+    <string name="lock_use_biometric">Use biometric</string>
+    <string name="lock_use_pin">Use PIN instead</string>
+    <string name="lock_use_pattern">Use pattern instead</string>
+    <string name="lock_wrong_pin">Incorrect PIN</string>
+    <string name="lock_wrong_pattern">Incorrect pattern</string>
+    <string name="lock_locked_out">Too many attempts. Try again in %1$d s.</string>
+    <string name="lock_biometric_failed">Biometric authentication failed</string>
+    <string name="lock_biometric_unavailable">Biometric authentication is not available on this device</string>
+    <string name="lock_biometric_prompt_title">Unlock WriteOn</string>
+    <string name="lock_biometric_prompt_subtitle">Confirm your identity to open your notes</string>
+    <string name="lock_cancel">Cancel</string>
+    <string name="lock_backspace">Backspace</string>
+    <string name="lock_confirm">Confirm</string>
+
+    <!-- Credential setup -->
+    <string name="lock_setup_pin_title">Set a PIN</string>
+    <string name="lock_setup_pin_confirm">Confirm your PIN</string>
+    <string name="lock_setup_pin_length">Use 4 to 6 digits</string>
+    <string name="lock_setup_pin_mismatch">The PINs do not match. Start again.</string>
+    <string name="lock_setup_pattern_title">Draw a pattern</string>
+    <string name="lock_setup_pattern_confirm">Draw the pattern again</string>
+    <string name="lock_setup_pattern_short">Connect at least 4 dots</string>
+    <string name="lock_setup_pattern_mismatch">The patterns do not match. Start again.</string>
+    <string name="lock_verify_pin_title">Enter your current PIN</string>
+    <string name="lock_verify_pattern_title">Draw your current pattern</string>
+
+    <!-- Settings row descriptions. The lock rows keep their own strings so their wording can be
+         tuned independently of the shared *_authentication_description entries. -->
+    <string name="lock_biometric_description">Unlock WriteOn with your fingerprint or face</string>
+    <string name="lock_pattern_description">Unlock WriteOn by drawing a pattern</string>
+    <string name="lock_pin_description">Unlock WriteOn with a 4 to 6 digit PIN</string>
+
+    <!-- Switch confirmations -->
+    <string name="lock_biometric_enabled">Biometric unlock enabled</string>
+    <string name="lock_biometric_disabled">Biometric unlock disabled</string>
+    <string name="lock_pin_enabled">PIN lock enabled</string>
+    <string name="lock_pin_disabled">PIN lock disabled</string>
+    <string name="lock_pattern_enabled">Pattern lock enabled</string>
+    <string name="lock_pattern_disabled">Pattern lock disabled</string>
+</resources>

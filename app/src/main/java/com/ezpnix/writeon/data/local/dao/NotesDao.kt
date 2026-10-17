@@ -5,6 +5,7 @@ import androidx.room.Delete
 import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
+import androidx.room.Transaction
 import androidx.room.Update
 import com.ezpnix.writeon.domain.model.Note
 import kotlinx.coroutines.flow.Flow
@@ -23,6 +24,14 @@ interface NoteDao {
     @Update
     suspend fun updateNote(note: Note)
 
+    /**
+     * Applies a batch of updates in one transaction.
+     *
+     * Without `@Transaction`, Room runs one statement per note, so a tag rename touching thirty
+     * notes meant thirty separate writes: observers of the notes table could see a half-applied
+     * state in between, and an interruption left the tag list inconsistent across notes.
+     */
+    @Transaction
     @Update
     suspend fun batchUpdateNotes(notes: List<Note>)
 

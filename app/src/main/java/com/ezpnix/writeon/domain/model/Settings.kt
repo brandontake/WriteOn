@@ -2,7 +2,7 @@ package com.ezpnix.writeon.domain.model
 
 data class Settings(
     val viewMode: Boolean = true,
-    val automaticTheme: Boolean = false,
+    val automaticTheme: Boolean = true,
     val darkTheme: Boolean = true,
     var dynamicTheme: Boolean = false,
     var amoledTheme: Boolean = false,
@@ -18,6 +18,7 @@ data class Settings(
     var showOnlyTitle: Boolean = false,
     var termsOfService: Boolean = false,
     var cornerRadius: Int = 32,
+    var predictiveBackEnabled: Boolean = false,
     val isBiometricEnabled: Boolean = false,
     val autoBackupEnabled: Boolean = false,
     val fontSize: Float = 16f,

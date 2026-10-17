@@ -17,14 +17,25 @@ class GalleryObserver(handler: Handler, private val context: Context) : ContentO
     }
 }
 
-fun registerGalleryObserver(context: Context) {
+/**
+ * Watches MediaStore so exported note images are removed once the gallery picks them up.
+ *
+ * The returned observer must be unregistered by the caller: registering more than once leaves every
+ * earlier registration live for the process lifetime, each one holding the context it was given.
+ */
+fun registerGalleryObserver(context: Context): GalleryObserver {
     val handler = Handler(Looper.getMainLooper())
-    val galleryObserver = GalleryObserver(handler, context)
+    val galleryObserver = GalleryObserver(handler, context.applicationContext)
     context.contentResolver.registerContentObserver(
         MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
         true,
         galleryObserver
     )
+    return galleryObserver
+}
+
+fun unregisterGalleryObserver(context: Context, observer: GalleryObserver) {
+    runCatching { context.contentResolver.unregisterContentObserver(observer) }
 }
 
 fun deleteFileIfExists(context: Context, fileName: String): Boolean {

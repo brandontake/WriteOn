@@ -14,6 +14,7 @@ import com.ezpnix.writeon.presentation.components.DecryptionResult
 import com.ezpnix.writeon.presentation.components.EncryptionHelper
 import com.ezpnix.writeon.presentation.screens.edit.components.UndoRedoState
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import javax.inject.Inject
@@ -50,8 +51,21 @@ class EditViewModel @Inject constructor(
     private val _isPinned = mutableStateOf(false)
     val isPinned: State<Boolean> get() = _isPinned
 
+    private val _isImageSaveRequested = mutableStateOf(false)
+    val isImageSaveRequested: State<Boolean> get() = _isImageSaveRequested
+
     private val _originalNote = mutableStateOf<Note?>(null)
     private val undoRedoState = UndoRedoState()
+
+    private var noteJob: Job? = null
+
+    fun requestImageSave() {
+        _isImageSaveRequested.value = true
+    }
+
+    fun clearImageSaveRequest() {
+        _isImageSaveRequested.value = false
+    }
 
     fun saveNote(id: Int) {
         viewModelScope.launch {
@@ -75,7 +89,6 @@ class EditViewModel @Inject constructor(
                     createdAt = if (noteCreatedTime.value != 0L) noteCreatedTime.value else System.currentTimeMillis(),
                     tags = emptyList()
                 )
-                android.util.Log.d("EditViewModel", "Saving note ${note.id} with tags ${note.tags}")
                 noteUseCase.addNote(note)
             }
 
@@ -100,12 +113,20 @@ class EditViewModel @Inject constructor(
         updateNoteId(note.id)
         updateNotePin(note.pinned)
         updateIsEncrypted(note.encrypted)
-        android.util.Log.d("EditViewModel", "Synced note ${note.id} with tags ${note.tags}")
     }
 
+    /**
+     * Follows the stored note for [id] and keeps the editor fields in step with it.
+     *
+     * The collector is cancelled before a new one is started. It used to be launched and forgotten,
+     * so calling this again for the same note left a second live collector writing the same fields
+     * from the same flow, and there was no way to stop observing a note the editor had moved on from.
+     */
     fun setupNoteData(id: Int = noteId.value) {
+        noteJob?.cancel()
+        noteJob = null
         if (id != 0) {
-            viewModelScope.launch {
+            noteJob = viewModelScope.launch {
                 noteUseCase.getNoteById(id).collectLatest { note ->
                     syncNote(note)
                 }

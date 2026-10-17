@@ -1,9 +1,9 @@
 package com.ezpnix.writeon.presentation.screens.home
 
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
@@ -12,7 +12,10 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.filled.DeleteForever
 import androidx.compose.material.icons.filled.RestoreFromTrash
+import androidx.compose.material.icons.rounded.DoneAll
+import androidx.compose.material.icons.rounded.RemoveDone
 import androidx.compose.ui.res.stringResource
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.ezpnix.writeon.R
 import com.ezpnix.writeon.presentation.screens.settings.model.SettingsViewModel
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -20,6 +23,7 @@ import androidx.navigation.NavController
 import com.ezpnix.writeon.presentation.screens.home.viewmodel.HomeViewModel
 import com.ezpnix.writeon.presentation.screens.home.widgets.NotesGrid
 import com.ezpnix.writeon.presentation.screens.settings.settings.shapeManager
+import com.ezpnix.writeon.presentation.theme.appCornerShape
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -29,10 +33,15 @@ fun TrashScreen(
     viewModel: HomeViewModel = hiltViewModel()
 ) {
     val trashedNotes by viewModel.noteUseCase.getTrashedNotesFlow()
-        .collectAsState(initial = emptyList())
+        .collectAsStateWithLifecycle(initialValue = emptyList())
 
     val selectedNotes = remember { mutableStateListOf<Note>() }
-    var longPressedNote by remember { mutableStateOf<Note?>(null) }
+    // Only the ids survive a configuration change: Note is a plain data class and is neither
+    // Parcelable nor Serializable, so it cannot go into a Bundle.
+    var longPressedNoteId by rememberSaveable { mutableStateOf<Int?>(null) }
+    var pendingPermanentDeleteIds by rememberSaveable { mutableStateOf<List<Int>?>(null) }
+    val allSelected = trashedNotes.isNotEmpty() && selectedNotes.size == trashedNotes.size
+    val longPressedNote = trashedNotes.firstOrNull { it.id == longPressedNoteId }
 
     Scaffold(
         topBar = {
@@ -47,7 +56,7 @@ fun TrashScreen(
                     IconButton(onClick = { navController.navigateUp() }) {
                         Icon(
                             imageVector = Icons.AutoMirrored.Rounded.ArrowBack,
-                            contentDescription = "Back",
+                            contentDescription = stringResource(R.string.cd_back),
                             tint = MaterialTheme.colorScheme.onBackground
                         )
                     }
@@ -93,8 +102,9 @@ fun TrashScreen(
 
                     OutlinedButton(
                         onClick = {
-                            selectedNotes.forEach { viewModel.permanentlyDeleteNote(it) }
-                            selectedNotes.clear()
+                            // Permanent deletion cannot be undone and is not covered by any backup,
+                            // so the user confirms before anything is removed.
+                            pendingPermanentDeleteIds = selectedNotes.map { it.id }
                         },
                         modifier = Modifier.weight(1f),
                         colors = ButtonDefaults.outlinedButtonColors(
@@ -105,6 +115,27 @@ fun TrashScreen(
                         Icon(Icons.Default.DeleteForever, contentDescription = null)
                         Spacer(Modifier.width(8.dp))
                         Text(stringResource(R.string.delete_forever))
+                    }
+
+                    // Select-all toggle: compact icon button so the two labelled actions
+                    // keep enough room for their icon + text on narrow screens.
+                    FilledTonalIconButton(
+                        onClick = {
+                            if (allSelected) {
+                                selectedNotes.clear()
+                            } else {
+                                selectedNotes.clear()
+                                selectedNotes.addAll(trashedNotes)
+                            }
+                        },
+                        enabled = trashedNotes.isNotEmpty()
+                    ) {
+                        Icon(
+                            imageVector = if (allSelected) Icons.Rounded.RemoveDone else Icons.Rounded.DoneAll,
+                            contentDescription = stringResource(
+                                if (allSelected) R.string.deselect_all else R.string.select_all
+                            )
+                        )
                     }
                 }
             }
@@ -139,14 +170,15 @@ fun TrashScreen(
                     selectedNotes = selectedNotes,
                     viewMode = true,
                     isDeleteClicked = false,
-                    animationFinished = {}
+                    animationFinished = {},
+                    swipeEnabled = false
                 )
             }
         }
     }
 
     if (longPressedNote != null) {
-        ModalBottomSheet(onDismissRequest = { longPressedNote = null }) {
+        ModalBottomSheet(onDismissRequest = { longPressedNoteId = null }) {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -154,17 +186,17 @@ fun TrashScreen(
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 Text(
-                    text = longPressedNote?.name ?: "",
+                    text = longPressedNote.name,
                     style = MaterialTheme.typography.titleMedium
                 )
 
                 Button(
                     onClick = {
-                        longPressedNote?.let { viewModel.restoreNote(it) }
-                        longPressedNote = null
+                        viewModel.restoreNote(longPressedNote)
+                        longPressedNoteId = null
                     },
                     modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(12.dp)
+                    shape = appCornerShape()
                 ) {
                     Icon(Icons.Default.RestoreFromTrash, contentDescription = null)
                     Spacer(Modifier.width(8.dp))
@@ -173,11 +205,11 @@ fun TrashScreen(
 
                 OutlinedButton(
                     onClick = {
-                        longPressedNote?.let { viewModel.permanentlyDeleteNote(it) }
-                        longPressedNote = null
+                        pendingPermanentDeleteIds = listOf(longPressedNote.id)
+                        longPressedNoteId = null
                     },
                     modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(12.dp),
+                    shape = appCornerShape(),
                     colors = ButtonDefaults.outlinedButtonColors(
                         contentColor = MaterialTheme.colorScheme.error
                     )
@@ -187,6 +219,44 @@ fun TrashScreen(
                     Text(stringResource(R.string.delete_forever))
                 }
             }
+        }
+    }
+
+    pendingPermanentDeleteIds?.let { ids ->
+        val notes = trashedNotes.filter { it.id in ids }
+        // A rotation while the dialog was open can leave ids for notes that have since been
+        // restored or deleted elsewhere; showing an empty "delete?" prompt would be worse than
+        // closing it.
+        if (notes.isNotEmpty()) {
+            val description = if (notes.size == 1) {
+                notes.first().name
+            } else {
+                stringResource(R.string.confirm_delete)
+            }
+        AlertDialog(
+                onDismissRequest = { pendingPermanentDeleteIds = null },
+                title = { Text(stringResource(R.string.delete_forever)) },
+                text = { Text(description) },
+                confirmButton = {
+                    TextButton(
+                        onClick = {
+                            notes.forEach { viewModel.permanentlyDeleteNote(it) }
+                            selectedNotes.clear()
+                            pendingPermanentDeleteIds = null
+                        },
+                        colors = ButtonDefaults.textButtonColors(
+                            contentColor = MaterialTheme.colorScheme.error
+                        )
+                    ) {
+                        Text(stringResource(R.string.delete_forever))
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { pendingPermanentDeleteIds = null }) {
+                        Text(stringResource(R.string.cancel))
+                    }
+                },
+            )
         }
     }
 }

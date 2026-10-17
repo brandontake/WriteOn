@@ -2,6 +2,7 @@ package com.ezpnix.writeon.data.local.database
 
 import android.app.Application
 import androidx.room.Room
+import androidx.room.RoomDatabase
 import androidx.room.TypeConverter
 import androidx.room.TypeConverters
 import androidx.room.migration.Migration
@@ -10,6 +11,8 @@ import com.ezpnix.writeon.core.constant.DatabaseConst
 import com.ezpnix.writeon.data.local.dao.NoteDao
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
+import java.io.File
+import kotlinx.coroutines.flow.first
 
 class Converters {
     private val gson = Gson()
@@ -55,13 +58,59 @@ class NoteDatabaseProvider(private val application: Application) {
     }
 
     fun noteDao(): NoteDao {
-        return instance().noteDao()
+        return EncryptedNoteDao(instance().noteDao(), noteCrypto)
     }
+
+    /**
+     * Writes a copy of the note database in which every note is stored as plain text again, so that
+     * the file can be restored on another device. The content is read through the normal
+     * (encrypting) [noteDao], written into a throwaway database and copied out of the databases
+     * directory.
+     */
+    suspend fun writePortableDatabaseCopy(destination: File) {
+        val dao = noteDao()
+        val notes = dao.getAllNotesSync() + dao.getTrashedNotes().first()
+
+        val exportName = "writeon-portable-${System.currentTimeMillis()}.db"
+        val exportFile = application.applicationContext.getDatabasePath(exportName)
+        exportFile.parentFile?.mkdirs()
+
+        val exportDatabase = Room.databaseBuilder(
+            application.applicationContext,
+            NoteDatabase::class.java,
+            exportName
+        )
+            .setJournalMode(RoomDatabase.JournalMode.TRUNCATE)
+            .build()
+
+        try {
+            notes.forEach { exportDatabase.noteDao().addNote(it) }
+        } finally {
+            exportDatabase.close()
+        }
+
+        try {
+            exportFile.copyTo(destination, overwrite = true)
+        } finally {
+            exportFile.delete()
+        }
+    }
+
+    private val noteCrypto by lazy { NoteCrypto() }
 }
 
 private val MIGRATION_1_2 = object : Migration(1, 2) {
     override fun migrate(db: SupportSQLiteDatabase) {
-        db.execSQL("ALTER TABLE `notes-table` ADD COLUMN `created_at` INTEGER NOT NULL DEFAULT ${System.currentTimeMillis()}")
+        // The default must be a constant. This used to interpolate System.currentTimeMillis(), so
+        // the DDL differed per migration run: every pre-v2 note came back with created_at set to the
+        // moment its owner upgraded, which silently re-sorted the whole library and destroyed the
+        // original ordering with no way to recover it. SQLite requires a constant DEFAULT in ALTER
+        // TABLE ADD COLUMN, so a fixed sentinel is the only option here.
+        //
+        // 0 is treated as "unknown" downstream: NoteUseCase replaces a 0 createdAt with
+        // System.currentTimeMillis() the next time the note is saved, so a note only keeps the
+        // sentinel if it is never edited again.
+        db.execSQL("ALTER TABLE `notes-table` ADD COLUMN `created_at` INTEGER NOT NULL DEFAULT 0")
     }
 }
 

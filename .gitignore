@@ -65,5 +65,10 @@ render.experimental.xml
 *.keystore
 *.jks
 
+# Signing credentials. build.gradle.kts reads storePassword/keyPassword from this file, so it must
+# never be committed — a leaked upload key means anyone can publish an update to this app listing.
+# *.jks above already keeps the key itself out of git; this covers the passwords.
+keystore.properties
+
 # Android Profiling
 *.hprof

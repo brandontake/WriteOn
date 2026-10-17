@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  WriteOn adaptive icon - MONOCHROME layer (Android 13 / API 33+ themed icons).
+
+  The launcher repaints every opaque pixel of this layer with a single colour taken from the
+  user's theme, so all internal detail has to be expressed as NEGATIVE SPACE instead of
+  colour. One path with android:fillType="evenOdd" does exactly that:
+
+      card silhouette (top-right corner chamfered = the folded corner)   -> tinted
+      writing line 1                                                     -> hole
+      writing line 2                                                     -> hole
+      pen stroke                                                         -> hole
+
+  The holes reveal the launcher's themed icon-background colour, so the icon keeps the same
+  "note with a folded corner, two lines, a pen" reading as the full-colour icon while using
+  a single colour. Nothing is added for the sake of matching the coloured layers element for
+  element - the amber field and the amber fold are deliberately not represented, because a
+  single colour cannot show them and a solid field would turn the icon into a blob.
+
+  Geometry is identical to drawable/ic_launcher_foreground.xml (108 x 108 viewport, centre
+  (54,54), silhouette maximum extent 30.90 <= 33 dp safe-zone radius), so the themed icon
+  keeps the coloured icon's proportions. The three holes are the same shapes as the drawn
+  lines and pen, extended for the round line caps: 1.5 either side of each line's end point,
+  and the pen's perpendicular half-width (1.7) beyond each end point.
+  Design source: icon/ic_launcher_monochrome.svg
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:fillType="evenOdd"
+        android:pathData="M39,28 L63.5,28 L74.5,39 L74.5,74.5 A5.5,5.5 0 0 1 69,80 L39,80 A5.5,5.5 0 0 1 33.5,74.5 L33.5,33.5 A5.5,5.5 0 0 1 39,28 Z M38.5,49.5 L69.5,49.5 L69.5,52.5 L38.5,52.5 Z M38.5,61.5 L59,61.5 L59,64.5 L38.5,64.5 Z M61,74.9042 L71.4042,64.5 L69,62.0958 L58.5958,72.5 Z"/>
+
+</vector>

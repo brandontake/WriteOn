@@ -20,7 +20,6 @@ import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.pager.PagerState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.AddComment
 import androidx.compose.material.icons.rounded.Calculate
@@ -72,6 +71,9 @@ import java.time.format.DateTimeFormatter
 import java.util.Date
 import java.util.Locale
 import java.util.Stack
+import androidx.compose.ui.res.stringResource
+import com.ezpnix.writeon.R
+import com.ezpnix.writeon.presentation.theme.appCornerShape
 
 
 @Composable
@@ -81,7 +83,7 @@ fun AgreeButton(
 ) {
     ExtendedFloatingActionButton(
         modifier = Modifier.imePadding(),
-        shape = RoundedCornerShape(24.dp),
+        shape = appCornerShape(),
         onClick = { onClick() },
         icon = { Icon(Icons.Rounded.CheckCircle, text) },
         text = { Text(text = text) },
@@ -99,7 +101,7 @@ fun EditButton(pagerState: PagerState, coroutineScope: CoroutineScope) {
             }
         }
     ) {
-        Icon(Icons.Rounded.Edit, contentDescription = "Edit", tint = MaterialTheme.colorScheme.primary)
+        Icon(Icons.Rounded.Edit, contentDescription = stringResource(R.string.edit), tint = MaterialTheme.colorScheme.primary)
     }
 }
 
@@ -118,7 +120,7 @@ fun PreviewButton(
             }
         }
     ) {
-        Icon(Icons.Rounded.RemoveRedEye, contentDescription = "Preview", tint = MaterialTheme.colorScheme.primary)
+        Icon(Icons.Rounded.RemoveRedEye, contentDescription = stringResource(R.string.cd_preview), tint = MaterialTheme.colorScheme.primary)
     }
 }
 
@@ -137,9 +139,9 @@ fun TxtButton(currentText: String) {
                     context.contentResolver.openOutputStream(uri)?.use { outputStream ->
                         outputStream.write(currentText.toByteArray())
                     }
-                    Toast.makeText(context, "Text saved successfully", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(context, context.getString(R.string.msg_text_saved), Toast.LENGTH_SHORT).show()
                 } catch (e: Exception) {
-                    Toast.makeText(context, "Error saving file: ${e.message}", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(context, context.getString(R.string.msg_error_saving_file, e.message ?: ""), Toast.LENGTH_SHORT).show()
                 }
             }
         }
@@ -149,12 +151,12 @@ fun TxtButton(currentText: String) {
         modifier = Modifier.size(56.dp),
         onClick = {
             clipboardManager.setText(AnnotatedString(currentText))
-            Toast.makeText(context, "Exporting...", Toast.LENGTH_SHORT).show()
+            Toast.makeText(context, context.getString(R.string.msg_exporting), Toast.LENGTH_SHORT).show()
 
             saveToFileLauncher.launch("rename.txt")
         }
     ) {
-        Icon(Icons.Rounded.AddComment, contentDescription = "Copy and Save")
+        Icon(Icons.Rounded.AddComment, contentDescription = context.getString(R.string.cd_copy_and_save))
     }
 }
 
@@ -170,7 +172,7 @@ fun BrowserButton() {
             val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
 
             context.startActivity(intent)
-            Toast.makeText(context, "Opening Default Browser...", Toast.LENGTH_SHORT).show()
+            Toast.makeText(context, context.getString(R.string.msg_opening_browser), Toast.LENGTH_SHORT).show()
         }
     )
     {
@@ -197,7 +199,7 @@ fun CalButton() {
         }
 
     ) {
-        Icon(Icons.Rounded.CalendarMonth, contentDescription = "Calendar")
+        Icon(Icons.Rounded.CalendarMonth, contentDescription = stringResource(R.string.quick_action_calendar))
     }
 
     CalendarDialog(
@@ -246,7 +248,7 @@ fun CopyButton(viewModel: EditViewModel, onClick: () -> Unit) {
 @SuppressLint("ServiceCast")
 fun copyToClipboard(context: Context, text: String) {
     val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-    val clip = android.content.ClipData.newPlainText("Copied Text", text)
+    val clip = android.content.ClipData.newPlainText(context.getString(R.string.clipboard_label_copied_text), text)
     clipboard.setPrimaryClip(clip)
 }
 
@@ -270,13 +272,13 @@ fun CalculatorButton() {
     if (showDialog.value) {
         AlertDialog(
             onDismissRequest = { showDialog.value = false },
-            title = { Text("Calculator") },
+            title = { Text(stringResource(R.string.quick_action_calculator)) },
             text = {
                 CalculatorUI()
             },
             confirmButton = {
                 Button(onClick = { showDialog.value = false }) {
-                    Text("Close")
+                    Text(stringResource(R.string.action_close))
                 }
             }
         )
@@ -285,6 +287,7 @@ fun CalculatorButton() {
 
 @Composable
 fun CalculatorUI() {
+    val context = LocalContext.current
     var expression by remember { mutableStateOf("") }
     var result by remember { mutableStateOf("0") }
 
@@ -327,7 +330,7 @@ fun CalculatorUI() {
                                     result = try {
                                         evalExpression(expression).toString()
                                     } catch (e: Exception) {
-                                        "Error"
+                                        context.getString(R.string.error)
                                     }
                                 }
                                 "%" -> {
@@ -370,24 +373,23 @@ fun CalculatorUI() {
         Card(
             modifier = Modifier
                 .padding(top = 12.dp)
-                .fillMaxWidth()
-                .border(2.dp, Color(0xFF4CAF50), RoundedCornerShape(12.dp)),
+                .fillMaxWidth(),
             colors = CardDefaults.cardColors(
-                containerColor = MaterialTheme.colorScheme.surface
+                containerColor = MaterialTheme.colorScheme.primaryContainer
             ),
-            elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
-            shape = RoundedCornerShape(12.dp)
+            elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+            shape = appCornerShape()
         ) {
             Column(
                 modifier = Modifier.padding(16.dp),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 Text(
-                    text = "Result",
+                    text = stringResource(R.string.calculator_result),
                     style = TextStyle(
                         fontSize = 16.sp,
                         fontWeight = FontWeight.Medium,
-                        color = Color(0xFF388E3C)
+                        color = MaterialTheme.colorScheme.primary
                     )
                 )
                 Text(

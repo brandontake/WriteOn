@@ -43,9 +43,12 @@ import com.ezpnix.writeon.presentation.components.getImageName
 import com.ezpnix.writeon.presentation.screens.edit.model.EditViewModel
 import java.io.File
 import java.io.FileOutputStream
-import java.io.InputStream
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
+import androidx.compose.ui.res.stringResource
+import com.ezpnix.writeon.R
+
+private const val TAG = "TextFormattingToolbar"
 
 data class ToolbarItem(
     val icon: ImageVector,
@@ -63,71 +66,75 @@ fun TextFormattingToolbar(viewModel: EditViewModel) {
     val launcher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         uri?.let {
             val savedUri = saveImageToAppStorage(context, it)
-            viewModel.insertText("!($savedUri)")
+            // An empty result means the copy failed; inserting "!()" would leave a broken image
+            // insertion in the note body.
+            if (savedUri.isNotEmpty()) {
+                viewModel.insertText("!($savedUri)")
+            }
         }
     }
 
     val toolbarSets = remember {
         listOf(
             listOf(
-                ToolbarItem(Icons.AutoMirrored.Rounded.ArrowBackIos,"Bullet List", color = colorArrow) {
+                ToolbarItem(Icons.AutoMirrored.Rounded.ArrowBackIos,context.getString(R.string.fmt_bullet_list), color = colorArrow) {
 
                 },
-                ToolbarItem(Icons.Rounded.CheckBox, "Checkbox", color = colorIcon) {
+                ToolbarItem(Icons.Rounded.CheckBox, context.getString(R.string.fmt_checkbox), color = colorIcon) {
                     viewModel.insertText("[x] \n[ ] ")
                 },
                 ToolbarItem(
-                    Icons.Rounded.FormatListNumbered, "Order List", color = colorIcon) {
+                    Icons.Rounded.FormatListNumbered, context.getString(R.string.fmt_order_list), color = colorIcon) {
                     viewModel.insertNumberedText()
                 },
-                ToolbarItem(Icons.AutoMirrored.Rounded.ViewList, "Bullet List", color = colorIcon) {
+                ToolbarItem(Icons.AutoMirrored.Rounded.ViewList, context.getString(R.string.fmt_bullet_list), color = colorIcon) {
                     viewModel.insertText("- ")
                 },
-                        ToolbarItem(Icons.Rounded.Image, "Insert Image", color = colorIcon) {
+                        ToolbarItem(Icons.Rounded.Image, context.getString(R.string.fmt_insert_image), color = colorIcon) {
                     launcher.launch("image/*")
                 },
-                ToolbarItem(Icons.AutoMirrored.Rounded.ArrowForwardIos,"Bullet List", color = colorArrow) {
+                ToolbarItem(Icons.AutoMirrored.Rounded.ArrowForwardIos,context.getString(R.string.fmt_bullet_list), color = colorArrow) {
                         currentIndex++
                 },
             ),
             listOf(
-                ToolbarItem(Icons.AutoMirrored.Rounded.ArrowBackIos,"Bullet List", color = colorArrow) {
+                ToolbarItem(Icons.AutoMirrored.Rounded.ArrowBackIos,context.getString(R.string.fmt_bullet_list), color = colorArrow) {
                     currentIndex--
                 },
-                ToolbarItem(Icons.Rounded.FormatBold, "Bold", color = colorIcon) {
+                ToolbarItem(Icons.Rounded.FormatBold, context.getString(R.string.fmt_bold), color = colorIcon) {
                     viewModel.insertText("**", offset = 2, newLine = false)
                 },
-                ToolbarItem(Icons.Rounded.FormatUnderlined, "Underline", color = colorIcon) {
+                ToolbarItem(Icons.Rounded.FormatUnderlined, context.getString(R.string.fmt_underline), color = colorIcon) {
                     viewModel.insertText("__", -1 , newLine = false)
                 },
-                ToolbarItem(Icons.Rounded.StrikethroughS, "Strikethrough", color = colorIcon) {
+                ToolbarItem(Icons.Rounded.StrikethroughS, context.getString(R.string.fmt_strikethrough), color = colorIcon) {
                     viewModel.insertText("~~~~", -2 , newLine = false)
                 },
-                ToolbarItem(Icons.Rounded.AutoFixHigh, "Highlight", color = colorIcon) {
+                ToolbarItem(Icons.Rounded.AutoFixHigh, context.getString(R.string.fmt_highlight), color = colorIcon) {
                     viewModel.insertText("====", offset = -2, newLine = false)
                 },
-                ToolbarItem(Icons.AutoMirrored.Rounded.ArrowForwardIos,"Bullet List", color = colorArrow) {
+                ToolbarItem(Icons.AutoMirrored.Rounded.ArrowForwardIos,context.getString(R.string.fmt_bullet_list), color = colorArrow) {
                     currentIndex++
                 },
             ),
             listOf(
-                ToolbarItem(Icons.AutoMirrored.Rounded.ArrowBackIos,"Bullet List", color = colorArrow) {
+                ToolbarItem(Icons.AutoMirrored.Rounded.ArrowBackIos,context.getString(R.string.fmt_bullet_list), color = colorArrow) {
                     currentIndex--
                 },
-                ToolbarItem(Icons.Rounded.FormatItalic, "Italic", color = colorIcon) {
+                ToolbarItem(Icons.Rounded.FormatItalic, context.getString(R.string.fmt_italic), color = colorIcon) {
                     viewModel.insertText("***", offset = -2, newLine = false)
                 },
-                ToolbarItem(Icons.Rounded.Code, "Code Block", color = colorIcon) {
+                ToolbarItem(Icons.Rounded.Code, context.getString(R.string.fmt_code_block), color = colorIcon) {
                     viewModel.insertText("```\n\n```", -4)
                 },
-                ToolbarItem(Icons.Rounded.FormatQuote, "Quote", color = colorIcon) {
+                ToolbarItem(Icons.Rounded.FormatQuote, context.getString(R.string.fmt_quote), color = colorIcon) {
                     viewModel.insertText("> ", newLine = true)
                 },
-                ToolbarItem(Icons.Rounded.AccessTime, "Insert Date/Time", color = colorIcon) {
+                ToolbarItem(Icons.Rounded.AccessTime, context.getString(R.string.fmt_insert_datetime), color = colorIcon) {
                     val dateTime = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"))
                     viewModel.insertText(dateTime, newLine = false)
                 },
-                        ToolbarItem(Icons.AutoMirrored.Rounded.ArrowForwardIos,"Bullet List", color = colorArrow) {
+                        ToolbarItem(Icons.AutoMirrored.Rounded.ArrowForwardIos,context.getString(R.string.fmt_bullet_list), color = colorArrow) {
                 },
             ),
         )
@@ -161,20 +168,20 @@ private fun saveImageToAppStorage(context: Context, uri: Uri): String {
         appStorageDir.mkdirs()
     }
     val imageFile = File(appStorageDir, getImageName(uri))
-    android.util.Log.d("SaveImage", "Saving image to: ${imageFile.path}")
 
-    val inputStream: InputStream? = context.contentResolver.openInputStream(uri)
-    inputStream?.use { input ->
+    // `use` already closes the stream; the extra close() below was a double close. If the resolver
+    // cannot hand back a stream the file is never written, so report that instead of returning a
+    // URI that points at nothing.
+    val copied = context.contentResolver.openInputStream(uri)?.use { input ->
         FileOutputStream(imageFile).use { output ->
             input.copyTo(output)
         }
-    }
-    inputStream?.close()
+        true
+    } ?: false
 
-    if (imageFile.exists()) {
-        android.util.Log.d("SaveImage", "Image file exists: ${imageFile.path}")
-    } else {
-        android.util.Log.e("SaveImage", "Image file does not exist: ${imageFile.path}")
+    if (!copied || !imageFile.exists()) {
+        android.util.Log.e(TAG, "Could not save the picked image to app storage")
+        return ""
     }
     return Uri.fromFile(imageFile).toString()
 }

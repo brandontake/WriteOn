@@ -8,6 +8,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
+import androidx.compose.ui.res.stringResource
+import com.ezpnix.writeon.R
 
 object TxtBackupHelper {
 
@@ -17,7 +19,7 @@ object TxtBackupHelper {
         val outputStream = context.contentResolver.openOutputStream(uri) ?: return@withContext
         ZipOutputStream(outputStream).use { zipOut ->
             getAllNotes(context).forEachIndexed { index, note ->
-                val baseName = note.title.ifBlank { "Untitled" }
+                val baseName = note.title.ifBlank { context.getString(R.string.untitled) }
                 val filename = sanitizeFileName("${index + 1}_$baseName") + ".txt"
                 zipOut.putNextEntry(ZipEntry(filename))
                 zipOut.write(note.content.toByteArray())
@@ -38,7 +40,7 @@ object TxtBackupHelper {
                     val content = zipIn.reader().readText()
 
                     val fileName = entry.name.removeSuffix(".txt")
-                    val title = fileName.substringAfter("_").ifBlank { "Untitled" }
+                    val title = fileName.substringAfter("_").ifBlank { context.getString(R.string.untitled) }
 
                     dao.addNote(
                         com.ezpnix.writeon.domain.model.Note(

@@ -3,10 +3,10 @@ package com.ezpnix.writeon.presentation.screens.edit
 import android.Manifest
 import android.annotation.SuppressLint
 import android.content.Intent
-import android.content.pm.PackageManager
 import android.icu.text.SimpleDateFormat
 import android.os.Build
 import android.widget.Toast
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
@@ -40,6 +40,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.PushPin
 import androidx.compose.material.icons.rounded.Description
 import androidx.compose.material.icons.rounded.Edit
+import androidx.compose.material.icons.rounded.Image
 import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material.icons.rounded.Numbers
 import androidx.compose.material.icons.rounded.PushPin
@@ -64,6 +65,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -77,11 +79,12 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.core.app.ActivityCompat
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -100,6 +103,7 @@ import com.ezpnix.writeon.presentation.components.UndoButton
 import com.ezpnix.writeon.presentation.components.markdown.MarkdownText
 import com.ezpnix.writeon.presentation.screens.edit.components.CustomIconButton
 import com.ezpnix.writeon.presentation.screens.edit.components.CustomTextField
+import com.ezpnix.writeon.presentation.screens.edit.components.NoteImageSaveHost
 import com.ezpnix.writeon.presentation.screens.edit.components.TextFormattingToolbar
 import com.ezpnix.writeon.presentation.screens.edit.model.EditViewModel
 import com.ezpnix.writeon.presentation.screens.settings.model.SettingsViewModel
@@ -107,9 +111,15 @@ import com.ezpnix.writeon.presentation.screens.settings.settings.shapeManager
 import com.ezpnix.writeon.presentation.screens.settings.widgets.ActionType
 import com.ezpnix.writeon.presentation.screens.settings.widgets.SettingsBox
 import com.ezpnix.writeon.presentation.screens.settings.widgets.copyToClipboard
+import com.ezpnix.writeon.presentation.theme.appCornerShape
+import com.ezpnix.writeon.presentation.theme.CornerFraction
+import com.ezpnix.writeon.presentation.theme.LocalCornerRadius
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 import java.util.Locale
+
+/** Compiled once; `split` on it is both cheaper and identical to the previous `"\\s+".toRegex()`. */
+private val WHITESPACE = "\\s+".toRegex()
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -121,8 +131,17 @@ fun EditNoteView(
 ) {
     val viewModel: EditViewModel = hiltViewModel()
     val context = LocalContext.current
-    viewModel.updateIsEncrypted(encrypted)
-    viewModel.setupNoteData(id)
+
+    // Both of these used to run on every recomposition, and setupNoteData launches a collector in
+    // viewModelScope, so each keystroke that changed composition state started another collector on
+    // the same note. They all raced to write the same text fields, and none of them were ever
+    // cancelled. Keying the work on what the screen is actually showing means a recomposition does
+    // nothing at all, while opening a different note still reloads it. Moving the call here also
+    // stops it from overwriting the encrypted flag that syncNote just set from the stored note.
+    LaunchedEffect(id, encrypted) {
+        viewModel.updateIsEncrypted(encrypted)
+        viewModel.setupNoteData(id)
+    }
     ObserveLifecycleEvents(viewModel)
 
     val permissionLauncher = rememberLauncherForActivityResult(
@@ -130,7 +149,7 @@ fun EditNoteView(
     ) { permissions ->
         if (!permissions.getOrDefault(Manifest.permission.READ_EXTERNAL_STORAGE, false) ||
             !permissions.getOrDefault(Manifest.permission.WRITE_EXTERNAL_STORAGE, false)) {
-            Toast.makeText(context, "Storage permissions required to load/save images", Toast.LENGTH_SHORT).show()
+            Toast.makeText(context, context.getString(R.string.msg_storage_permission_required), Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -148,33 +167,26 @@ fun EditNoteView(
     val pagerState = rememberPagerState(initialPage = if (id == 0) 0 else 1, pageCount = { 2 })
     val coroutineScope = rememberCoroutineScope()
 
+    // Leaving the editor while a text field still holds focus keeps the blinking caret on screen for
+    // the whole exit animation. Dropping focus first makes it disappear immediately; the system back
+    // gesture is handled the same way in PredictiveBackHost.
+    val focusManager = LocalFocusManager.current
+    val exitEditor = {
+        focusManager.clearFocus(force = true)
+        onClickBack()
+    }
+
     NotesScaffold(
-        topBar = { if (!settingsViewModel.settings.value.minimalisticMode) TopBar(pagerState, onClickBack, viewModel) },
-        content = { PagerContent(pagerState, coroutineScope, viewModel, settingsViewModel, onClickBack) }
+        topBar = { if (!settingsViewModel.settings.value.minimalisticMode) TopBar(pagerState, exitEditor, viewModel, settingsViewModel) },
+        content = { PagerContent(pagerState, coroutineScope, viewModel, settingsViewModel, exitEditor) }
     )
 }
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-fun TopBarActions(pagerState: PagerState, onClickBack: () -> Unit, viewModel: EditViewModel) {
+fun TopBarActions(pagerState: PagerState, onClickBack: () -> Unit, viewModel: EditViewModel, cornerRadius: Int = 32) {
     val context = LocalContext.current
     val isPinned = viewModel.isPinned.value
-
-    val permissionLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.RequestPermission()
-    ) { isGranted ->
-        if (isGranted) {
-            NoteNotificationManager.showPinnedNotification(
-                context,
-                viewModel.noteName.value.text.ifBlank { "Untitled Note" },
-                viewModel.noteDescription.value.text.ifBlank { "No content" }
-            )
-            viewModel.toggleNotePin(true)
-            Toast.makeText(context, "Pinned to Notification", Toast.LENGTH_SHORT).show()
-        } else {
-            Toast.makeText(context, "Permission denied. Cannot pin to Notification.", Toast.LENGTH_SHORT).show()
-        }
-    }
 
     when (pagerState.currentPage) {
 
@@ -193,62 +205,48 @@ fun TopBarActions(pagerState: PagerState, onClickBack: () -> Unit, viewModel: Ed
                 }
                 DropdownMenu(
                     expanded = viewModel.isEditMenuVisible.value,
-                    onDismissRequest = { viewModel.toggleEditMenuVisibility(false) }
+                    onDismissRequest = { viewModel.toggleEditMenuVisibility(false) },
+                    shape = RoundedCornerShape((cornerRadius / 2).dp)
                 ) {
                     if (viewModel.noteId.value != 0) {
                         DropdownMenuItem(
-                            text = { Text("Pin to Notification") },
+                            text = { Text(stringResource(R.string.pin_to_notification)) },
                             leadingIcon = {
                                 Icon(
                                     if (viewModel.isPinned.value) Icons.Rounded.PushPin else Icons.Outlined.PushPin,
-                                    contentDescription = "Pin to Notification"
+                                    contentDescription = stringResource(R.string.pin_to_notification)
                                 )
                             },
                             onClick = {
                                 if (viewModel.isPinned.value) {
                                     NoteNotificationManager.cancelPinnedNotification(context)
                                     viewModel.toggleNotePin(false)
-                                    Toast.makeText(context, "Unpinned from Notification", Toast.LENGTH_SHORT).show()
+                                    Toast.makeText(context, context.getString(R.string.notif_unpinned), Toast.LENGTH_SHORT).show()
                                 } else {
-                                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
-                                        ActivityCompat.checkSelfPermission(
-                                            context,
-                                            Manifest.permission.POST_NOTIFICATIONS
-                                        ) != PackageManager.PERMISSION_GRANTED
-                                    ) {
-                                        permissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
-                                    } else {
-                                        NoteNotificationManager.showPinnedNotification(
-                                            context,
-                                            viewModel.noteName.value.text.ifBlank { "Untitled Note" },
-                                            viewModel.noteDescription.value.text.ifBlank { "No content" }
-                                        )
-                                        viewModel.toggleNotePin(true)
-                                        Toast.makeText(context, "Pinned to Notification", Toast.LENGTH_SHORT).show()
-                                    }
+                                    NoteNotificationManager.showPinnedNotification(
+                                        context,
+                                        viewModel.noteName.value.text.ifBlank { context.getString(R.string.notif_untitled_note) },
+                                        viewModel.noteDescription.value.text.ifBlank { context.getString(R.string.notif_no_content) }
+                                    )
+                                    viewModel.toggleNotePin(true)
+                                    Toast.makeText(context, context.getString(R.string.notif_pinned_to), Toast.LENGTH_SHORT).show()
                                 }
                                 viewModel.toggleEditMenuVisibility(false)
                             }
                         )
                         DropdownMenuItem(
                             text = { Text(stringResource(R.string.note_details)) },
-                            leadingIcon = { Icon(Icons.Rounded.Info, contentDescription = "Details") },
+                            leadingIcon = { Icon(Icons.Rounded.Info, contentDescription = stringResource(R.string.cd_details)) },
                             onClick = {
                                 viewModel.toggleEditMenuVisibility(false)
                                 viewModel.toggleNoteInfoVisibility(true)
                             }
                         )
                         DropdownMenuItem(
-                            text = { Text(stringResource(id = R.string.share_text)) },
-                            leadingIcon = { Icon(Icons.Rounded.Share, contentDescription = "Share") },
+                            text = { Text(stringResource(id = R.string.save_as_image)) },
+                            leadingIcon = { Icon(Icons.Rounded.Image, contentDescription = stringResource(R.string.save_as_image)) },
                             onClick = {
-                                val sendIntent = Intent().apply {
-                                    action = Intent.ACTION_SEND
-                                    putExtra(Intent.EXTRA_TEXT, viewModel.noteDescription.value.text)
-                                    type = "text/plain"
-                                }
-                                val shareIntent = Intent.createChooser(sendIntent, null)
-                                context.startActivity(shareIntent)
+                                viewModel.requestImageSave()
                                 viewModel.toggleEditMenuVisibility(false)
                             }
                         )
@@ -268,6 +266,20 @@ fun PagerContent(
     settingsViewModel: SettingsViewModel,
     onClickBack: () -> Unit
 ) {
+    if (viewModel.isImageSaveRequested.value) {
+        val settings = settingsViewModel.settings.value
+        NoteImageSaveHost(
+            noteTitle = viewModel.noteName.value.text.ifBlank { stringResource(R.string.notif_untitled_note) },
+            noteBody = viewModel.noteDescription.value.text,
+            createdAt = viewModel.noteCreatedTime.value,
+            isMarkdownEnabled = settings.isMarkdownEnabled,
+            fontSize = settings.fontSize,
+            containerColor = if (settings.extremeAmoledMode) Color.Black else MaterialTheme.colorScheme.surface,
+            cornerRadius = settings.cornerRadius.dp,
+            onFinished = { viewModel.clearImageSaveRequest() }
+        )
+    }
+
     HorizontalPager(
         state = pagerState,
         modifier = Modifier.imePadding(),
@@ -281,7 +293,8 @@ fun PagerContent(
 
 @OptIn(ExperimentalFoundationApi::class, ExperimentalMaterial3Api::class)
 @Composable
-fun TopBar(pagerState: PagerState, onClickBack: () -> Unit, viewModel: EditViewModel) {
+fun TopBar(pagerState: PagerState, onClickBack: () -> Unit, viewModel: EditViewModel, settingsViewModel: SettingsViewModel) {
+    val titleShape = RoundedCornerShape((settingsViewModel.settings.value.cornerRadius / 2).dp)
     CenterAlignedTopAppBar(
         colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
         title = {
@@ -289,6 +302,7 @@ fun TopBar(pagerState: PagerState, onClickBack: () -> Unit, viewModel: EditViewM
                 value = viewModel.noteName.value,
                 onValueChange = { viewModel.updateNoteName(it) },
                 placeholder = stringResource(R.string.untitled),
+                shape = titleShape,
                 enabled = pagerState.currentPage == 0,
                 modifier = Modifier.fillMaxWidth(),
             )
@@ -301,7 +315,7 @@ fun TopBar(pagerState: PagerState, onClickBack: () -> Unit, viewModel: EditViewM
                 }
             }
         },
-        actions = { TopBarActions(pagerState, onClickBack, viewModel) }
+        actions = { TopBarActions(pagerState, onClickBack, viewModel, settingsViewModel.settings.value.cornerRadius) }
     )
 }
 
@@ -326,7 +340,16 @@ fun BottomModal(viewModel: EditViewModel, settingsViewModel: SettingsViewModel) 
         containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
         onDismissRequest = { viewModel.toggleNoteInfoVisibility(false) }
     ) {
-        val sdf = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
+        // Both of these used to be rebuilt on every recomposition: SimpleDateFormat allocates a
+        // calendar clone each time and is not thread safe, and the regex was recompiled for the
+        // whole note body on every frame.
+        val sdf = remember { SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()) }
+        val description = viewModel.noteDescription.value.text
+        // Same tokenisation as before (`split` on runs of whitespace), but the compiled regex is
+        // now shared and the split only reruns when the text actually changes.
+        val wordCount = remember(description) {
+            if (description.isEmpty()) 0 else description.split(WHITESPACE).size
+        }
 
         Column(
             modifier = Modifier.padding(20.dp, 0.dp, 20.dp, 20.dp)
@@ -345,7 +368,7 @@ fun BottomModal(viewModel: EditViewModel, settingsViewModel: SettingsViewModel) 
                 icon = Icons.Rounded.Numbers,
                 radius = shapeManager(radius = settingsViewModel.settings.value.cornerRadius),
                 actionType = ActionType.TEXT,
-                customText = if (viewModel.noteDescription.value.text != "") viewModel.noteDescription.value.text.split("\\s+".toRegex()).size.toString() else "0"
+                customText = wordCount.toString()
             )
             SettingsBox(
                 isBig = false,
@@ -411,14 +434,17 @@ fun EditScreen(
     onClickBack: () -> Unit
 ) {
     val context = LocalContext.current
-    val showButtons = remember { mutableStateOf(false) }
+    val showButtons = rememberSaveable { mutableStateOf(false) }
     val imeVisible = WindowInsets.ime.getBottom(LocalDensity.current) > 0
     val hideOnKeyboard = settingsViewModel.settings.value.hideVisibilityButtonWhenKeyboard
-    var fabVisible by remember { mutableStateOf(true) }
+    var fabVisible by rememberSaveable { mutableStateOf(true) }
 
     LaunchedEffect(imeVisible, hideOnKeyboard) {
         fabVisible = if (hideOnKeyboard) !imeVisible else true
     }
+
+    // The options panel is a full-screen overlay; back should dismiss it, not leave the editor.
+    BackHandler(enabled = showButtons.value) { showButtons.value = false }
 
     Box(
         modifier = Modifier
@@ -481,7 +507,7 @@ fun EditScreen(
         }
 
         AnimatedVisibility(
-            visible = fabVisible,
+            visible = fabVisible && !showButtons.value,
             enter = fadeIn(),
             exit = fadeOut(),
             modifier = Modifier
@@ -491,20 +517,20 @@ fun EditScreen(
             Column(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 modifier = Modifier
-                    .clip(RoundedCornerShape(16.dp))
+                    .clip(appCornerShape(CornerFraction.MEDIUM))
                     .background(MaterialTheme.colorScheme.surface)
-                    .clickable { showButtons.value = !showButtons.value }
+                    .clickable(role = Role.Button) { showButtons.value = !showButtons.value }
                     .padding(horizontal = 24.dp, vertical = 12.dp)
             ) {
                 Icon(
                     imageVector = Icons.Rounded.Description,
-                    contentDescription = "Show Options",
+                    contentDescription = stringResource(R.string.cd_show_options),
                     tint = MaterialTheme.colorScheme.primary,
                     modifier = Modifier.size(30.dp)
                 )
                 Spacer(modifier = Modifier.height(2.dp))
                 Text(
-                    text = "Options",
+                    text = stringResource(R.string.cd_options),
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.primary
                 )
@@ -520,8 +546,11 @@ fun EditScreen(
                 .padding(bottom = 125.dp)
         ) {
             Card(
-                shape = RoundedCornerShape(24.dp),
-                elevation = CardDefaults.cardElevation(8.dp),
+                shape = appCornerShape(),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceContainerLow
+                ),
+                elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
                 modifier = Modifier
                     .wrapContentHeight()
                     .fillMaxWidth(0.95f)
@@ -619,16 +648,16 @@ fun PreviewScreen(
             Column(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 modifier = Modifier
-                    .clip(RoundedCornerShape(16.dp))
+                    .clip(appCornerShape(CornerFraction.MEDIUM))
                     .background(MaterialTheme.colorScheme.surface)
-                    .clickable {
+                    .clickable(role = Role.Button) {
                         coroutineScope.launch { pagerState.animateScrollToPage(0) }
                     }
                     .padding(horizontal = 24.dp, vertical = 12.dp)
             ) {
                 Icon(
                     imageVector = Icons.Rounded.Edit,
-                    contentDescription = "Edit",
+                    contentDescription = stringResource(R.string.edit),
                     tint = MaterialTheme.colorScheme.primary,
                     modifier = Modifier.size(30.dp)
                 )
@@ -649,13 +678,20 @@ fun MarkdownBox(
     isExtremeAmoled: Boolean,
     modifier: Modifier = Modifier,
     shape: RoundedCornerShape = RoundedCornerShape(0.dp),
+    maxHeight: Dp? = null,
     content: @Composable () -> Unit,
 ) {
     ElevatedCard(
         shape = shape,
         modifier = modifier
             .clip(shape)
-            .heightIn(max = 128.dp, min = 42.dp)
+            // Only cap the height when the caller did not already give us one. Both call sites pass
+            // weight(1f), and an unconditional heightIn(max = 128.dp) was applied after it, so the
+            // editor body never grew past about six lines no matter how much room the screen had.
+            // When no cap is wanted the card fills exactly what its parent gives it.
+            .let { base ->
+                if (maxHeight != null) base.heightIn(max = maxHeight) else base
+            }
             .background(MaterialTheme.colorScheme.surface),
         elevation = CardDefaults.cardElevation(defaultElevation = if (!isExtremeAmoled) 6.dp else 0.dp),
         colors = CardDefaults.elevatedCardColors(
@@ -712,7 +748,16 @@ private fun RenderButton(
     isExtremeAmoled: Boolean
 ) {
     CustomIconButton(
-        shape = if (isMinimalistic) RoundedCornerShape(100) else if (pageIndex == 0) RoundedCornerShape(topStart = 32.dp, bottomStart = 32.dp) else RoundedCornerShape(bottomEnd = 32.dp, topEnd = 32.dp),
+        shape = if (isMinimalistic) {
+            // A pill by design: once the radius passes half the button a larger value changes
+            // nothing, so a fixed large radius keeps the floating minimalistic button round at
+            // every radius setting.
+            RoundedCornerShape(100)
+        } else {
+            val radius = LocalCornerRadius.current
+            if (pageIndex == 0) RoundedCornerShape(topStart = radius, bottomStart = radius)
+            else RoundedCornerShape(bottomEnd = radius, topEnd = radius)
+        },
         onClick = {
             coroutineScope.launch {
                 pagerState.animateScrollToPage(pageIndex)

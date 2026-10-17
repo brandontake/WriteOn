@@ -42,15 +42,20 @@ class NotesWidget : GlanceAppWidget() {
         val noteUseCase = getNoteUseCase(context)
         val widgetId = GlanceAppWidgetManager(context).getAppWidgetId(id)
 
+        // Which note this widget shows lives in the state DataStore, so it has to be read inside the
+        // composition. Everything else is read here, once, before the composition opens.
+        //
+        // Calling observe() inside provideContent used to start a collector that itself called
+        // updateAll, so refreshing the widget re-triggered the refresh. loadNotesOnce ends that loop.
+        noteUseCase.loadNotesOnce()
+
         provideContent {
             GlanceTheme {
-                currentState<List<Pair<Int, Int>>>().firstOrNull { it.first == widgetId }?.second.let { noteId ->
-                    noteUseCase.observe()
-                    val selectedNote = noteUseCase.notes.filter { it.id == noteId }
-                    when {
-                        selectedNote.isEmpty() -> ZeroState(widgetId = widgetId)
-                        else -> SelectedNote(selectedNote.first(), noteUseCase, widgetId = widgetId)
-                    }
+                val noteId = currentState<List<Pair<Int, Int>>>().firstOrNull { it.first == widgetId }?.second
+                val selectedNote = noteId?.let { id -> noteUseCase.notes.firstOrNull { it.id == id } }
+                when {
+                    selectedNote == null -> ZeroState(widgetId = widgetId)
+                    else -> SelectedNote(selectedNote, noteUseCase, widgetId = widgetId)
                 }
             }
         }

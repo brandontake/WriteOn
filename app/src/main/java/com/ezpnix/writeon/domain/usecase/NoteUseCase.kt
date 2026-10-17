@@ -1,7 +1,6 @@
 package com.ezpnix.writeon.domain.usecase
 
 import android.content.Context
-import android.util.Log
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -42,24 +41,47 @@ class NoteUseCase @Inject constructor(
         observeTags()
     }
 
+    /**
+     * Loads the notes once and stops.
+     *
+     * Widgets need this: [observe] starts collectors that call `NotesWidget().updateAll` on every
+     * emission, so a collector started from inside a widget's own composition refreshed the widget,
+     * which recomposed and started the collector again. Reading once outside the composition ends
+     * that loop.
+     */
+    suspend fun loadNotesOnce() {
+        val sourceNotes = withContext(Dispatchers.IO) { noteRepository.getAllNotes().first() }
+        notes = withContext(Dispatchers.Default) { processNotes(sourceNotes) }
+    }
+
+    private fun processNotes(sourceNotes: List<Note>): List<Note> {
+        val hasUnencryptedNotes = sourceNotes.any { !it.encrypted }
+        if (!hasUnencryptedNotes && sourceNotes.isNotEmpty()) {
+            this.decryptionResult = DecryptionResult.EMPTY
+        }
+        return sourceNotes.mapNotNull { note ->
+            if (note.encrypted) {
+                val (decryptedNote, status) = decryptNote(note)
+                this.decryptionResult = status
+                if (status == DecryptionResult.SUCCESS) decryptedNote else null
+            } else {
+                note
+            }
+        }
+    }
+
     private fun observeNotes() {
         observeKeysJob?.cancel()
         observeKeysJob = coroutineScope.launch {
-            getAllNotes().collectLatest { notes ->
-                val hasUnencryptedNotes = notes.any { !it.encrypted }
-                if (!hasUnencryptedNotes) this@NoteUseCase.decryptionResult = DecryptionResult.EMPTY
-                val processedNotes = notes.mapNotNull { note ->
-                    if (note.encrypted) {
-                        val (decryptedNote, status) = decryptNote(note)
-                        this@NoteUseCase.decryptionResult = status
-                        if (status == DecryptionResult.SUCCESS) decryptedNote else null
-                    } else {
-                        note
-                    }
-                }
-                Log.d("NoteUseCase", "Updated notes: ${processedNotes.map { it.id to it.tags }}")
+            getAllNotes().collectLatest { sourceNotes ->
+                // Decrypting every note touches the Keystore, so it must stay off the main thread.
+                val processedNotes = withContext(Dispatchers.Default) { processNotes(sourceNotes) }
+                val previousIds = notes.map { it.id }
                 this@NoteUseCase.notes = processedNotes
-                NotesWidget().updateAll(context)
+                // Refreshing on an unchanged list made the widget recompose for nothing.
+                if (previousIds != processedNotes.map { it.id }) {
+                    NotesWidget().updateAll(context)
+                }
             }
         }
     }
@@ -73,7 +95,6 @@ class NoteUseCase @Inject constructor(
                     .distinct()
                     .sorted()
                     .filter { it.isNotBlank() }
-                Log.d("NoteUseCase", "Updated tags from Flow: $newTags")
                 tags = newTags
             }
         }
@@ -107,19 +128,10 @@ class NoteUseCase @Inject constructor(
     }
 
     fun updateNotes(newNotes: List<Note>) {
-        Log.d("NoteUseCase", "Manually updating notes: ${newNotes.map { it.id to it.tags }}")
-        notes = newNotes.mapNotNull { note ->
-            if (note.encrypted) {
-                val (decryptedNote, status) = decryptNote(note)
-                if (status == DecryptionResult.SUCCESS) decryptedNote else null
-            } else {
-                note
-            }
-        }
+        notes = processNotes(newNotes)
     }
 
     fun updateTags(newTags: List<String>) {
-        Log.d("NoteUseCase", "Manually updating tags: $newTags")
         tags = newTags
     }
 
@@ -139,13 +151,10 @@ class NoteUseCase @Inject constructor(
         } else {
             note.copy(tags = note.tags.map { it.trim().lowercase() }.distinct())
         }
-        Log.d("NoteUseCase", "Saving note ${noteToSave.id} with tags ${noteToSave.tags}")
         if (noteToSave.id == 0) {
             noteRepository.addNote(noteToSave)
         } else {
             noteRepository.updateNote(noteToSave)
-            val updatedNote = noteRepository.getNoteById(noteToSave.id).first()
-            Log.d("NoteUseCase", "Note ${noteToSave.id} after update has tags: ${updatedNote.tags}")
         }
     }
 
@@ -153,8 +162,6 @@ class NoteUseCase @Inject constructor(
         val notesToSave = notes.map { note ->
             if (note.encrypted) encryptNote(note.copy(tags = note.tags.map { it.trim().lowercase() }.distinct())) else note
         }
-        Log.d("NoteUseCase", "Batch updating notes: ${notesToSave.map { it.id to it.tags }}")
-        Log.d("NoteUseCase", "Tags JSON: ${com.ezpnix.writeon.data.local.database.Converters().fromStringList(notesToSave.firstOrNull()?.tags ?: emptyList())}")
         noteRepository.batchUpdateNotes(notesToSave)
     }
 
@@ -176,7 +183,6 @@ class NoteUseCase @Inject constructor(
             val hasTag = trimmedTag in note.tags.map { it.lowercase() }
             if (hasTag) {
                 val newTags = note.tags.filterNot { it.lowercase() == trimmedTag }
-                Log.d("NoteUseCase", "Removing tag '$trimmedTag' from note ${note.id}: ${note.tags} -> $newTags")
                 note.copy(tags = newTags)
             } else {
                 note
@@ -184,27 +190,18 @@ class NoteUseCase @Inject constructor(
         }.filter { note -> note.tags != allNotes.find { it.id == note.id }?.tags }
 
         if (updatedNotes.isNotEmpty()) {
-            Log.d("NoteUseCase", "Batch updating ${updatedNotes.size} notes for tag deletion")
             noteRepository.batchUpdateNotes(updatedNotes)
-            val freshNotes = noteRepository.getAllNotes().first()
-            val computedTags = freshNotes.flatMap { it.tags }
-                .map { it.trim().lowercase() }
-                .distinct()
-                .sorted()
-                .filter { it.isNotBlank() }
-            updateTags(computedTags)
-            Log.d("NoteUseCase", "Tags after deletion: $computedTags")
-        } else {
-            Log.d("NoteUseCase", "No notes updated for tag '$trimmedTag' (already removed or no matches)")
-            val freshNotes = noteRepository.getAllNotes().first()
-            val computedTags = freshNotes.flatMap { it.tags }
-                .map { it.trim().lowercase() }
-                .distinct()
-                .sorted()
-                .filter { it.isNotBlank() }
-            updateTags(computedTags)
-            Log.d("NoteUseCase", "Tags after recomputation: $computedTags")
         }
+
+        // Recompute from what the database actually holds rather than from the pre-update list, so
+        // the tag list is right whether or not there was anything to update.
+        val freshNotes = noteRepository.getAllNotes().first()
+        val computedTags = freshNotes.flatMap { it.tags }
+            .map { it.trim().lowercase() }
+            .distinct()
+            .sorted()
+            .filter { it.isNotBlank() }
+        updateTags(computedTags)
     }
 
     fun pinNote(note: Note) {

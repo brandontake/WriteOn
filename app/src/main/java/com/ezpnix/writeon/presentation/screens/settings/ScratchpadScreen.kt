@@ -24,6 +24,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Popup
 import androidx.navigation.NavController
 import com.ezpnix.writeon.presentation.screens.settings.model.SettingsViewModel
+import androidx.compose.ui.res.stringResource
+import com.ezpnix.writeon.R
+import com.ezpnix.writeon.presentation.theme.appCornerShape
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -44,9 +47,9 @@ fun ScratchpadScreen(
                     context.contentResolver.openOutputStream(it)?.use { stream ->
                         stream.write(textState.text.toByteArray())
                     }
-                    Toast.makeText(context, "Text saved successfully", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(context, context.getString(R.string.msg_text_saved), Toast.LENGTH_SHORT).show()
                 } catch (e: Exception) {
-                    Toast.makeText(context, "Error: ${e.message}", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(context, context.getString(R.string.msg_error_with_message, e.message ?: ""), Toast.LENGTH_SHORT).show()
                 }
             }
         }
@@ -66,11 +69,11 @@ fun ScratchpadScreen(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(2.dp)
                     ) {
-                        Text("Scratchpad")
+                        Text(stringResource(R.string.quick_action_scratchpad))
                         IconButton(onClick = { showInfoPopup = !showInfoPopup }) {
                             Icon(
                                 imageVector = Icons.Rounded.Info,
-                                contentDescription = "Info",
+                                contentDescription = stringResource(R.string.cd_info),
                                 tint = MaterialTheme.colorScheme.primary
                             )
                         }
@@ -81,7 +84,7 @@ fun ScratchpadScreen(
                         if (hasChanges) showSaveDialog = true
                         else navController.navigateUp()
                     }) {
-                        Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "Back")
+                        Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = stringResource(R.string.cd_back))
                     }
                 },
                 actions = {
@@ -91,14 +94,14 @@ fun ScratchpadScreen(
                             textState = undoStack.removeLast()
                         }
                     }) {
-                        Icon(Icons.AutoMirrored.Rounded.Undo, contentDescription = "Undo", tint = MaterialTheme.colorScheme.primary)
+                        Icon(Icons.AutoMirrored.Rounded.Undo, contentDescription = context.getString(R.string.cd_undo), tint = MaterialTheme.colorScheme.primary)
                     }
 
                     IconButton(onClick = {
-                        Toast.makeText(context, "Exporting...", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(context, context.getString(R.string.msg_exporting), Toast.LENGTH_SHORT).show()
                         saveToFileLauncher.launch("note.txt")
                     }) {
-                        Icon(Icons.Rounded.AddComment, contentDescription = "Save as TXT", tint = MaterialTheme.colorScheme.primary)
+                        Icon(Icons.Rounded.AddComment, contentDescription = context.getString(R.string.save_as_txt), tint = MaterialTheme.colorScheme.primary)
                     }
 
                     IconButton(onClick = {
@@ -107,7 +110,7 @@ fun ScratchpadScreen(
                             textState = redoStack.removeLast()
                         }
                     }) {
-                        Icon(Icons.AutoMirrored.Rounded.Redo, contentDescription = "Redo", tint = MaterialTheme.colorScheme.primary)
+                        Icon(Icons.AutoMirrored.Rounded.Redo, contentDescription = stringResource(R.string.cd_redo), tint = MaterialTheme.colorScheme.primary)
                     }
                 }
             )
@@ -149,10 +152,11 @@ fun ScratchpadScreen(
                             modifier = Modifier
                                 .padding(16.dp)
                                 .fillMaxWidth(),
+                            shape = appCornerShape(),
                             elevation = CardDefaults.cardElevation(8.dp)
                         ) {
                             Text(
-                                "About: This section is where you can type anything in just one single area. Warning: Data will be deleted if app restarts or is uninstalled.",
+                                stringResource(R.string.scratchpad_about),
                                 modifier = Modifier.padding(16.dp)
                             )
                         }
@@ -162,16 +166,16 @@ fun ScratchpadScreen(
                 if (showSaveDialog) {
                     AlertDialog(
                         onDismissRequest = { showSaveDialog = false },
-                        title = { Text("Save Changes?") },
-                        text = { Text("You have unsaved changes. Save before leaving?") },
+                        title = { Text(context.getString(R.string.unsaved_changes_title)) },
+                        text = { Text(context.getString(R.string.unsaved_changes_message)) },
                         confirmButton = {
                             TextButton(onClick = {
                                 settingsViewModel.saveNote(textState.text)
-                                Toast.makeText(context, "Note Saved!", Toast.LENGTH_SHORT).show()
+                                Toast.makeText(context, context.getString(R.string.msg_note_saved), Toast.LENGTH_SHORT).show()
                                 showSaveDialog = false
                                 navController.navigateUp()
                             }) {
-                                Text("Save")
+                                Text(context.getString(R.string.action_save))
                             }
                         },
                         dismissButton = {
@@ -179,7 +183,7 @@ fun ScratchpadScreen(
                                 showSaveDialog = false
                                 navController.navigateUp()
                             }) {
-                                Text("Discard")
+                                Text(stringResource(R.string.action_discard))
                             }
                         }
                     )

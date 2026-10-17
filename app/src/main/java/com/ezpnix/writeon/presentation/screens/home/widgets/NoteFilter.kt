@@ -15,6 +15,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalClipboardManager
@@ -41,12 +42,17 @@ fun NoteFilter(
     isDeleteMode: Boolean = false,
     onNoteUpdate: (Note) -> Unit = {},
     onDeleteNote: (Int) -> Unit = {},
+    onPinNote: (Note) -> Unit = {},
+    swipeEnabled: Boolean = true,
     onRestore: () -> Unit = {},
     onSearch: () -> Unit = {},
     modifier: Modifier = Modifier,
     navController: NavController? = null,
 ) {
-    val filteredNotes = filterNotes(notes, searchText)
+    // Only re-filter when the notes or the query actually change. This used to run on every
+    // recomposition, doing two ignore-case substring scans across every note and its body text, so
+    // any unrelated state change in a parent redid the whole pass for a result nobody looked at.
+    val filteredNotes = remember(notes, searchText) { filterNotes(notes, searchText) }
     if (filteredNotes.isEmpty()) {
         Placeholder(
             placeholderIcon = {
@@ -84,7 +90,9 @@ fun NoteFilter(
             selectedNotes = selectedNotes,
             viewMode = viewMode,
             isDeleteClicked = isDeleteMode,
-            animationFinished = onDeleteNote
+            animationFinished = onDeleteNote,
+            onPinNote = onPinNote,
+            swipeEnabled = swipeEnabled
         )
     }
 }
@@ -118,7 +126,7 @@ fun EmptyLeftButton(
     ) {
         Icon(
             imageVector = Icons.AutoMirrored.Rounded.Help,
-            contentDescription = "Guide",
+            contentDescription = stringResource(R.string.cd_guide),
             tint = MaterialTheme.colorScheme.onPrimary,
             modifier = Modifier.size(40.dp)
         )
@@ -155,8 +163,8 @@ fun EmptyRightButton(
 
     Button(
         onClick = {
-            clipboardManager.setText(AnnotatedString("(^-^) Your support would be appreciated! https://github.com/3zpnix/WriteOn/"))
-            Toast.makeText(context, "Link copied to clipboard!", Toast.LENGTH_SHORT).show()
+            clipboardManager.setText(AnnotatedString(context.getString(R.string.note_filter_support)))
+            Toast.makeText(context, context.getString(R.string.msg_link_copied), Toast.LENGTH_SHORT).show()
         },
         shape = shape,
         modifier = Modifier

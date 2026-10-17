@@ -33,6 +33,8 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.res.stringResource
+import com.ezpnix.writeon.R
 
 enum class ActionType {
     RADIOBUTTON,
@@ -151,7 +153,7 @@ private fun RenderClipboardAction() {
 
 fun copyToClipboard(context: Context, clipboardText: String) {
     val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-    val clip = android.content.ClipData.newPlainText("Copied Text", clipboardText)
+    val clip = android.content.ClipData.newPlainText(context.getString(R.string.clipboard_label_copied_text), clipboardText)
     clipboard.setPrimaryClip(clip)
 }
 
