@@ -224,7 +224,7 @@ fun HomeView(
                             else if (viewModel.currentFilter.value == "pinned") it.pinned
                             else viewModel.currentFilter.value in it.tags)
                 }
-                .sortedWith(sorter(settingsModel.settings.value.sortDescending))
+                .sortedWith(sorter(settingsModel.settings.value.sortDescending, settingsModel.settings.value.sortBy))
         }
     }
     ModalNavigationDrawer(
@@ -1213,10 +1213,28 @@ private fun selectAllNotes(viewModel: HomeViewModel, allNotes: List<Note>) {
     viewModel.selectedNotes.addAll(updatedSelection)
 }
 
-fun sorter(descending: Boolean): Comparator<Note> {
-    return if (descending) {
-        compareByDescending { it.createdAt }
-    } else {
-        compareBy { it.createdAt }
+fun sorter(descending: Boolean, sortBy: Int = 0): Comparator<Note> {
+    return when (sortBy) {
+        1 -> { // Updated at
+            if (descending) {
+                compareByDescending<Note> { if (it.updatedAt > 0L) it.updatedAt else it.createdAt }
+            } else {
+                compareBy<Note> { if (it.updatedAt > 0L) it.updatedAt else it.createdAt }
+            }
+        }
+        2 -> { // Title / Name
+            if (descending) {
+                compareByDescending(String.CASE_INSENSITIVE_ORDER) { note: Note -> note.name }
+            } else {
+                compareBy(String.CASE_INSENSITIVE_ORDER) { note: Note -> note.name }
+            }
+        }
+        else -> { // 0: Created at
+            if (descending) {
+                compareByDescending { it.createdAt }
+            } else {
+                compareBy { it.createdAt }
+            }
+        }
     }
 }

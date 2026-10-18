@@ -20,6 +20,7 @@
     <string name="add_note">新建笔记</string>
     <string name="new_note">创建</string>
     <string name="created_time">笔记创建时间</string>
+    <string name="updated_time">最后修改时间</string>
     <string name="select_note">选择笔记</string>
     <string name="untitled">无标题</string>
     <string name="description">描述</string>
@@ -40,8 +41,15 @@
     <string name="columns">网格列数</string>
     <string name="columns_description">选择网格显示的列数</string>
     <string name="sort_ascending">升序排列</string>
+    <string name="shortcut_new_note_short">新建便签</string>
+    <string name="shortcut_new_note_long">新建一张便签</string>
     <string name="sort_descending">降序排列</string>
-    <string name="sort_description">按笔记的创建时间排序</string>
+    <string name="sort_description">以升序或降序排列笔记</string>
+    <string name="sort_by_title">排序依据</string>
+    <string name="sort_by_description">选择笔记列表的排序规则</string>
+    <string name="sort_by_created">创建时间</string>
+    <string name="sort_by_updated">最后修改</string>
+    <string name="sort_by_name">标题名称</string>
     <string name="view_style_description">选择笔记的排序方式</string>
     <string name="search">搜索</string>
     <string name="search_note">搜索</string>

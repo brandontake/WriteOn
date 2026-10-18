@@ -23,6 +23,7 @@
     <string name="add_note">New Note</string>
     <string name="new_note">Create</string>
     <string name="created_time">Note Created</string>
+    <string name="updated_time">Last Modified</string>
     <string name="select_note">Select Note</string>
     <string name="untitled">Untitled</string>
     <string name="description">Description</string>
@@ -45,8 +46,15 @@
     <string name="columns">Column View Count</string>
     <string name="columns_description">Select amount of columns for grid</string>
     <string name="sort_ascending">Sort Ascending</string>
+    <string name="shortcut_new_note_short">New Note</string>
+    <string name="shortcut_new_note_long">Create a new note</string>
     <string name="sort_descending">Sort Descending</string>
-    <string name="sort_description">Sort notes by their creation time</string>
+    <string name="sort_description">Sort notes in ascending or descending order</string>
+    <string name="sort_by_title">Sort By</string>
+    <string name="sort_by_description">Choose the criteria to order your notes</string>
+    <string name="sort_by_created">Creation Date</string>
+    <string name="sort_by_updated">Last Modified</string>
+    <string name="sort_by_name">Title</string>
     <string name="view_style_description">Select sorting style for notes</string>
 
     <!-- Search -->

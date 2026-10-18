@@ -401,6 +401,15 @@ fun BottomModal(viewModel: EditViewModel, settingsViewModel: SettingsViewModel) 
                 radius = shapeManager(isFirst = true, radius = settingsViewModel.settings.value.cornerRadius),
                 customText = sdf.format(viewModel.noteCreatedTime.value).toString()
             )
+            val updatedTime = viewModel.noteUpdatedTime.value
+            SettingsBox(
+                isBig = false,
+                title = stringResource(R.string.updated_time),
+                icon = Icons.Rounded.Numbers,
+                actionType = ActionType.TEXT,
+                radius = shapeManager(radius = settingsViewModel.settings.value.cornerRadius),
+                customText = if (updatedTime > 0L) sdf.format(updatedTime).toString() else "-"
+            )
             SettingsBox(
                 isBig = false,
                 title = stringResource(R.string.words),

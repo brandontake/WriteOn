@@ -1,5 +1,6 @@
 package com.ezpnix.writeon.presentation.screens.edit.model
 
+import android.app.Application
 import androidx.compose.runtime.State
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
@@ -21,6 +22,7 @@ import javax.inject.Inject
 
 @HiltViewModel
 class EditViewModel @Inject constructor(
+    private val application: Application,
     private val noteUseCase: NoteUseCase,
     private val encryption: EncryptionHelper
 ) : ViewModel() {
@@ -41,6 +43,9 @@ class EditViewModel @Inject constructor(
 
     private val _noteCreatedTime = mutableLongStateOf(System.currentTimeMillis())
     val noteCreatedTime: State<Long> get() = _noteCreatedTime
+
+    private val _noteUpdatedTime = mutableLongStateOf(0L)
+    val noteUpdatedTime: State<Long> get() = _noteUpdatedTime
 
     private val _isNoteInfoVisible = mutableStateOf(false)
     val isNoteInfoVisible: State<Boolean> get() = _isNoteInfoVisible
@@ -74,19 +79,33 @@ class EditViewModel @Inject constructor(
             }
 
             if (noteName.value.text.isNotEmpty() || noteDescription.value.text.isNotBlank()) {
+                val currentText = "${noteName.value.text} ${noteDescription.value.text}"
+                val currentAudioPaths = com.ezpnix.writeon.presentation.screens.edit.components.AudioRecorderManager.extractAudioPaths(currentText)
+                _originalNote.value?.let { old ->
+                    val oldText = "${old.name} ${old.description}"
+                    val oldAudioPaths = com.ezpnix.writeon.presentation.screens.edit.components.AudioRecorderManager.extractAudioPaths(oldText)
+                    val removedAudioPaths = oldAudioPaths - currentAudioPaths
+                    if (removedAudioPaths.isNotEmpty()) {
+                        com.ezpnix.writeon.presentation.screens.edit.components.AudioRecorderManager.deleteAudioFiles(removedAudioPaths, application.applicationContext)
+                    }
+                }
+
+                val now = System.currentTimeMillis()
                 val note = _originalNote.value?.copy(
                     name = noteName.value.text,
                     description = noteDescription.value.text,
                     pinned = isPinned.value,
                     encrypted = isEncrypted.value,
-                    createdAt = if (noteCreatedTime.value != 0L) noteCreatedTime.value else System.currentTimeMillis()
+                    createdAt = if (noteCreatedTime.value != 0L) noteCreatedTime.value else now,
+                    updatedAt = now
                 ) ?: Note(
                     id = id,
                     name = noteName.value.text,
                     description = noteDescription.value.text,
                     pinned = isPinned.value,
                     encrypted = isEncrypted.value,
-                    createdAt = if (noteCreatedTime.value != 0L) noteCreatedTime.value else System.currentTimeMillis(),
+                    createdAt = if (noteCreatedTime.value != 0L) noteCreatedTime.value else now,
+                    updatedAt = now,
                     tags = emptyList()
                 )
                 noteUseCase.addNote(note)
@@ -110,6 +129,7 @@ class EditViewModel @Inject constructor(
             updateNoteDescription(TextFieldValue(note.description, selection = TextRange(note.description.length)))
         }
         updateNoteCreatedTime(note.createdAt)
+        _noteUpdatedTime.longValue = note.updatedAt
         updateNoteId(note.id)
         updateNotePin(note.pinned)
         updateIsEncrypted(note.encrypted)

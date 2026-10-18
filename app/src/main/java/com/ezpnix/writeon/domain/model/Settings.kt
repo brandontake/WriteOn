@@ -12,6 +12,7 @@ data class Settings(
     var screenProtection: Boolean = false,
     var encryptBackup: Boolean = false,
     var sortDescending: Boolean = true,
+    var sortBy: Int = 0, // 0: CreatedAt, 1: UpdatedAt, 2: Title
     var vaultSettingEnabled: Boolean = false,
     var vaultEnabled: Boolean = false,
     var editMode: Boolean = false,

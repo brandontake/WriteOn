@@ -213,6 +213,7 @@ class NoteUseCase @Inject constructor(
     fun deleteNoteById(id: Int) {
         coroutineScope.launch(NonCancellable + Dispatchers.IO) {
             val noteToDelete = noteRepository.getNoteById(id).first()
+            deleteAssociatedAudios(noteToDelete)
             noteRepository.deleteNote(noteToDelete)
         }
     }
@@ -253,8 +254,19 @@ class NoteUseCase @Inject constructor(
     fun permanentlyDeleteNoteById(id: Int) {
         coroutineScope.launch(NonCancellable + Dispatchers.IO) {
             val noteToDelete = noteRepository.getNoteById(id).first()
+            deleteAssociatedAudios(noteToDelete)
             noteRepository.deleteNote(noteToDelete)
         }
+    }
+
+    private fun deleteAssociatedAudios(note: Note) {
+        try {
+            val text = "${note.name} ${note.description}"
+            val paths = com.ezpnix.writeon.presentation.screens.edit.components.AudioRecorderManager.extractAudioPaths(text)
+            if (paths.isNotEmpty()) {
+                com.ezpnix.writeon.presentation.screens.edit.components.AudioRecorderManager.deleteAudioFiles(paths, context)
+            }
+        } catch (_: Throwable) {}
     }
 
     fun getTrashedNotesFlow(): Flow<List<Note>> = noteRepository.getTrashedNotes()

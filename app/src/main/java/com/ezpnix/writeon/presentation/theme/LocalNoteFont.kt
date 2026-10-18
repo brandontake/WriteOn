@@ -5,7 +5,9 @@ import android.net.Uri
 import android.provider.OpenableColumns
 import android.util.Log
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.State
 import androidx.compose.runtime.compositionLocalOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
 import java.io.File
@@ -24,6 +26,18 @@ object NoteFontManager {
     private var cachedFontFamily: FontFamily? = null
     @Volatile
     private var cachedFontName: String? = null
+
+    // Reactive Compose state for instant recomposition across the entire app
+    private val _fontState = mutableStateOf<FontFamily?>(null)
+    private var initialized = false
+
+    fun getFontState(context: Context): State<FontFamily?> {
+        if (!initialized) {
+            _fontState.value = getFontFamily(context)
+            initialized = true
+        }
+        return _fontState
+    }
 
     fun getFontName(context: Context): String? {
         if (cachedFontName != null) return cachedFontName
@@ -93,7 +107,9 @@ object NoteFontManager {
             prefs.edit().putString(KEY_FONT_NAME, displayName).apply()
 
             cachedFontName = displayName
-            cachedFontFamily = FontFamily(Font(targetFile))
+            val family = FontFamily(Font(targetFile))
+            cachedFontFamily = family
+            _fontState.value = family
 
             return displayName
         } catch (t: Throwable) {
@@ -111,6 +127,7 @@ object NoteFontManager {
         prefs.edit().remove(KEY_FONT_NAME).apply()
         cachedFontName = null
         cachedFontFamily = null
+        _fontState.value = null
     }
 
     private fun queryFileName(context: Context, uri: Uri): String? {

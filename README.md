@@ -35,8 +35,11 @@ foreground services, and only the permissions the features actually need.
 
 **Writing**
 - Markdown editing with an expanded 5-item-per-page formatting toolbar (headings `##`, hyperlinks `[](url)`, horizontal dividers `---`, quotes `>`, code blocks, checkboxes, bullet/ordered lists, bold / italic / underline / strikethrough, highlights, images, mic recording and timestamps)
-- Image attachments, tags and categories, search, pinning, a recycle bin and per-note details
-- Dynamic theming support across notes and flashcards, font size and custom local font import (.ttf/.otf), grid or column layout, minimalistic mode, adjustable corner radius
+- Note attachments, audio recording & in-app playback, audio auto-cleanup on deletion
+- Dynamic theming support across notes and flashcards, customizable font size and persistent custom local font import (.ttf/.otf), grid or column layout, minimalistic mode, adjustable corner radius
+- Diverse sorting dimensions (Creation Time, Last Modified Time, Title) with dedicated Ascending/Descending controls
+- Note details dialog with Last Modified Time tracking and Word/Character stats
+- Launcher App Shortcut for quick note creation
 
 **Privacy**
 - App lock with biometric authentication, PIN (PBKDF2-HMAC-SHA256, 600 000 iterations) or pattern, a 5-attempt lockout and screen protection

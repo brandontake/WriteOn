@@ -22,6 +22,8 @@ import androidx.compose.material.icons.rounded.VisibilityOff
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TextField
@@ -49,7 +51,65 @@ fun ToolsScreen(navController: NavController, settingsViewModel: SettingsViewMod
     val context = LocalContext.current
     settingsViewModel.noteUseCase.observe()
     var showSearchDialog by remember { mutableStateOf(false) }
+    var showSortByDialog by remember { mutableStateOf(false) }
     var dynamicPlaceholderInput by remember { mutableStateOf(context.getString(R.string.app_subtitle)) }
+    
+    if (showSortByDialog) {
+        val currentSortBy = settingsViewModel.settings.value.sortBy
+        AlertDialog(
+            onDismissRequest = { showSortByDialog = false },
+            title = {
+                Text(
+                    text = stringResource(id = R.string.sort_by_title),
+                    style = MaterialTheme.typography.titleLarge
+                )
+            },
+            text = {
+                Column {
+                    val options = listOf(
+                        0 to stringResource(id = R.string.sort_by_created),
+                        1 to stringResource(id = R.string.sort_by_updated),
+                        2 to stringResource(id = R.string.sort_by_name)
+                    )
+                    options.forEach { (value, label) ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    settingsViewModel.update(
+                                        settingsViewModel.settings.value.copy(sortBy = value)
+                                    )
+                                    showSortByDialog = false
+                                }
+                                .padding(vertical = 12.dp, horizontal = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            RadioButton(
+                                selected = (currentSortBy == value),
+                                onClick = {
+                                    settingsViewModel.update(
+                                        settingsViewModel.settings.value.copy(sortBy = value)
+                                    )
+                                    showSortByDialog = false
+                                }
+                            )
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Text(
+                                text = label,
+                                style = MaterialTheme.typography.bodyLarge
+                            )
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showSortByDialog = false }) {
+                    Text(stringResource(id = R.string.cancel))
+                }
+            }
+        )
+    }
+
     SettingsScaffold(
         settingsViewModel = settingsViewModel,
         title = stringResource(id = R.string.tools),
@@ -57,6 +117,24 @@ fun ToolsScreen(navController: NavController, settingsViewModel: SettingsViewMod
     ) {
         LazyColumn {
             item {
+                val currentSortLabel = when (settingsViewModel.settings.value.sortBy) {
+                    1 -> stringResource(id = R.string.sort_by_updated)
+                    2 -> stringResource(id = R.string.sort_by_name)
+                    else -> stringResource(id = R.string.sort_by_created)
+                }
+                SettingsBox(
+                    title = stringResource(id = R.string.sort_by_title),
+                    description = currentSortLabel,
+                    icon = Icons.AutoMirrored.Rounded.Sort,
+                    radius = shapeManager(
+                        radius = settingsViewModel.settings.value.cornerRadius,
+                        isFirst = true
+                    ),
+                    actionType = ActionType.LINK,
+                    linkClicked = {
+                        showSortByDialog = true
+                    }
+                )
                 SettingsBox(
                     title = if (settingsViewModel.settings.value.sortDescending) stringResource(id = R.string.sort_descending) else stringResource(
                         id = R.string.sort_ascending
@@ -65,7 +143,7 @@ fun ToolsScreen(navController: NavController, settingsViewModel: SettingsViewMod
                     icon = Icons.AutoMirrored.Rounded.Sort,
                     radius = shapeManager(
                         radius = settingsViewModel.settings.value.cornerRadius,
-                        isBoth = true
+                        isLast = true
                     ),
                     actionType = ActionType.SWITCH,
                     variable = settingsViewModel.settings.value.sortDescending,

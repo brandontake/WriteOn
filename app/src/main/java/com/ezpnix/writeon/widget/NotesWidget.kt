@@ -51,7 +51,8 @@ class NotesWidget : GlanceAppWidget() {
 
         provideContent {
             GlanceTheme {
-                val noteId = currentState<List<Pair<Int, Int>>>().firstOrNull { it.first == widgetId }?.second
+                val state = currentState<List<Pair<Int, Int>>>()
+                val noteId = state.firstOrNull { it.first == widgetId }?.second
                 val selectedNote = noteId?.let { id -> noteUseCase.notes.firstOrNull { it.id == id } }
                 when {
                     selectedNote == null -> ZeroState(widgetId = widgetId)

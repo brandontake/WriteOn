@@ -102,4 +102,36 @@ class AudioRecorderManager(private val context: Context) {
         currentOutputFile?.delete()
         currentOutputFile = null
     }
+
+    companion object {
+        private val AUDIO_TAG_REGEX = Regex("""\?audio\(([^)]+)\)""")
+
+        /**
+         * Extracts all audio file paths embedded via ?audio(path) inside Markdown text.
+         */
+        fun extractAudioPaths(text: String): Set<String> {
+            return AUDIO_TAG_REGEX.findAll(text)
+                .map { it.groupValues[1].trim() }
+                .filter { it.isNotEmpty() }
+                .toSet()
+        }
+
+        /**
+         * Safely deletes audio files on disk that belong to the app's internal audios directory.
+         */
+        fun deleteAudioFiles(paths: Collection<String>, context: Context) {
+            val audioDir = File(context.filesDir, "audios").canonicalPath
+            for (path in paths) {
+                try {
+                    val file = File(path)
+                    // Security guard: ensure the file is strictly inside context.filesDir/audios/
+                    if (file.exists() && file.canonicalPath.startsWith(audioDir)) {
+                        file.delete()
+                    }
+                } catch (t: Throwable) {
+                    Log.e("AudioRecorderManager", "Failed to delete audio file: $path", t)
+                }
+            }
+        }
+    }
 }

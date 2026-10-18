@@ -83,8 +83,13 @@ class NotesWidgetActivity : ComponentActivity() {
                                         finish()
                                     }
                                 },
-                                notes = noteUseCase.notes.sortedWith(sorter(settings.settings.value.sortDescending)),
-                                viewMode = false,
+                                notes = noteUseCase.notes.sortedWith(
+                                    sorter(
+                                        settings.settings.value.sortDescending,
+                                        settings.settings.value.sortBy
+                                    )
+                                ),
+                                viewMode = settings.settings.value.viewMode,
                             )
                         }
                     )

@@ -19,6 +19,8 @@ data class Note(
     val encrypted: Boolean = false,
     @ColumnInfo(name = "created_at")
     val createdAt: Long = System.currentTimeMillis(),
+    @ColumnInfo(name = "updated_at", defaultValue = "0")
+    val updatedAt: Long = 0L,
     @ColumnInfo(defaultValue = "0")
     var trashed: Boolean = false,
     @ColumnInfo(name = "tags")

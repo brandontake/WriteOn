@@ -109,7 +109,7 @@ fun WidgetMarkdownElement(
     val context = LocalContext.current
 
     Row(
-        modifier = modifier
+        modifier = GlanceModifier.fillMaxWidth().padding(vertical = 1.dp)
     ) {
         when (element) {
             is Heading -> {

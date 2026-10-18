@@ -72,6 +72,8 @@ class MainActivity : AppCompatActivity() {
         splashScreen.setKeepOnScreenCondition { !startup.isCompleted }
 
         val noteId = intent?.getIntExtra("noteId", -1) ?: -1
+        val isNewNoteShortcut = intent?.action == "com.ezpnix.writeon.action.NEW_NOTE" ||
+                intent?.getBooleanExtra("new_note", false) == true
 
         lifecycleScope.launch {
             val termsAccepted = settingsRepositoryImpl.getBoolean("termsOfService") ?: false
@@ -79,6 +81,7 @@ class MainActivity : AppCompatActivity() {
 
             val startDestination = when {
                 !termsAccepted -> NavRoutes.Terms.route
+                isNewNoteShortcut -> NavRoutes.Edit.createRoute(0, false)
                 noteId == -1 -> NavRoutes.Home.route
                 else -> NavRoutes.Edit.route
             }
@@ -90,7 +93,7 @@ class MainActivity : AppCompatActivity() {
                 // One provider for the whole app: every screen and component reads the radius the
                 // user chose in Settings > Colours from this local, so no corner stays hard-coded.
                 val cornerRadius = settingsViewModel.settings.value.cornerRadius
-                val customFontFamily = NoteFontManager.getFontFamily(this@MainActivity)
+                val customFontFamily by NoteFontManager.getFontState(this@MainActivity)
                 CompositionLocalProvider(
                     LocalCornerRadius provides cornerRadius.dp,
                     LocalNoteFontFamily provides customFontFamily

@@ -61,42 +61,45 @@ fun SelectedNote(note: Note, noteUseCase: NoteUseCase, widgetId: Int) {
         modifier = glanceModifier
             .background(GlanceTheme.colors.background)
             .fillMaxSize()
-            .padding(6.dp)
+            .padding(12.dp)
     ) {
         if (lockManager.anyLockEnabled()) {
             WidgetText(
-                modifier = glanceModifier.fillMaxWidth(),
+                modifier = GlanceModifier.fillMaxWidth(),
                 markdown = context.getString(R.string.widget_locked_notice),
                 weight = FontWeight.Normal,
                 fontSize = 12.sp,
                 color = GlanceTheme.colors.primary,
             )
         } else {
-            if(note.name.isNotBlank()) {
-                WidgetText(
-                    modifier = glanceModifier,
-                    markdown = note.name,
-                    weight = FontWeight.Bold,
-                    fontSize = 24.sp,
-                    color = GlanceTheme.colors.primary,
-                    onContentChange = {
-                        CoroutineScope(Dispatchers.IO).launch {
-                            noteUseCase.addNote(note.copy(name = it))
-                            noteUseCase.observe()
-                        }
-                    }
-                )
+            val combinedMarkdown = buildString {
+                if (note.name.isNotBlank()) {
+                    appendLine("# ${note.name}")
+                    appendLine()
+                }
+                if (note.description.isNotBlank()) {
+                    append(note.description)
+                }
             }
-            if(note.description.isNotBlank()) {
+
+            if (combinedMarkdown.isNotBlank()) {
                 WidgetText(
-                    modifier = glanceModifier.fillMaxWidth(),
-                    markdown = note.description,
+                    modifier = GlanceModifier.fillMaxSize(),
+                    markdown = combinedMarkdown,
                     weight = FontWeight.Normal,
-                    fontSize = 12.sp,
-                    color = GlanceTheme.colors.primary,
-                    onContentChange = {
+                    fontSize = 13.sp,
+                    color = GlanceTheme.colors.onSurface,
+                    onContentChange = { updated ->
                         CoroutineScope(Dispatchers.IO).launch {
-                            noteUseCase.addNote(note.copy(description = it))
+                            val lines = updated.lines()
+                            val hasHeading = lines.firstOrNull()?.startsWith("# ") == true
+                            val newName = if (hasHeading) lines.first().removePrefix("# ").trim() else note.name
+                            val newDesc = if (hasHeading) {
+                                lines.drop(1).joinToString("\n").trimStart('\n')
+                            } else {
+                                updated
+                            }
+                            noteUseCase.addNote(note.copy(name = newName, description = newDesc))
                             noteUseCase.observe()
                         }
                     }
