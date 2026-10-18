@@ -50,6 +50,10 @@ fun LeafNotesTheme(
     val systemInDarkTheme = isSystemInDarkTheme()
     val supportsDynamic = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
 
+    // 真正生效的深色与动态色彩：当开启跟随系统时，直接以系统主题实时派生，保证首帧与冷启动绝对精准，无需异步写库等待
+    val effectiveDarkTheme = if (settings.automaticTheme) systemInDarkTheme else settings.darkTheme
+    val effectiveDynamicTheme = if (settings.automaticTheme) supportsDynamic else settings.dynamicTheme
+
     // These two used to be written straight from the composable body. `update()` also persists the
     // settings and (re)schedules the auto-backup work, so every recomposition — a drawer slide, a
     // FAB animation — wrote to disk. Writing only when the derived value actually differs keeps
@@ -68,9 +72,10 @@ fun LeafNotesTheme(
     // recomposition can run this function many times per frame.
     SideEffect {
         WindowCompat.getInsetsController(activity.window, activity.window.decorView).apply {
-            isAppearanceLightStatusBars = !settingsModel.settings.value.darkTheme
+            isAppearanceLightStatusBars = !effectiveDarkTheme
+            isAppearanceLightNavigationBars = !effectiveDarkTheme
         }
-        if (settingsModel.settings.value.screenProtection) {
+        if (settings.screenProtection) {
             activity.window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
         } else {
             activity.window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
@@ -78,7 +83,7 @@ fun LeafNotesTheme(
     }
 
     MaterialTheme(
-        colorScheme = getColorScheme(context, settingsModel.settings.value.darkTheme, settingsModel.settings.value.dynamicTheme, settingsModel.settings.value.amoledTheme),
+        colorScheme = getColorScheme(context, effectiveDarkTheme, effectiveDynamicTheme, settings.amoledTheme),
         typography = Typography(),
         content = content
     )

@@ -94,14 +94,16 @@ class MainActivity : AppCompatActivity() {
                             color = MaterialTheme.colorScheme.surfaceContainerLow,
                         ) {
                             LockGate {
+                                val isAtRoot = backStackEntry?.destination?.route == startDestination
                                 PredictiveBackHost(
-                                    enabled = backStackEntry?.destination?.route != startDestination,
+                                    enabled = !isAtRoot,
                                     showPreview = predictiveBackEnabled,
                                     onBack = { navController.popBackStack() },
-                                    // The home quick action bar (and a note selection) are overlays,
-                                    // not destinations. While one of them is up, HomeView owns the
-                                    // back gesture through `overlayBackHandler`; this host steps aside.
-                                    isOverlayOpen = HomeOverlayState.expanded
+                                    // The home quick action bar, drawer, and note selection are overlays
+                                    // on the root screen. Only when at the root destination can an overlay
+                                    // suppress the predictive back host; when away from the root, sub-screens
+                                    // (e.g. settings) must always be popped on system back gestures.
+                                    isOverlayOpen = isAtRoot && HomeOverlayState.expanded
                                 ) {
                                     AppNavHost(
                                         settingsViewModel = settingsViewModel,

@@ -43,9 +43,11 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
@@ -79,6 +81,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalDrawerSheet
 import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.NavigationDrawerItem
+import androidx.compose.material3.NavigationDrawerItemDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -189,12 +192,14 @@ fun HomeView(
     // only when it is already closed does back leave the selection. HomeOverlayState is published
     // with the same value, which keeps PredictiveBackHost's own handler disabled for exactly as
     // long as this one is active, so no two handlers can act on a single swipe.
-    val overlayOwnsBack = fabExpanded || viewModel.selectedNotes.isNotEmpty()
+    val overlayOwnsBack = drawerState.isOpen || fabExpanded || viewModel.selectedNotes.isNotEmpty()
     LaunchedEffect(overlayOwnsBack) {
         HomeOverlayState.publish(overlayOwnsBack)
     }
     overlayBackHandler(enabled = overlayOwnsBack) {
-        if (fabExpanded) {
+        if (drawerState.isOpen) {
+            scope.launch { drawerState.close() }
+        } else if (fabExpanded) {
             fabExpanded = false
             showDimBackground = false
         } else {
@@ -230,7 +235,7 @@ fun HomeView(
         drawerContent = {
             val drawerCornerRadius = settingsModel.settings.value.cornerRadius
             ModalDrawerSheet(
-                modifier = Modifier.width(250.dp),
+                modifier = Modifier.width(320.dp),
                 drawerShape = RoundedCornerShape(
                     topEnd = drawerCornerRadius.dp,
                     bottomEnd = drawerCornerRadius.dp
@@ -240,10 +245,35 @@ fun HomeView(
                 Column(
                     modifier = Modifier
                         .fillMaxHeight()
+                        .verticalScroll(rememberScrollState())
                         .padding(horizontal = 12.dp),
                     verticalArrangement = Arrangement.Top
                 ) {
-                    Spacer(modifier = Modifier.height(12.dp))
+                    // MD3 Navigation Drawer Header
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(start = 16.dp, end = 16.dp, top = 28.dp, bottom = 12.dp)
+                    ) {
+                        Text(
+                            text = stringResource(R.string.app_name),
+                            style = MaterialTheme.typography.headlineSmall,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = stringResource(R.string.nav_drawer_subtitle, viewModel.noteUseCase.notes.size),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+
+                    HorizontalDivider(
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                        thickness = DividerDefaults.Thickness,
+                        color = MaterialTheme.colorScheme.outlineVariant
+                    )
+
                     DrawerSectionHeader(context.getString(R.string.nav_homepage))
                     DrawerItem(
                         text = context.getString(R.string.nav_all_notes),
@@ -272,12 +302,18 @@ fun HomeView(
                         navController.navigate(NavRoutes.Trash.route)
                         scope.launch { drawerState.close() }
                     }
-                    Spacer(modifier = Modifier.height(12.dp))
+
+                    HorizontalDivider(
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                        thickness = DividerDefaults.Thickness,
+                        color = MaterialTheme.colorScheme.outlineVariant
+                    )
+
                     DrawerSectionHeader(context.getString(R.string.nav_tags))
                     if (viewModel.noteUseCase.tags.isEmpty()) {
                         Text(
                             text = context.getString(R.string.tag_none_yet),
-                            style = MaterialTheme.typography.bodyLarge,
+                            style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.padding(start = 16.dp, top = 4.dp, bottom = 8.dp)
                         )
@@ -297,7 +333,7 @@ fun HomeView(
                             )
                         }
                     }
-                    Spacer(modifier = Modifier.height(12.dp))
+                    Spacer(modifier = Modifier.height(24.dp))
                 }
             }
         },
@@ -527,6 +563,7 @@ fun DeletableDrawerItem(
         label = {
             Text(
                 text = text.replaceFirstChar { it.uppercase() },
+                style = MaterialTheme.typography.labelLarge,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
             )
@@ -535,16 +572,28 @@ fun DeletableDrawerItem(
         onClick = onClick,
         icon = { Icon(Icons.AutoMirrored.Filled.Label, contentDescription = null) },
         badge = {
-            IconButton(onClick = { onDeleteClick() }) {
+            IconButton(
+                onClick = { onDeleteClick() },
+                modifier = Modifier.size(32.dp)
+            ) {
                 Icon(
                     imageVector = Icons.Default.Close,
                     contentDescription = stringResource(R.string.tag_delete),
-                    tint = MaterialTheme.colorScheme.error
+                    modifier = Modifier.size(18.dp),
+                    tint = if (selected) MaterialTheme.colorScheme.onSecondaryContainer else MaterialTheme.colorScheme.outline
                 )
             }
         },
+        colors = NavigationDrawerItemDefaults.colors(
+            selectedContainerColor = MaterialTheme.colorScheme.secondaryContainer,
+            unselectedContainerColor = Color.Transparent,
+            selectedIconColor = MaterialTheme.colorScheme.onSecondaryContainer,
+            unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
+            selectedTextColor = MaterialTheme.colorScheme.onSecondaryContainer,
+            unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant
+        ),
         shape = RoundedCornerShape(cornerRadius.dp),
-        modifier = Modifier.padding(vertical = 2.dp)
+        modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding)
     )
 }
 
@@ -554,14 +603,8 @@ fun DrawerSectionHeader(title: String) {
         text = title,
         style = MaterialTheme.typography.titleSmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
-        modifier = Modifier.padding(start = 16.dp, top = 8.dp, bottom = 4.dp)
+        modifier = Modifier.padding(start = 16.dp, top = 12.dp, bottom = 8.dp)
     )
-    HorizontalDivider(
-        modifier = Modifier.padding(top = 4.dp),
-        thickness = DividerDefaults.Thickness,
-        color = DividerDefaults.color
-    )
-    Spacer(modifier = Modifier.height(8.dp))
 }
 
 @Composable
@@ -573,12 +616,20 @@ fun DrawerItem(
     onClick: () -> Unit
 ) {
     NavigationDrawerItem(
-        label = { Text(text = text, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+        label = { Text(text = text, style = MaterialTheme.typography.labelLarge, maxLines = 1, overflow = TextOverflow.Ellipsis) },
         selected = selected,
         onClick = onClick,
         icon = { Icon(icon, contentDescription = null) },
+        colors = NavigationDrawerItemDefaults.colors(
+            selectedContainerColor = MaterialTheme.colorScheme.secondaryContainer,
+            unselectedContainerColor = Color.Transparent,
+            selectedIconColor = MaterialTheme.colorScheme.onSecondaryContainer,
+            unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
+            selectedTextColor = MaterialTheme.colorScheme.onSecondaryContainer,
+            unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant
+        ),
         shape = RoundedCornerShape(cornerRadius.dp),
-        modifier = Modifier.padding(vertical = 2.dp)
+        modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding)
     )
 }
 

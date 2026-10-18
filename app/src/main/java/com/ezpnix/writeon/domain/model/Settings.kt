@@ -3,7 +3,7 @@ package com.ezpnix.writeon.domain.model
 data class Settings(
     val viewMode: Boolean = true,
     val automaticTheme: Boolean = true,
-    val darkTheme: Boolean = true,
+    val darkTheme: Boolean = false,
     var dynamicTheme: Boolean = false,
     var amoledTheme: Boolean = false,
     var minimalisticMode: Boolean = false,

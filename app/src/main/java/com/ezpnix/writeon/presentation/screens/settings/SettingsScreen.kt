@@ -2,6 +2,7 @@ package com.ezpnix.writeon.presentation.screens.settings
 
 import android.content.SharedPreferences
 import androidx.compose.foundation.layout.Arrangement
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -73,6 +74,9 @@ fun SettingsScaffold(
     onBackNavClicked: () -> Unit,
     content: @Composable () -> Unit
 ) {
+    BackHandler(enabled = true) {
+        onBackNavClicked()
+    }
     NotesScaffold(
         topBar = {
             key(settingsViewModel.settings.value) {

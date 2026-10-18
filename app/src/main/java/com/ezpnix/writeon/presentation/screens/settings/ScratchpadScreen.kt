@@ -1,6 +1,7 @@
 package com.ezpnix.writeon.presentation.screens.settings
 
 import android.widget.Toast
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
@@ -60,6 +61,11 @@ fun ScratchpadScreen(
 
     var showInfoPopup by remember { mutableStateOf(false) }
     var showSaveDialog by remember { mutableStateOf(false) }
+
+    BackHandler(enabled = true) {
+        if (hasChanges) showSaveDialog = true
+        else navController.navigateUp()
+    }
 
     Scaffold(
         topBar = {

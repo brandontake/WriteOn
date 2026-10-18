@@ -1,9 +1,12 @@
 package com.ezpnix.writeon.presentation.screens.settings.settings
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -25,9 +28,20 @@ fun IssueScreen(navController: NavController, settingsViewModel: SettingsViewMod
     val context = LocalContext.current
     val items = (1..6).map { context.getString(R.string.issue_item, it) }
 
+    BackHandler(enabled = true) {
+        navController.navigateUp()
+    }
+
     Scaffold(
         topBar = {
-            TopAppBar(title = { Text(stringResource(R.string.select_an_item)) })
+            TopAppBar(
+                title = { Text(stringResource(R.string.select_an_item)) },
+                navigationIcon = {
+                    IconButton(onClick = { navController.navigateUp() }) {
+                        Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = stringResource(R.string.cd_back))
+                    }
+                }
+            )
         }
     ) { paddingValues ->
         LazyVerticalGrid(

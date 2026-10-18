@@ -396,4 +396,5 @@
     <string name="unsaved_changes_message">你有未保存的更改。离开前要保存吗？</string>
     <string name="unsaved_changes_title">保存更改？</string>
     <string name="widget_locked_notice">打开 WriteOn 查看此笔记</string>
+    <string name="nav_drawer_subtitle">%1$d 篇笔记</string>
 </resources>

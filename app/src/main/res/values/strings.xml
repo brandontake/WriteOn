@@ -435,4 +435,5 @@
     <string name="unsaved_changes_message">You have unsaved changes. Save before leaving?</string>
     <string name="unsaved_changes_title">Save Changes?</string>
     <string name="widget_locked_notice">Open WriteOn to view this note</string>
+    <string name="nav_drawer_subtitle">%1$d notes</string>
 </resources>

@@ -1,5 +1,6 @@
 package com.ezpnix.writeon.presentation.screens.home
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -42,6 +43,14 @@ fun TrashScreen(
     var pendingPermanentDeleteIds by rememberSaveable { mutableStateOf<List<Int>?>(null) }
     val allSelected = trashedNotes.isNotEmpty() && selectedNotes.size == trashedNotes.size
     val longPressedNote = trashedNotes.firstOrNull { it.id == longPressedNoteId }
+
+    BackHandler(enabled = true) {
+        if (selectedNotes.isNotEmpty()) {
+            selectedNotes.clear()
+        } else {
+            navController.navigateUp()
+        }
+    }
 
     Scaffold(
         topBar = {

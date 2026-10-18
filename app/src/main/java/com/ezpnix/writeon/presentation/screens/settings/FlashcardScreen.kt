@@ -1,5 +1,6 @@
 package com.ezpnix.writeon.presentation.screens.settings
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -47,6 +48,11 @@ fun FlashcardScreen(
 
     fun saveFlashcards() {
         settingsViewModel.saveFlashcards(flashcards)
+    }
+
+    BackHandler(enabled = true) {
+        saveFlashcards()
+        navController.navigateUp()
     }
 
     Scaffold(
