@@ -27,6 +27,8 @@ import com.ezpnix.writeon.presentation.navigation.PredictiveBackHost
 import com.ezpnix.writeon.presentation.screens.settings.model.SettingsViewModel
 import com.ezpnix.writeon.presentation.theme.LeafNotesTheme
 import com.ezpnix.writeon.presentation.theme.LocalCornerRadius
+import com.ezpnix.writeon.presentation.theme.LocalNoteFontFamily
+import com.ezpnix.writeon.presentation.theme.NoteFontManager
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.launch
@@ -88,7 +90,11 @@ class MainActivity : AppCompatActivity() {
                 // One provider for the whole app: every screen and component reads the radius the
                 // user chose in Settings > Colours from this local, so no corner stays hard-coded.
                 val cornerRadius = settingsViewModel.settings.value.cornerRadius
-                CompositionLocalProvider(LocalCornerRadius provides cornerRadius.dp) {
+                val customFontFamily = NoteFontManager.getFontFamily(this@MainActivity)
+                CompositionLocalProvider(
+                    LocalCornerRadius provides cornerRadius.dp,
+                    LocalNoteFontFamily provides customFontFamily
+                ) {
                     LeafNotesTheme(settingsViewModel) {
                         Surface(
                             color = MaterialTheme.colorScheme.surfaceContainerLow,

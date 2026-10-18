@@ -31,5 +31,6 @@ object ConnectionConst {
         Pair("v1.7", "Jul 11, 2025"),
         Pair("v1.8", "Sep 05, 2025"),
         Pair("v1.9", "Oct 17, 2026"),
+        Pair("v1.10", "Oct 18, 2026"),
     )
 }

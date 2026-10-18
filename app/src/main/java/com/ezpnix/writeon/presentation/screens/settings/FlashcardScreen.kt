@@ -77,10 +77,12 @@ fun FlashcardScreen(
                     .padding(16.dp)
             ) {
                 if (!isTesting) {
-                    Card(
+                    OutlinedCard(
                         modifier = Modifier.fillMaxWidth(),
                         shape = appCornerShape(),
-                        elevation = CardDefaults.cardElevation(4.dp)
+                        colors = CardDefaults.outlinedCardColors(
+                            containerColor = MaterialTheme.colorScheme.surface
+                        )
                     ) {
                         Column(modifier = Modifier.padding(16.dp)) {
                             Text(stringResource(R.string.flashcard_add), style = MaterialTheme.typography.titleMedium)
@@ -118,12 +120,14 @@ fun FlashcardScreen(
 
                     LazyColumn(modifier = Modifier.weight(1f)) {
                         itemsIndexed(flashcards) { index, card ->
-                            Card(
+                            OutlinedCard(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .padding(vertical = 4.dp),
                                 shape = appCornerShape(),
-                                elevation = CardDefaults.cardElevation(2.dp)
+                                colors = CardDefaults.outlinedCardColors(
+                                    containerColor = MaterialTheme.colorScheme.surface
+                                )
                             ) {
                                 Column(modifier = Modifier.padding(12.dp)) {
                                     if (editingIndex == index) {
@@ -272,13 +276,14 @@ fun FlashcardScreen(
 
                         Spacer(Modifier.height(16.dp))
 
-                        Card(
+                        OutlinedCard(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .padding(top = 8.dp),
                             shape = appCornerShape(),
-                            elevation = CardDefaults.cardElevation(4.dp),
-                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+                            colors = CardDefaults.outlinedCardColors(
+                                containerColor = MaterialTheme.colorScheme.surfaceVariant
+                            )
                         ) {
                             Column(modifier = Modifier.padding(16.dp)) {
                                 Text(stringResource(R.string.flashcard_finished), style = MaterialTheme.typography.titleMedium)

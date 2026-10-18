@@ -41,6 +41,7 @@ import androidx.compose.ui.res.stringResource
 import com.ezpnix.writeon.R
 import com.ezpnix.writeon.presentation.theme.appCornerShape
 import com.ezpnix.writeon.presentation.theme.CornerFraction
+import com.ezpnix.writeon.presentation.theme.LocalNoteFontFamily
 
 /**
  * Upper bound on the bitmap coil is allowed to decode for a note image.
@@ -79,6 +80,7 @@ fun MarkdownQuote(
     fontSize: TextUnit,
     containerColor: Color = MaterialTheme.colorScheme.surface
 ) {
+    val customFont = LocalNoteFontFamily.current
     Row(horizontalArrangement = Arrangement.Center) {
         Box(
             modifier = Modifier
@@ -95,7 +97,8 @@ fun MarkdownQuote(
         Spacer(modifier = Modifier.width(6.dp))
         Text(
             text = buildString(" $content"),
-            fontSize = fontSize
+            fontSize = fontSize,
+            fontFamily = customFont
         )
     }
 }
@@ -193,10 +196,12 @@ fun StaticMarkdownText(
     maxLines: Int,
     overflow: TextOverflow
 ) {
+    val customFont = LocalNoteFontFamily.current
     Text(
         text = markdown,
         fontSize = fontSize,
         fontWeight = weight,
+        fontFamily = customFont,
         modifier = modifier,
         maxLines = maxLines,
         overflow = overflow
@@ -302,6 +307,7 @@ fun RenderMarkdownElement(
     overflow: TextOverflow
 ) {
     val element = content[index]
+    val customFont = LocalNoteFontFamily.current
     Row {
         when (element) {
             is Heading -> {
@@ -312,6 +318,7 @@ fun RenderMarkdownElement(
                         else -> fontSize
                     },
                     fontWeight = weight,
+                    fontFamily = customFont,
                     modifier = Modifier.padding(vertical = 10.dp),
                     maxLines = maxLines,
                     overflow = overflow
@@ -324,6 +331,7 @@ fun RenderMarkdownElement(
                             text = buildString(element.text, weight),
                             fontSize = fontSize,
                             fontWeight = weight,
+                            fontFamily = customFont,
                             maxLines = maxLines,
                             overflow = overflow
                         )
@@ -343,6 +351,7 @@ fun RenderMarkdownElement(
                     text = buildString("• ${element.text}", weight),
                     fontSize = fontSize,
                     fontWeight = weight,
+                    fontFamily = customFont,
                     maxLines = maxLines,
                     overflow = overflow
                 )
@@ -416,6 +425,7 @@ fun RenderMarkdownElement(
                 Text(
                     text = buildString(element.text, weight),
                     fontSize = fontSize,
+                    fontFamily = customFont,
                     maxLines = maxLines,
                     overflow = overflow
                 )

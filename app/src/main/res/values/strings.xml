@@ -447,4 +447,15 @@
     <string name="unsaved_changes_title">Save Changes?</string>
     <string name="widget_locked_notice">Open WriteOn to view this note</string>
     <string name="nav_drawer_subtitle">%1$d notes</string>
+
+    <!-- Custom Font in Note -->
+    <string name="custom_font_title">Custom Note Font</string>
+    <string name="custom_font_desc">Select a local font file (.ttf / .otf) for note content.</string>
+    <string name="select_font_file">Select Font File</string>
+    <string name="reset_default_font">Restore Default Font</string>
+    <string name="font_loaded_success">Font applied: %1$s</string>
+    <string name="font_load_failed">Failed to load font file: %1$s</string>
+    <string name="font_reset_success">Default font restored</string>
+    <string name="current_font_label">Current font: %1$s</string>
+    <string name="default_font_name">System Default</string>
 </resources>

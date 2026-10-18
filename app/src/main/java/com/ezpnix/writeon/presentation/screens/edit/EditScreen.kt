@@ -117,6 +117,7 @@ import com.ezpnix.writeon.presentation.screens.settings.widgets.copyToClipboard
 import com.ezpnix.writeon.presentation.theme.appCornerShape
 import com.ezpnix.writeon.presentation.theme.CornerFraction
 import com.ezpnix.writeon.presentation.theme.LocalCornerRadius
+import com.ezpnix.writeon.presentation.theme.LocalNoteFontFamily
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 import java.util.Locale
@@ -519,7 +520,10 @@ fun EditScreen(
                         onValueChange = { viewModel.updateNoteDescription(it) },
                         modifier = Modifier.fillMaxSize(),
                         placeholder = stringResource(R.string.empty_description),
-                        textStyle = TextStyle(fontSize = settingsViewModel.settings.value.fontSize.sp)
+                        textStyle = TextStyle(
+                            fontSize = settingsViewModel.settings.value.fontSize.sp,
+                            fontFamily = LocalNoteFontFamily.current
+                        )
                     )
                 }
             )

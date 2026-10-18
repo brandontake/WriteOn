@@ -1,6 +1,9 @@
 package com.ezpnix.writeon.presentation.screens.settings.settings
 
+import android.net.Uri
 import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatDelegate
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
@@ -12,6 +15,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.FontDownload
 import androidx.compose.material.icons.rounded.FormatSize
 import androidx.compose.material.icons.rounded.Translate
 import androidx.compose.material3.AlertDialog
@@ -38,11 +42,37 @@ import com.ezpnix.writeon.presentation.screens.settings.model.SettingsViewModel
 import com.ezpnix.writeon.presentation.screens.settings.widgets.ActionType
 import com.ezpnix.writeon.presentation.screens.settings.widgets.ListDialog
 import com.ezpnix.writeon.presentation.screens.settings.widgets.SettingsBox
+import com.ezpnix.writeon.presentation.theme.NoteFontManager
 
 @Composable
 fun LanguageScreen(navController: NavController, settingsViewModel: SettingsViewModel) {
     val context = LocalContext.current
     var showFontSizeDialog by remember { mutableStateOf(false) }
+    var currentFontName by remember {
+        mutableStateOf(NoteFontManager.getFontName(context) ?: context.getString(R.string.default_font_name))
+    }
+
+    val fontPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri: Uri? ->
+        if (uri != null) {
+            try {
+                val fontName = NoteFontManager.importFont(context, uri)
+                currentFontName = fontName
+                Toast.makeText(
+                    context,
+                    context.getString(R.string.font_loaded_success, fontName),
+                    Toast.LENGTH_SHORT
+                ).show()
+            } catch (e: Exception) {
+                Toast.makeText(
+                    context,
+                    context.getString(R.string.font_load_failed, e.message ?: "Invalid font"),
+                    Toast.LENGTH_LONG
+                ).show()
+            }
+        }
+    }
 
     SettingsScaffold(
         settingsViewModel = settingsViewModel,
@@ -68,11 +98,33 @@ fun LanguageScreen(navController: NavController, settingsViewModel: SettingsView
                     icon = Icons.Rounded.FormatSize,
                     actionType = ActionType.CUSTOM,
                     radius = shapeManager(
-                        isLast = true,
                         radius = settingsViewModel.settings.value.cornerRadius
                     ),
                     customAction = {
                         showFontSizeDialog = true
+                    }
+                )
+            }
+            item {
+                SettingsBox(
+                    isBig = true,
+                    title = stringResource(id = R.string.custom_font_title),
+                    description = stringResource(id = R.string.current_font_label, currentFontName),
+                    icon = Icons.Rounded.FontDownload,
+                    actionType = ActionType.CUSTOM,
+                    radius = shapeManager(
+                        isLast = true,
+                        radius = settingsViewModel.settings.value.cornerRadius
+                    ),
+                    customAction = {
+                        if (currentFontName != context.getString(R.string.default_font_name)) {
+                            // Already has custom font: offer reset or replace
+                            NoteFontManager.resetDefaultFont(context)
+                            currentFontName = context.getString(R.string.default_font_name)
+                            Toast.makeText(context, context.getString(R.string.font_reset_success), Toast.LENGTH_SHORT).show()
+                        } else {
+                            fontPickerLauncher.launch(arrayOf("font/ttf", "font/otf", "application/x-font-ttf", "application/x-font-otf", "*/*"))
+                        }
                     }
                 )
                 Spacer(modifier = Modifier.height(18.dp))

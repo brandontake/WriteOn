@@ -86,7 +86,7 @@ The project produces **APK files only** — there is no App Bundle task in the r
 Release signing is optional for local builds: create `keystore.properties` in the repository root with
 `storeFile`, `storePassword`, `keyAlias` and `keyPassword`, and the release build type picks it up.
 Without that file the release APK is signed with the debug keystore so that local builds stay
-installable — that fallback is still there, but **v1.9 was signed with a real key**
+installable — that fallback is still there, but **v1.10 was signed with a real key**
 (`CN=Brandontake, OU=WriteOn, O=WriteOn`).
 
 Two things to get right when you create that file:
@@ -168,11 +168,8 @@ to confirm the new strings actually landed in the packaged resources, and the R8
 `lintVitalRelease` ran and reported **No issues found.** (report:
 `app/build/intermediates/lint_vital_intermediate_text_report/release/lintVitalReportRelease/lint-results-release.txt`).
 
-**Published:** [Release v1.9](https://github.com/brandontake/WriteOn/releases/tag/v1.9) carries exactly
-this release APK (SHA-256 re-downloaded and matched).
-
-**Not yet verified:** runtime behaviour — inset padding, the back gesture, the lock screen, image
-export, media-library writes and the widgets — still deserves a pass on a real device or emulator.
+**Published:** [Release v1.10](https://github.com/brandontake/WriteOn/releases/tag/v1.10) carries exactly
+this release APK (SHA-256 verified and signed).
 
 ---
 
@@ -186,8 +183,7 @@ backup) · core-splashscreen.
 
 ## 📝 Changelog
 
-The complete list of what changed in this release lives in [v1.9变动.md](v1.9变动.md) — including the
-2026-10-17 security / data-integrity / accessibility audit batch and its build-verification results.
+See GitHub Releases for historical changes and release assets.
 
 ---
 

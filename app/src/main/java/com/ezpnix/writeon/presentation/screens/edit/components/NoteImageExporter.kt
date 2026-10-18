@@ -52,6 +52,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.ezpnix.writeon.R
 import com.ezpnix.writeon.presentation.components.markdown.MarkdownText
+import com.ezpnix.writeon.presentation.theme.LocalNoteFontFamily
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -93,6 +94,7 @@ fun NoteImageCapture(
     modifier: Modifier = Modifier
 ) {
     val graphicsLayer = rememberGraphicsLayer()
+    val customFont = LocalNoteFontFamily.current
     val timestamp = remember(createdAt) {
         SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).format(Date(createdAt))
     }
@@ -124,12 +126,14 @@ fun NoteImageCapture(
                 text = noteTitle,
                 fontSize = (fontSize + 6).sp,
                 fontWeight = FontWeight.Bold,
+                fontFamily = customFont,
                 color = MaterialTheme.colorScheme.onSurface
             )
             Spacer(Modifier.height(4.dp))
             Text(
                 text = timestamp,
                 fontSize = (fontSize - 3).sp,
+                fontFamily = customFont,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
             Spacer(Modifier.height(12.dp))
@@ -159,12 +163,14 @@ fun NoteImageCapture(
                     text = "WriteOn",
                     fontSize = (fontSize - 3).sp,
                     fontWeight = FontWeight.SemiBold,
+                    fontFamily = customFont,
                     letterSpacing = 0.5.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 Text(
                     text = "  ·  $signatureDate",
                     fontSize = (fontSize - 3).sp,
+                    fontFamily = customFont,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }

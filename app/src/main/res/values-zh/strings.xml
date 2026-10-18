@@ -408,4 +408,15 @@
     <string name="unsaved_changes_title">保存更改？</string>
     <string name="widget_locked_notice">打开 WriteOn 查看此笔记</string>
     <string name="nav_drawer_subtitle">%1$d 篇笔记</string>
+
+    <!-- Custom Font in Note -->
+    <string name="custom_font_title">便签自定义字体</string>
+    <string name="custom_font_desc">选择本地字体文件（.ttf / .otf）用于笔记正文显示。</string>
+    <string name="select_font_file">选择本地字体文件</string>
+    <string name="reset_default_font">恢复默认字体</string>
+    <string name="font_loaded_success">字体应用成功：%1$s</string>
+    <string name="font_load_failed">字体加载失败：%1$s</string>
+    <string name="font_reset_success">已恢复默认字体</string>
+    <string name="current_font_label">当前字体：%1$s</string>
+    <string name="default_font_name">系统默认</string>
 </resources>
