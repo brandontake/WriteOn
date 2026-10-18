@@ -2,8 +2,14 @@
 <appwidget-provider
     android:configure="com.ezpnix.writeon.widget.NotesWidgetActivity"
     xmlns:android="http://schemas.android.com/apk/res/android"
-    android:minHeight="50.dp"
-    android:minWidth="100.dp"
+    android:minHeight="60dp"
+    android:minWidth="80dp"
+    android:minResizeHeight="40dp"
+    android:minResizeWidth="60dp"
+    android:targetCellWidth="2"
+    android:targetCellHeight="2"
+    android:maxResizeHeight="600dp"
+    android:maxResizeWidth="600dp"
     android:resizeMode="horizontal|vertical"
     android:previewImage="@drawable/widget_preview_1"
     android:widgetCategory="home_screen">

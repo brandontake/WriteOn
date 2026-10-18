@@ -9,6 +9,7 @@ import androidx.glance.GlanceModifier
 import androidx.glance.GlanceTheme
 import androidx.glance.action.clickable
 import androidx.glance.appwidget.GlanceAppWidget
+import androidx.glance.appwidget.appWidgetBackground
 import androidx.glance.appwidget.cornerRadius
 import androidx.glance.appwidget.provideContent
 import androidx.glance.background
@@ -16,7 +17,9 @@ import androidx.glance.layout.Alignment
 import androidx.glance.layout.Row
 import androidx.glance.layout.fillMaxSize
 import androidx.glance.layout.height
+import androidx.glance.layout.padding
 import androidx.glance.layout.width
+import androidx.glance.text.FontWeight
 import androidx.glance.text.Text
 import androidx.glance.text.TextStyle
 import com.ezpnix.writeon.R
@@ -33,19 +36,20 @@ class AddNoteWidget : GlanceAppWidget() {
                 Row(
                     modifier = GlanceModifier
                         .fillMaxSize()
-                        .height(950.dp)
-                        .width(100.dp)
-                        .background(GlanceTheme.colors.primary)
+                        .appWidgetBackground()
+                        .background(GlanceTheme.colors.primaryContainer)
+                        .cornerRadius(24.dp)
                         .clickable { context.startActivity(intent) }
-                        .cornerRadius(90.dp),
+                        .padding(horizontal = 16.dp, vertical = 12.dp),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
                     Text(
                         text = context.getString(R.string.new_note),
                         style = TextStyle(
-                            fontSize = 16.sp,
-                            color = GlanceTheme.colors.background
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = GlanceTheme.colors.onPrimaryContainer
                         ),
                     )
                 }

@@ -1,3 +1,4 @@
+// WriteOn v1.10 Settings
 pluginManagement {
     repositories {
         google {

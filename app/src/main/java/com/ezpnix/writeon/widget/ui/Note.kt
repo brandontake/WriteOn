@@ -10,6 +10,8 @@ import androidx.glance.GlanceModifier
 import androidx.glance.GlanceTheme
 import androidx.glance.LocalContext
 import androidx.glance.action.clickable
+import androidx.glance.appwidget.appWidgetBackground
+import androidx.glance.appwidget.cornerRadius
 import androidx.glance.background
 import androidx.glance.layout.Column
 import androidx.glance.layout.fillMaxSize
@@ -59,9 +61,11 @@ fun SelectedNote(note: Note, noteUseCase: NoteUseCase, widgetId: Int) {
 
     Column(
         modifier = glanceModifier
-            .background(GlanceTheme.colors.background)
             .fillMaxSize()
-            .padding(12.dp)
+            .appWidgetBackground()
+            .background(GlanceTheme.colors.surface)
+            .cornerRadius(24.dp)
+            .padding(horizontal = 16.dp, vertical = 14.dp)
     ) {
         if (lockManager.anyLockEnabled()) {
             WidgetText(

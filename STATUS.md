@@ -18,6 +18,13 @@
 
 ## Done in v1.10
 - [x] **Bump version to v1.10** (`versionCode 11`, `versionName "1.10"`).
+- [x] **Modernized Desktop Widgets (Android 12+ & HyperOS).**
+  - Upgraded widget provider declarations (`notes.xml`, `add_note.xml`) with `targetCellWidth`/`targetCellHeight`, `minResizeWidth`/`minResizeHeight`, and `maxResizeWidth`/`maxResizeHeight` enabling free-form arbitrary resizing.
+  - Implemented 24dp rounded corners (`cornerRadius(24.dp)`) with `appWidgetBackground()` and Material 3 `surface`/`primaryContainer` background colors for seamless launcher card integration.
+  - Resolved `viewMode` persistence and isolation so placing or configuring widgets never alters the main app's list/grid layout.
+- [x] **Custom Font Selection & Navigation Flow.** Added interactive confirmation dialog upon font import, allowing users to return immediately to Home or remain in settings, ensuring imported typography takes effect smoothly.
+- [x] **Home Note Grid Initial Scroll Fix.** Enforced viewport to anchor at the top (`scrollToItem(0)`) upon initial notes loading or data-source hydration, preventing inverted or bottom-anchored offsets when notes are populated.
+- [x] **Synchronized GitHub Root Directory Tree Commits.** Updated CI workflow, build configurations, and catalog descriptors across root items (`.github`, `gradle`, `metadata`, `build.gradle.kts`, `settings.gradle.kts`) to ensure repository code view reflects the latest v1.10 releases.
 - [x] **Custom Font Lifecycle & Real-time Reactivity Fixed.** Managed via `NoteFontManager._fontState` reactive Compose state; custom typography now persists seamlessly across app navigation and configuration changes without reverting to default.
 - [x] **Audio Deletion & Garbage Collection.** Automatically cleans up referenced AAC recording files from `filesDir/audios/` when notes are permanently deleted from Trash, or when recordings are removed during note editing.
 - [x] **Last Modified Timestamp.** Added `updatedAt` tracking in `Note` entity with Room migration `MIGRATION_6_7`, displayed alongside creation date in note details modal.

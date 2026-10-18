@@ -469,4 +469,8 @@
     <string name="font_reset_success">Default font restored</string>
     <string name="current_font_label">Current font: %1$s</string>
     <string name="default_font_name">System Default</string>
+    <string name="font_applied_dialog_title">Font Applied</string>
+    <string name="font_applied_dialog_msg">Custom font \'%1$s\' has been applied! Would you like to return to Home now?</string>
+    <string name="return_to_home">Return to Home</string>
+    <string name="stay_here">Stay Here</string>
 </resources>

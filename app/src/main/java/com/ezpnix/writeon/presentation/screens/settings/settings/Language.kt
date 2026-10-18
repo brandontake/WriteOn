@@ -22,6 +22,9 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -48,6 +51,8 @@ import com.ezpnix.writeon.presentation.theme.NoteFontManager
 fun LanguageScreen(navController: NavController, settingsViewModel: SettingsViewModel) {
     val context = LocalContext.current
     var showFontSizeDialog by remember { mutableStateOf(false) }
+    var showFontAppliedDialog by remember { mutableStateOf(false) }
+    var newlyAppliedFontName by remember { mutableStateOf("") }
     var currentFontName by remember {
         mutableStateOf(NoteFontManager.getFontName(context) ?: context.getString(R.string.default_font_name))
     }
@@ -59,11 +64,8 @@ fun LanguageScreen(navController: NavController, settingsViewModel: SettingsView
             try {
                 val fontName = NoteFontManager.importFont(context, uri)
                 currentFontName = fontName
-                Toast.makeText(
-                    context,
-                    context.getString(R.string.font_loaded_success, fontName),
-                    Toast.LENGTH_SHORT
-                ).show()
+                newlyAppliedFontName = fontName
+                showFontAppliedDialog = true
             } catch (e: Exception) {
                 Toast.makeText(
                     context,
@@ -171,6 +173,31 @@ fun LanguageScreen(navController: NavController, settingsViewModel: SettingsView
                             .show()
                     }) {
                         Text(stringResource(id = R.string.save_and_exit))
+                    }
+                }
+            )
+        }
+
+        if (showFontAppliedDialog) {
+            AlertDialog(
+                onDismissRequest = { showFontAppliedDialog = false },
+                title = { Text(stringResource(R.string.font_applied_dialog_title)) },
+                text = { Text(stringResource(R.string.font_applied_dialog_msg, newlyAppliedFontName)) },
+                confirmButton = {
+                    TextButton(
+                        onClick = {
+                            showFontAppliedDialog = false
+                            navController.popBackStack(NavRoutes.Home.route, false)
+                        }
+                    ) {
+                        Text(stringResource(R.string.return_to_home))
+                    }
+                },
+                dismissButton = {
+                    TextButton(
+                        onClick = { showFontAppliedDialog = false }
+                    ) {
+                        Text(stringResource(R.string.stay_here))
                     }
                 }
             )

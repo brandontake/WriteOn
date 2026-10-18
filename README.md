@@ -48,7 +48,7 @@ foreground services, and only the permissions the features actually need.
 - Home-screen widgets honour the app lock — with a lock configured they show a placeholder instead of note text
 
 **Extras**
-- Home-screen widgets (quick add + note list), built-in calendar, calculator, scratchpad and flashcards
+- Adaptive Material 3 & HyperOS home-screen widgets (free-form resizing with 24dp rounded corners, quick add + note preview), built-in calendar, calculator, scratchpad and dynamic-themed flashcards
 - Save a note as an image, export to TXT/Markdown, and local backup / restore (with an optional password)
 
 ---

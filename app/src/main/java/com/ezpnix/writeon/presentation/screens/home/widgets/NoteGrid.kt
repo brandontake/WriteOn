@@ -74,6 +74,16 @@ fun NotesGrid(
     // screen, instead of snapping back to the first note every time the grid comes back.
     val gridState = rememberLazyStaggeredGridState()
 
+    // When notes are first populated from the database or after a filter/mode change,
+    // ensure the viewport starts at the top (index 0) rather than an arbitrary inverted offset.
+    var hasScrolledToTopInitially by remember { mutableStateOf(false) }
+    LaunchedEffect(notes.isNotEmpty()) {
+        if (notes.isNotEmpty() && !hasScrolledToTopInitially) {
+            hasScrolledToTopInitially = true
+            gridState.scrollToItem(0)
+        }
+    }
+
     // A note row with pin/trash actions that slide out from behind the card on a
     // left swipe. Only the card's x offset animates, so staggered grid measurements
     // never change; the actions row is painted underneath and revealed by the offset.

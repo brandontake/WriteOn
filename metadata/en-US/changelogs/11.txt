@@ -1,0 +1,8 @@
+v1.10 - Material 3 Redesign, Custom Fonts, Audio Memos & Modern Widgets:
+- Refined Material 3 UI across Home, Settings, Navigation Drawer, and Dialogs.
+- Custom note fonts (.ttf/.otf) with live sync to notes, editor, and exported long images.
+- In-note voice recording with embedded audio player and zero-size-bloat architecture.
+- Full multi-attribute note sorting (Creation date, Last modified date, Title) and Order switch.
+- Adaptive modern home-screen widgets (Android 12+ / HyperOS 24dp rounded corners, resizable).
+- App Shortcut for quick note creation.
+- Seamless predictive back gestures and system dark/light theme alignment.
