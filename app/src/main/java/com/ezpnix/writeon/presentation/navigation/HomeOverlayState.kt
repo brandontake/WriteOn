@@ -5,17 +5,25 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 
 /**
- * Whether the home screen currently has a full screen overlay open (the expanded quick action bar
- * and its dimmed backdrop).
+ * Whether the home screen currently owns the back gesture: the expanded quick action bar with its
+ * dimmed backdrop, and/or a set of selected notes.
  *
  * This lives outside the home composable because a system back *gesture* is not delivered to the
- * regular `BackHandler` that [com.ezpnix.writeon.presentation.screens.home.HomeView] installs. The
- * gesture goes to whichever `PredictiveBackHandler` was registered last, and at the home
- * destination the navigation library owns that one — so with the bar expanded, a swipe fell through
- * to the root destination and finished the activity instead of collapsing the overlay.
+ * regular `BackHandler`s that [com.ezpnix.writeon.presentation.screens.home.HomeView] installs — it
+ * is delivered to the activity's `OnBackPressedDispatcher`, which runs the *last* registered
+ * enabled callback. At the home destination the navigation library owns that one, and its
+ * `popBackStack()` returns false at the root, so a swipe with the bar expanded used to do nothing
+ * at all.
  *
- * Hoisting the flag lets PredictiveBackHost, which is composed after the navigation content and
- * therefore wins the gesture, collapse the overlay first and only then navigate back.
+ * The flag has two readers, and they exist for different reasons:
+ *  * [overlayBackHandler] actually collapses/clears the overlay. It registers when the overlay
+ *    opens, which is by definition after every composition-time registration, so it wins the
+ *    ordering on its own and does not need this flag.
+ *  * [PredictiveBackHost] uses it to keep its own handler *disabled* while the home screen owns the
+ *    gesture, so the two handlers can never both act on a single swipe.
+ *
+ * The name is kept from when this flag was the only mechanism, but it now means "back gesture is
+ * owned by the home screen" rather than "the quick action bar is expanded".
  */
 object HomeOverlayState {
 

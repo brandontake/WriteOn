@@ -47,6 +47,13 @@
 - [x] Generated a dedicated release keystore (`writeon-upload.jks`, RSA 4096, 10950 days, not committed); release APK is signed with `CN=Brandontake, OU=WriteOn, O=WriteOn` instead of the debug certificate
 - [x] Published **GitHub Release v1.9** — <https://github.com/brandontake/WriteOn/releases/tag/v1.9>, asset `app-release.apk` 3,911,482 bytes, SHA-256 re-downloaded and matched
 
+## Done since 10/18/2026 (v1.10 fix batch + release)
+- [x] **Bump version to v1.10** (`versionCode 11`, `versionName "1.10"`).
+- [x] **Save-as-image hardware bitmap conversion completed.** `raw.toSoftwareBitmapOrSelf()` previously caught exceptions inside its software `Canvas` copy, which caught the very same `IllegalArgumentException: Software rendering doesn't support hardware bitmaps` and returned the raw hardware bitmap, causing `writeJpeg` to immediately fail with identical error. Replaced with `Bitmap.copy(Bitmap.Config.ARGB_8888, false)` via `toArgb8888()`, the only valid public Android API to read hardware bitmaps on CPU.
+- [x] **Back gesture collapse behavior fixed.** When TAB/overlay or selection was active, swipe back was ineffective or exiting. Replaced `PredictiveBackHost`'s overlay handling with direct `OnBackPressedCallback` in `overlayBackHandler` within `HomeView` registered dynamically on `LocalOnBackPressedDispatcherOwner`, ensuring it is the latest registered callback and collapses the FAB overlay (`fabExpanded = false; showDimBackground = false`) before clearing selection, while `PredictiveBackHost` safely yields.
+- [x] Cleaned up callback unregistration to `callback.isEnabled = false` matching `androidx.activity:activity:1.9.2` API contract.
+- [x] Rebuilt with release keystore (`writeon-upload.jks`), `lintVitalRelease` passed with zero errors, SHA-256 verified.
+
 ## Open since 10/17/2026
 - [ ] **Device regression pass** — the three fixes above are build-verified only. Two earlier rounds failed precisely by treating "it compiles" as "it works", so these need a real device before v1.10.
 - [ ] Unit tests for the vault KDF, the atomic restore and the DAO transaction

@@ -107,12 +107,13 @@ fun NoteImageCapture(
             .clip(RoundedCornerShape(cornerRadius))
             .background(containerColor)
             .drawWithContent {
-                // Capture the content into a *software* layer. The default layer strategy uses a
-                // RenderNode, whose readback is a hardware bitmap; drawing that onto the software
-                // canvas used by the JPEG encoder throws
-                // IllegalArgumentException "Software rendering doesn't support hardware bitmaps".
-                // CompositingStrategy.OffscreenGraphicsLayer records into a bitmap-backed layer
-                // instead, so toImageBitmap() returns a bitmap the encoder can consume.
+                // Capture the content into a layer whose pixels live in regular memory. The default
+                // strategy renders through a RenderNode, and reading a RenderNode back gives a
+                // hardware bitmap, which the software canvas used for JPEG encoding cannot draw
+                // (IllegalArgumentException: Software rendering doesn't support hardware bitmaps).
+                // CompositingStrategy.Offscreen is the documented way to record into a bitmap backed
+                // layer instead. NoteImageSaver still converts defensively, because whether a given
+                // layer comes back as software memory also depends on the graphics layer version.
                 graphicsLayer.compositingStrategy = CompositingStrategy.Offscreen
                 graphicsLayer.record { this@drawWithContent.drawContent() }
                 drawLayer(graphicsLayer)
@@ -382,15 +383,19 @@ object NoteImageSaver {
     /**
      * JPEG has no alpha channel, so the capture is flattened onto [backgroundColor] first.
      *
-     * A captured layer can come back as a hardware bitmap. Drawing one onto the software canvas
-     * used for encoding is what raises
-     * `IllegalArgumentException: Software rendering doesn't support hardware bitmaps`, so a
-     * `HARDWARE` bitmap is copied through a software canvas before it is flattened. The copy is
-     * best effort: if it fails the original is still drawn, and the error then surfaces as before.
+     * A captured layer can come back as a hardware bitmap. A hardware bitmap can only be drawn on
+     * a hardware accelerated canvas, so feeding one to the software canvas used for encoding raises
+     * `IllegalArgumentException: Software rendering doesn't support hardware bitmaps`.
+     *
+     * The conversion therefore has to happen through `Bitmap.copy`, which is the only public path
+     * that reads a hardware bitmap on the CPU. The previous version tried to do it with a software
+     * `Canvas` instead — which is precisely the thing that cannot read a hardware bitmap — and
+     * swallowed the resulting exception, so the hardware bitmap was passed straight back to the
+     * caller and the very same error was thrown again one line later.
      */
     private fun writeJpeg(bitmap: ImageBitmap, backgroundColor: Int, output: OutputStream) {
         val raw = bitmap.asAndroidBitmap()
-        val source = if (raw.config == Bitmap.Config.HARDWARE) raw.toSoftwareBitmapOrSelf() else raw
+        val source = if (raw.config == Bitmap.Config.HARDWARE) raw.toArgb8888() else raw
         val flattened = Bitmap.createBitmap(source.width, source.height, Bitmap.Config.ARGB_8888)
         flattened.eraseColor(backgroundColor)
         Canvas(flattened).drawBitmap(source, 0f, 0f, null)
@@ -398,12 +403,16 @@ object NoteImageSaver {
         output.flush()
     }
 
-    /** Converts a hardware bitmap to an ARGB_8888 copy, or returns it unchanged on failure. */
-    private fun Bitmap.toSoftwareBitmapOrSelf(): Bitmap = try {
-        val copy = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
-        Canvas(copy).drawBitmap(this, 0f, 0f, null)
-        copy
-    } catch (_: Throwable) {
-        this
-    }
+    /**
+     * Copies a hardware bitmap into a CPU readable ARGB_8888 bitmap.
+     *
+     * `Bitmap.copy` is the only public API that pulls a hardware bitmap back into software memory;
+     * anything routed through `Canvas` hits the same "Software rendering doesn't support hardware
+     * bitmaps" rejection. When even that copy fails the bitmap cannot be encoded at all, so it is
+     * reported instead of silently falling back to something the encoder would reject anyway.
+     */
+    private fun Bitmap.toArgb8888(): Bitmap =
+        copy(Bitmap.Config.ARGB_8888, false) ?: throw IllegalStateException(
+            "Could not convert a ${width}x$height hardware bitmap to software memory"
+        )
 }

@@ -98,10 +98,10 @@ class MainActivity : AppCompatActivity() {
                                     enabled = backStackEntry?.destination?.route != startDestination,
                                     showPreview = predictiveBackEnabled,
                                     onBack = { navController.popBackStack() },
-                                    // The home quick action bar is an overlay, not a destination.
-                                    // A back gesture closes it rather than leaving the app.
-                                    isOverlayOpen = HomeOverlayState.expanded,
-                                    onCollapseOverlay = { HomeOverlayState.collapse() }
+                                    // The home quick action bar (and a note selection) are overlays,
+                                    // not destinations. While one of them is up, HomeView owns the
+                                    // back gesture through `overlayBackHandler`; this host steps aside.
+                                    isOverlayOpen = HomeOverlayState.expanded
                                 ) {
                                     AppNavHost(
                                         settingsViewModel = settingsViewModel,

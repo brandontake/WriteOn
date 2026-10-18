@@ -175,16 +175,31 @@ fun HomeView(
         fabExpanded = false
         showDimBackground = false
     }
-    // A back *gesture* never reaches the two BackHandlers above, and the activity level host
-    // registers its handler before the navigation library's, so the swipe used to fall through to
-    // NavHost and finish the activity at the root route. This handler is composed here, inside the
-    // screen that owns the overlay, so it is the deepest and therefore last registered: it is the
-    // callback that runs. HomeOverlayState keeps PredictiveBackHost.isOverlayOpen in sync, which
-    // disables the activity level handler for exactly as long as this one is active.
-    LaunchedEffect(fabExpanded) { HomeOverlayState.publish(fabExpanded) }
-    overlayBackHandler(enabled = fabExpanded && viewModel.selectedNotes.isEmpty()) {
-        fabExpanded = false
-        showDimBackground = false
+    // A back *gesture* never reaches the two BackHandlers above: predictive back dispatches to the
+    // activity's OnBackPressedDispatcher, and `BackHandler` only ever sees the hardware back button.
+    // At the root destination the navigation callback's popBackStack() returns false, so without a
+    // gesture handler the swipe does nothing at all.
+    //
+    // `overlayBackHandler` registers on that dispatcher only while this condition holds, i.e. when
+    // the overlay actually opens — long after the navigation host composed — so it is the last
+    // registered callback and therefore the one the dispatcher runs.
+    //
+    // The condition deliberately covers note selection too, and mirrors the priority the two
+    // BackHandlers above establish: the expanded FAB is the topmost modal, so it collapses first;
+    // only when it is already closed does back leave the selection. HomeOverlayState is published
+    // with the same value, which keeps PredictiveBackHost's own handler disabled for exactly as
+    // long as this one is active, so no two handlers can act on a single swipe.
+    val overlayOwnsBack = fabExpanded || viewModel.selectedNotes.isNotEmpty()
+    LaunchedEffect(overlayOwnsBack) {
+        HomeOverlayState.publish(overlayOwnsBack)
+    }
+    overlayBackHandler(enabled = overlayOwnsBack) {
+        if (fabExpanded) {
+            fabExpanded = false
+            showDimBackground = false
+        } else {
+            viewModel.selectedNotes.clear()
+        }
     }
     DisposableEffect(Unit) {
         // Leaving the home screen (navigating into settings, the editor, ...) must not leave the
