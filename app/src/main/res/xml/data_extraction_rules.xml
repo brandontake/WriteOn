@@ -9,10 +9,15 @@
         <exclude domain="database" path="note-list.db" />
         <exclude domain="database" path="note-list.db-wal" />
         <exclude domain="database" path="note-list.db-shm" />
+        <!-- The database is excluded above, so restored recordings would arrive with no note
+             pointing at them. Leaving them out also keeps the backup small, since voice memos
+             dominate it. -->
+        <exclude domain="file" path="audios/" />
     </cloud-backup>
     <device-transfer>
         <exclude domain="database" path="note-list.db" />
         <exclude domain="database" path="note-list.db-wal" />
         <exclude domain="database" path="note-list.db-shm" />
+        <exclude domain="file" path="audios/" />
     </device-transfer>
 </data-extraction-rules>

@@ -55,13 +55,26 @@ foreground services, and only the permissions the features actually need.
 
 ## 🔒 Privacy & permissions
 
-- **No runtime permission prompts.** The app never asks for storage, notification or location access at runtime; the notification permission is only declared so that a user who grants it in system settings can pin a note to the notification shade.
+- **Permissions are requested only when they are needed.** Nothing is asked at launch. The microphone permission is requested the first time a recording is inserted into a note, and the notification permission only when a note is pinned to the shade; both are optional and the feature degrades instead of crashing when they are denied. No storage, location or network-state access is ever requested.
 - **Everything stays on the device.** Note data lives in a local database; the optional cloud backup is a user-configured WebDAV target and nothing is uploaded anywhere by default.
 - **Encrypted at rest.** When encryption is enabled, note titles and bodies are sealed with a per-device Keystore key. The note id, pin flag, timestamps and tags stay readable so that ordering, pinning and the tag filter keep working without extra queries — which also means **a database file copied off the device without "Export backup" cannot be read back**.
 - **Backups are replaced atomically.** A restore stages the new database next to the live one, verifies its SQLite header, renames it into place and keeps the previous file as `.bak`. An interrupted or corrupt restore leaves the existing notes intact instead of deleting them.
 - **Archive entries cannot escape the target directory.** Backup archives are extracted through a canonical-path check, so an entry named `../../databases/note-list.db` is rejected rather than written.
 - **Locked means locked.** With an app lock configured, the home-screen widgets render a "open the app to view this note" placeholder instead of note text, and pinned-note notifications are marked private.
 - **Permanent deletion asks first.** Removing notes from the recycle bin — in bulk or via long-press — is confirmed in a dialog.
+
+---
+
+## 🔋 Battery and memory
+
+The app is deliberately quiet when it is not on screen. A full audit of the v1.10 sources turned up four things that broke that rule, and all of them are fixed:
+
+- **Audio playback** used to repaint the player card ten times a second and kept a main-looper ticker alive even after a stream failed to open. The ticker now runs at 4 Hz, stops on error or completion, and releases the codec instead of holding it. Playback still requires the app to stay open — there is no background media service, so nothing keeps the device awake once you leave.
+- **Recording** released the microphone on every exit path. An exception thrown by `MediaRecorder.stop()` — which is what happens when a recording is too short — used to skip `release()`, leaving the mic open and the privacy indicator lit until the process died.
+- **The recorder dialog** drove an endless pulse animation while it was idle, so the screen was repainted every frame for as long as it was open.
+- **Desktop widgets** declare no `updatePeriodMillis`, so the launcher never wakes the app on a timer; widgets refresh when the note data changes.
+
+Memory is bounded rather than proportional to the note: exporting a note to a picture is clamped to an 8 MP budget (about 32 MB) and every intermediate bitmap is recycled, so the user with the longest note no longer runs out of heap. Recording is 64 kbps mono — roughly 7 MB per hour of audio.
 
 ---
 

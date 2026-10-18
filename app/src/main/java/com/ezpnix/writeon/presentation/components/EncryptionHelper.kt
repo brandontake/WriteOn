@@ -42,7 +42,18 @@ class EncryptionHelper(private val mutableVaultPassword: StringBuilder) {
         derivedKeys.clear()
     }
 
+    /**
+     * Seals [data] with the currently loaded vault passphrase.
+     *
+     * Fails fast when no passphrase is loaded. Encrypting with an empty passphrase used to succeed
+     * silently and produce a value [decrypt] can never read back, because every read short-circuits
+     * to [DecryptionResult.LOADING] while the vault is empty - the note simply vanished from the
+     * list. Callers must check [isPasswordEmpty] first and keep the note in plain text instead.
+     */
     fun encrypt(data: String): String {
+        check(!mutableVaultPassword.isEmpty()) {
+            "Refusing to encrypt with an empty vault passphrase"
+        }
         val salt = newSalt()
         val secretKey = deriveKey(mutableVaultPassword.toString(), salt)
         val cipher = Cipher.getInstance("AES/GCM/NoPadding")

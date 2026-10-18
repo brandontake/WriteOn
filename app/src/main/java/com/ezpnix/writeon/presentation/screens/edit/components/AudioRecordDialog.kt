@@ -137,16 +137,24 @@ fun AudioRecordDialog(
         return String.format(Locale.getDefault(), "%02d:%02d", m, s)
     }
 
-    val infiniteTransition = rememberInfiniteTransition(label = "pulse")
-    val pulseScale by infiniteTransition.animateFloat(
-        initialValue = 1f,
-        targetValue = if (isRecording) 1.25f else 1f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(800),
-            repeatMode = RepeatMode.Reverse
-        ),
-        label = "pulseScale"
-    )
+    // Only run the pulse while a recording is in flight. rememberInfiniteTransition keeps asking for
+    // frames for as long as it is composed - even when its target equals its initial value - so the
+    // previous version invalidated this dialog at display refresh rate the entire time it was open.
+    val pulseScale = if (isRecording) {
+        val infiniteTransition = rememberInfiniteTransition(label = "pulse")
+        val animated by infiniteTransition.animateFloat(
+            initialValue = 1f,
+            targetValue = 1.25f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(800),
+                repeatMode = RepeatMode.Reverse
+            ),
+            label = "pulseScale"
+        )
+        animated
+    } else {
+        1f
+    }
 
     BasicAlertDialog(
         onDismissRequest = {

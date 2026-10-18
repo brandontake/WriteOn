@@ -175,7 +175,11 @@ class SettingsViewModel @Inject constructor(
 
         WorkManager.getInstance(context).enqueueUniquePeriodicWork(
             "AutoBackup",
-            ExistingPeriodicWorkPolicy.REPLACE,
+            // KEEP, not REPLACE. This runs on every SettingsModel construction and after every
+            // settings change, and REPLACE cancels and re-creates the work each time - so the one
+            // day period restarted long before it could elapse and the automatic backup never
+            // actually fired. It also wrote to the WorkManager database on every toggle.
+            ExistingPeriodicWorkPolicy.KEEP,
             backupRequest
         )
     }

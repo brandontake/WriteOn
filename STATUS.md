@@ -47,6 +47,20 @@
 - [x] Cleaned up callback unregistration to `callback.isEnabled = false` matching `androidx.activity:activity:1.9.2` API contract.
 - [x] Rebuilt with release keystore (`writeon-upload.jks`), `lintVitalRelease` passed with zero errors, SHA-256 verified.
 
+## v1.10 Security & Performance Hardening (Audit Pass)
+- [x] **Battery: audio progress ticker 10 Hz → 4 Hz.** `GlobalAudioPlayer` posts every 250 ms (`PROGRESS_INTERVAL_MS`), so the playing `AudioPlayerCard` recomposes roughly four times per second instead of ten, and `currentPositionMs` / `durationMs` use `mutableIntStateOf` to avoid a boxed value on every tick.
+- [x] **Battery: runaway audio ticker after a playback error.** Added `MediaPlayer.setOnErrorListener`; a failed stream used to leave `isPlaying` true, so the main-looper ticker re-posted itself forever. Completion now stops immediately as well, releasing the codec and native buffers.
+- [x] **Privacy + battery: MediaRecorder leaked with the microphone open.** `stopRecording()` and `cancelRecording()` now always `reset()` + `release()`; previously an exception from `stop()` (recording too short) skipped `release()`, leaving the mic hot and the privacy indicator lit. Recording is 64 kbps mono instead of 128 kbps stereo, and filenames carry milliseconds so two takes in the same second no longer overwrite each other.
+- [x] **Battery: infinite pulse animation in the recorder dialog.** The ripple drove an `infiniteRepeatable` transition even when idle, forcing a redraw every frame for as long as the dialog was open; it is now only composed while recording.
+- [x] **Memory: unbounded image export.** The capture is clamped to `MAX_EXPORT_PIXELS` (8 MP ≈ 32 MB), `writeJpeg` downscales defensively, and both the ARGB_8888 copy and the flatten buffer are recycled. A long note used to need 1080 × 100000 × 4 B twice over.
+- [x] **Persistence: tags wiped and edits lost on save.** `EditModel.saveNote` re-reads the row when the database flow has not emitted yet, instead of writing `tags = emptyList()` over the stored ones; erasing every character of an existing note is now persisted instead of leaving the old text behind; the dead `isPinned` comparison was removed.
+- [x] **Security: vault encryption with an empty passphrase.** `EncryptionHelper.encrypt` is guarded by `check`, and `NoteUseCase.encryptNote` refuses to store ciphertext when no passphrase is set — such a note could never be decrypted and would silently disappear from the list. The widget path (`NoteCrypto` + `EncryptedNoteDao`) is untouched.
+- [x] **Crash: `Flow.first()` on a missing row.** `updatePinStatus`, `deleteNoteById`, `permanentlyDeleteNoteById` and `addTagToNote` now use `firstOrNull() ?: return`; a stale note id used to throw `NoSuchElementException` inside `viewModelScope` and kill the process.
+- [x] **Persistence: automatic backup never ran.** `ExistingPeriodicWorkPolicy.REPLACE` → `KEEP`; the scheduler is re-invoked on every settings change, so the one-day periodic job was cancelled and re-queued before it could ever fire.
+- [x] **Sync: duplicated WebDAV jobs.** Backup and restore share the unique work name `WebDAVSync` with `ExistingWorkPolicy.KEEP`, so a restore can no longer race a backup that is still reading the database, and a double tap cannot enqueue two uploads.
+- [x] **Privacy: Android Auto Backup pulled in recordings.** `<application>` now declares `android:fullBackupContent="@xml/backup_rules"` (the file existed but was never referenced) and both rule sets exclude `audios/`, matching the already-excluded databases.
+- [x] **Verified as already sound.** Widgets declare no `updatePeriodMillis`, so the launcher never wakes the app periodically; the lock-out countdown loops exit as soon as the deadline passes; the navigation drawer exposes a `contentDescription` on every icon button and relies on row labels for the drawer items themselves.
+
 ## Open / Future
 - [ ] Unit tests for the vault KDF, the atomic restore and the DAO transaction
 - [ ] detekt / ktlint / CI gating

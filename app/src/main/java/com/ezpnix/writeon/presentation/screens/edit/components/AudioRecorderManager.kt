@@ -22,7 +22,7 @@ class AudioRecorderManager(private val context: Context) {
             val audioDir = File(context.filesDir, "audios").apply {
                 if (!exists()) mkdirs()
             }
-            val timeStamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
+            val timeStamp = SimpleDateFormat("yyyyMMdd_HHmmss_SSS", Locale.getDefault()).format(Date())
             val file = File(audioDir, "REC_$timeStamp.m4a")
             currentOutputFile = file
 
@@ -37,8 +37,11 @@ class AudioRecorderManager(private val context: Context) {
                 setAudioSource(MediaRecorder.AudioSource.MIC)
                 setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
                 setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
-                setAudioEncodingBitRate(128000)
+                // 64 kbps mono is transparent for speech and halves both the stored file and the
+                // encoder work compared with the previous 128 kbps stereo-capable profile.
+                setAudioEncodingBitRate(64000)
                 setAudioSamplingRate(44100)
+                setAudioChannels(1)
                 setOutputFile(file.absolutePath)
                 prepare()
                 start()
@@ -57,40 +60,55 @@ class AudioRecorderManager(private val context: Context) {
     fun stopRecording(): File? {
         if (!isRecording) return null
         val file = currentOutputFile
-        try {
-            recorder?.apply {
-                stop()
-                reset()
-                release()
-            }
-        } catch (e: Exception) {
-            Log.e("AudioRecorderManager", "Error stopping recorder", e)
+        val active = recorder
+        recorder = null
+        isRecording = false
+        currentOutputFile = null
+
+        if (active == null) {
             file?.delete()
             return null
-        } finally {
-            recorder = null
-            isRecording = false
-            currentOutputFile = null
+        }
+
+        // stop() throws when the clip is too short to contain a single frame, which is what happens
+        // every time somebody taps record and then stop immediately. reset() and release() used to
+        // share that try block, so the common case skipped both and leaked the MediaRecorder while
+        // leaving the microphone open - the privacy indicator stayed lit and the capture session
+        // kept holding the audio hardware until the process died.
+        var hasAudio = true
+        try {
+            active.stop()
+        } catch (e: Exception) {
+            Log.e("AudioRecorderManager", "Error stopping recorder", e)
+            hasAudio = false
+        }
+        runCatching { active.reset() }
+            .onFailure { Log.e("AudioRecorderManager", "Error resetting recorder", it) }
+        runCatching { active.release() }
+            .onFailure { Log.e("AudioRecorderManager", "Error releasing recorder", it) }
+
+        if (!hasAudio) {
+            file?.delete()
+            return null
         }
         return file
     }
 
     fun cancelRecording() {
-        if (isRecording) {
-            try {
-                recorder?.apply {
-                    reset()
-                    release()
-                }
-            } catch (e: Exception) {
-                Log.e("AudioRecorderManager", "Error cancelling recorder", e)
-            } finally {
-                recorder = null
-                isRecording = false
-                currentOutputFile?.delete()
-                currentOutputFile = null
-            }
-        }
+        val active = recorder
+        recorder = null
+        isRecording = false
+        val discarded = currentOutputFile
+        currentOutputFile = null
+        discarded?.delete()
+        if (active == null) return
+
+        // Same shape as stopRecording: reset() can throw on a recorder that is already in the error
+        // state, and it used to take release() down with it, leaving the microphone capturing.
+        runCatching { active.reset() }
+            .onFailure { Log.e("AudioRecorderManager", "Error resetting recorder", it) }
+        runCatching { active.release() }
+            .onFailure { Log.e("AudioRecorderManager", "Error releasing recorder", it) }
     }
 
     private fun cleanup() {

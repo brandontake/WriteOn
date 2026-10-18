@@ -18,6 +18,7 @@ import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import javax.inject.Inject
@@ -101,15 +102,18 @@ class NoteUseCase @Inject constructor(
     }
 
     private fun encryptNote(note: Note): Note {
-        return if (note.encrypted) {
-            note.copy(
-                name = encryptionHelper.encrypt(note.name),
-                description = encryptionHelper.encrypt(note.description),
-                encrypted = true
-            )
-        } else {
-            note
-        }
+        if (!note.encrypted) return note
+        // Without a loaded vault passphrase, sealing the text would write ciphertext under an empty
+        // key. EncryptionHelper.decrypt short-circuits to LOADING while the vault is empty, so that
+        // note could never be read again and would silently drop out of the list. Keeping the text
+        // in plain sight is recoverable; losing it is not. This path is only reached from the note
+        // editor and never from the widget, which reads through NoteCrypto instead.
+        if (encryptionHelper.isPasswordEmpty()) return note.copy(encrypted = false)
+        return note.copy(
+            name = encryptionHelper.encrypt(note.name),
+            description = encryptionHelper.encrypt(note.description),
+            encrypted = true
+        )
     }
 
     private fun decryptNote(note: Note): Pair<Note, DecryptionResult> {
@@ -168,7 +172,7 @@ class NoteUseCase @Inject constructor(
     suspend fun addTagToNote(noteId: Int, tag: String) {
         val trimmedTag = tag.trim().lowercase()
         if (trimmedTag.isNotBlank()) {
-            val note = noteRepository.getNoteById(noteId).first()
+            val note = noteRepository.getNoteById(noteId).firstOrNull() ?: return
             if (trimmedTag !in note.tags.map { it.lowercase() }) {
                 val updatedNote = note.copy(tags = note.tags + trimmedTag)
                 noteRepository.updateNote(updatedNote)
@@ -212,7 +216,7 @@ class NoteUseCase @Inject constructor(
 
     fun deleteNoteById(id: Int) {
         coroutineScope.launch(NonCancellable + Dispatchers.IO) {
-            val noteToDelete = noteRepository.getNoteById(id).first()
+            val noteToDelete = noteRepository.getNoteById(id).firstOrNull() ?: return@launch
             deleteAssociatedAudios(noteToDelete)
             noteRepository.deleteNote(noteToDelete)
         }
@@ -232,7 +236,11 @@ class NoteUseCase @Inject constructor(
     }
 
     suspend fun updatePinStatus(noteId: Int, pinned: Boolean) {
-        val noteToUpdate = noteRepository.getNoteById(noteId).first()
+        // Tolerate a missing row: the editor pins through toggleNotePin, and for a note that has not
+        // been inserted yet the id is still 0. Flow.first() on an absent row throws
+        // NoSuchElementException, which escaped an uncaught viewModelScope coroutine and killed the
+        // process while the user was still typing.
+        val noteToUpdate = noteRepository.getNoteById(noteId).firstOrNull() ?: return
         val updatedNote = noteToUpdate.copy(pinned = pinned)
         noteRepository.updateNote(updatedNote)
     }
@@ -253,7 +261,7 @@ class NoteUseCase @Inject constructor(
 
     fun permanentlyDeleteNoteById(id: Int) {
         coroutineScope.launch(NonCancellable + Dispatchers.IO) {
-            val noteToDelete = noteRepository.getNoteById(id).first()
+            val noteToDelete = noteRepository.getNoteById(id).firstOrNull() ?: return@launch
             deleteAssociatedAudios(noteToDelete)
             noteRepository.deleteNote(noteToDelete)
         }

@@ -4,6 +4,7 @@ import android.content.ContentValues
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Canvas
+import android.graphics.Rect
 import android.media.MediaScannerConnection
 import android.os.Build
 import android.os.Environment
@@ -62,6 +63,7 @@ import java.io.OutputStream
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlin.math.sqrt
 
 /** Logical width of the exported picture; the physical size follows the device density. */
 private val EXPORT_WIDTH = 360.dp
@@ -72,6 +74,17 @@ private const val CAPTURE_FRAMES = 3
 
 /** Far enough off screen that the capture is never visible, while still being drawn. */
 private const val OFF_SCREEN_X = -200_000
+
+/**
+ * Upper bound on the area of an exported bitmap, in pixels.
+ *
+ * The capture is laid out at the note's natural height, so a very long note produced a bitmap of
+ * unbounded size and [writeJpeg] then allocated a second, identical copy to flatten the background.
+ * At 360 dp wide on a 3x screen the picture is 1080 px across, so a note a hundred screens long
+ * would need roughly 1080 x 100000 x 4 bytes twice over - a guaranteed out of memory crash on the
+ * user with the longest note. Eight million pixels is about 32 MB per ARGB_8888 copy.
+ */
+private const val MAX_EXPORT_PIXELS = 8_000_000L
 
 /**
  * Renders a note exactly the way the preview shows it and records it into an [ImageBitmap].
@@ -219,14 +232,21 @@ fun NoteImageSaveHost(
         modifier = Modifier.layout { measurable, constraints ->
             // `Constraints()` resolves to minWidth = maxWidth = minHeight = maxHeight = 0, which
             // measured the capture into a 0 x 0 node: the bitmap was empty and every later step
-            // failed. The capture is laid out at its own natural height, so it is measured with
-            // unbounded height and the width this host is given, then reported as a zero sized node
-            // placed off screen so the real UI never moves.
+            // failed. The capture is laid out at its own natural height, so it is measured with the
+            // width this host is given and a height bounded by MAX_EXPORT_PIXELS, then reported as a
+            // zero sized node placed off screen so the real UI never moves. Passing
+            // Constraints.Infinity here, as this used to, let the bitmap grow without limit.
+            val widthPx = constraints.maxWidth
+                .takeIf { it != Constraints.Infinity && it > 0 }
+                ?: EXPORT_WIDTH.roundToPx()
+            val maxHeightPx = (MAX_EXPORT_PIXELS / widthPx.coerceAtLeast(1))
+                .toInt()
+                .coerceAtLeast(1)
             val placeable = measurable.measure(
                 constraints.copy(
                     minWidth = 0,
                     minHeight = 0,
-                    maxHeight = Constraints.Infinity
+                    maxHeight = maxHeightPx
                 )
             )
             layout(0, 0) { placeable.place(IntOffset(OFF_SCREEN_X, 0)) }
@@ -402,11 +422,28 @@ object NoteImageSaver {
     private fun writeJpeg(bitmap: ImageBitmap, backgroundColor: Int, output: OutputStream) {
         val raw = bitmap.asAndroidBitmap()
         val source = if (raw.config == Bitmap.Config.HARDWARE) raw.toArgb8888() else raw
-        val flattened = Bitmap.createBitmap(source.width, source.height, Bitmap.Config.ARGB_8888)
-        flattened.eraseColor(backgroundColor)
-        Canvas(flattened).drawBitmap(source, 0f, 0f, null)
-        flattened.compress(Bitmap.CompressFormat.JPEG, JPEG_QUALITY, output)
-        output.flush()
+        // Last line of defence for the heap. The capture is already clamped to MAX_EXPORT_PIXELS,
+        // but an unusual density must still not turn into an OOM inside createBitmap.
+        val pixels = source.width.toLong() * source.height.toLong()
+        val scale = if (pixels > MAX_EXPORT_PIXELS) {
+            sqrt(MAX_EXPORT_PIXELS.toDouble() / pixels.toDouble()).toFloat()
+        } else {
+            1f
+        }
+        val targetWidth = (source.width * scale).toInt().coerceAtLeast(1)
+        val targetHeight = (source.height * scale).toInt().coerceAtLeast(1)
+        val flattened = Bitmap.createBitmap(targetWidth, targetHeight, Bitmap.Config.ARGB_8888)
+        try {
+            flattened.eraseColor(backgroundColor)
+            Canvas(flattened).drawBitmap(source, null, Rect(0, 0, targetWidth, targetHeight), null)
+            // Recycle the CPU copy straight away: it is only needed to feed the encoder, and an
+            // exported picture can be tens of megabytes.
+            if (source !== raw) source.recycle()
+            flattened.compress(Bitmap.CompressFormat.JPEG, JPEG_QUALITY, output)
+            output.flush()
+        } finally {
+            flattened.recycle()
+        }
     }
 
     /**

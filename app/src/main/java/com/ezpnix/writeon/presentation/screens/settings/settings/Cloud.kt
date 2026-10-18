@@ -52,6 +52,7 @@ import androidx.compose.ui.window.DialogProperties
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.navigation.NavController
+import androidx.work.ExistingWorkPolicy
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
 import com.ezpnix.writeon.R
@@ -67,6 +68,16 @@ import com.ezpnix.writeon.presentation.theme.appCornerShape
 import com.jakewharton.processphoenix.ProcessPhoenix
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+
+/**
+ * Unique work name shared by the WebDAV upload and download workers.
+ *
+ * Both used to be enqueued anonymously, so two taps started two workers at once: two uploads racing
+ * on the same remote file, or - worse - a restore rewriting the local database while a backup was
+ * still reading it. Sharing one name with [ExistingWorkPolicy.KEEP] serialises them instead, and
+ * makes a double tap a no-op rather than a second job.
+ */
+private const val WEBDAV_SYNC_WORK = "WebDAVSync"
 
 @Composable
 @Suppress("DEPRECATION")
@@ -281,7 +292,9 @@ fun CloudScreen(navController: NavController, settingsViewModel: SettingsViewMod
                                     prefs[webdavUsernameKey] = webdavUsername
                                     prefs[webdavPasswordKey] = WebDavPrefsCipher.encrypt(aead, webdavPassword)
                                 }
-                                workManager.enqueue(
+                                workManager.enqueueUniqueWork(
+                                    WEBDAV_SYNC_WORK,
+                                    ExistingWorkPolicy.KEEP,
                                     OneTimeWorkRequestBuilder<com.ezpnix.writeon.presentation.screens.settings.WebDAVBackupWorker>()
                                         .build()
                                 )
@@ -305,7 +318,9 @@ fun CloudScreen(navController: NavController, settingsViewModel: SettingsViewMod
                                     prefs[webdavUsernameKey] = webdavUsername
                                     prefs[webdavPasswordKey] = WebDavPrefsCipher.encrypt(aead, webdavPassword)
                                 }
-                                workManager.enqueue(
+                                workManager.enqueueUniqueWork(
+                                    WEBDAV_SYNC_WORK,
+                                    ExistingWorkPolicy.KEEP,
                                     OneTimeWorkRequestBuilder<com.ezpnix.writeon.presentation.screens.settings.WebDAVRestoreWorker>()
                                         .build()
                                 )

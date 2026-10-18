@@ -13,10 +13,12 @@ import com.ezpnix.writeon.domain.model.Note
 import com.ezpnix.writeon.domain.usecase.NoteUseCase
 import com.ezpnix.writeon.presentation.components.DecryptionResult
 import com.ezpnix.writeon.presentation.components.EncryptionHelper
+import com.ezpnix.writeon.presentation.screens.edit.components.AudioRecorderManager
 import com.ezpnix.writeon.presentation.screens.edit.components.UndoRedoState
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
@@ -74,28 +76,48 @@ class EditViewModel @Inject constructor(
 
     fun saveNote(id: Int) {
         viewModelScope.launch {
-            if (isPinned.value != _isPinned.value) {
-                noteUseCase.updatePinStatus(id, isPinned.value)
-            }
+            // Pinning is already persisted by [toggleNotePin]. Rewriting it here compared
+            // isPinned.value against _isPinned.value - the same state object - so the branch could
+            // never be taken, and it aimed at the placeholder id 0 for a brand-new note anyway.
 
-            if (noteName.value.text.isNotEmpty() || noteDescription.value.text.isNotBlank()) {
+            val hasContent =
+                noteName.value.text.isNotBlank() || noteDescription.value.text.isNotBlank()
+            // An empty brand-new note is not worth storing, but an existing note must still be
+            // written when the user clears every character, or the previous text silently survives.
+            if (hasContent || id != 0) {
                 val currentText = "${noteName.value.text} ${noteDescription.value.text}"
-                val currentAudioPaths = com.ezpnix.writeon.presentation.screens.edit.components.AudioRecorderManager.extractAudioPaths(currentText)
+                val currentAudioPaths = AudioRecorderManager.extractAudioPaths(currentText)
                 _originalNote.value?.let { old ->
                     val oldText = "${old.name} ${old.description}"
-                    val oldAudioPaths = com.ezpnix.writeon.presentation.screens.edit.components.AudioRecorderManager.extractAudioPaths(oldText)
+                    val oldAudioPaths = AudioRecorderManager.extractAudioPaths(oldText)
                     val removedAudioPaths = oldAudioPaths - currentAudioPaths
                     if (removedAudioPaths.isNotEmpty()) {
-                        com.ezpnix.writeon.presentation.screens.edit.components.AudioRecorderManager.deleteAudioFiles(removedAudioPaths, application.applicationContext)
+                        AudioRecorderManager.deleteAudioFiles(
+                            removedAudioPaths,
+                            application.applicationContext
+                        )
                     }
                 }
 
                 val now = System.currentTimeMillis()
-                val note = _originalNote.value?.copy(
+                // Fall back to the stored row rather than a blank Note: when the editor is saved
+                // before getNoteById has emitted, _originalNote is still null and the old code
+                // replaced the whole row with tags = emptyList(), silently dropping the note's
+                // tags. Reading the row keeps every field this screen does not edit.
+                val base = _originalNote.value ?: if (id != 0) {
+                    runCatching { noteUseCase.getNoteById(id).first() }.getOrNull()
+                } else {
+                    null
+                }
+                // A note may only be flagged encrypted when a vault passphrase is actually loaded,
+                // otherwise EncryptionHelper would seal it with an empty key and no screen in the
+                // app can decrypt it again.
+                val encrypted = isEncrypted.value && !encryption.isPasswordEmpty()
+                val note = base?.copy(
                     name = noteName.value.text,
                     description = noteDescription.value.text,
                     pinned = isPinned.value,
-                    encrypted = isEncrypted.value,
+                    encrypted = encrypted,
                     createdAt = if (noteCreatedTime.value != 0L) noteCreatedTime.value else now,
                     updatedAt = now
                 ) ?: Note(
@@ -103,7 +125,7 @@ class EditViewModel @Inject constructor(
                     name = noteName.value.text,
                     description = noteDescription.value.text,
                     pinned = isPinned.value,
-                    encrypted = isEncrypted.value,
+                    encrypted = encrypted,
                     createdAt = if (noteCreatedTime.value != 0L) noteCreatedTime.value else now,
                     updatedAt = now,
                     tags = emptyList()
