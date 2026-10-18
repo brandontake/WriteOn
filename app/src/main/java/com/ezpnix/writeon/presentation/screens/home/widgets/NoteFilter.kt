@@ -43,6 +43,7 @@ fun NoteFilter(
     onNoteUpdate: (Note) -> Unit = {},
     onDeleteNote: (Int) -> Unit = {},
     onPinNote: (Note) -> Unit = {},
+    onTagNote: (Note) -> Unit = {},
     swipeEnabled: Boolean = true,
     onRestore: () -> Unit = {},
     onSearch: () -> Unit = {},
@@ -92,6 +93,7 @@ fun NoteFilter(
             isDeleteClicked = isDeleteMode,
             animationFinished = onDeleteNote,
             onPinNote = onPinNote,
+            onTagNote = onTagNote,
             swipeEnabled = swipeEnabled
         )
     }

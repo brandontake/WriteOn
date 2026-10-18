@@ -17,6 +17,7 @@ import androidx.compose.foundation.lazy.staggeredgrid.itemsIndexed
 import androidx.compose.foundation.lazy.staggeredgrid.rememberLazyStaggeredGridState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.Label
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.PushPin
 import androidx.compose.material3.FilledTonalIconButton
@@ -59,6 +60,7 @@ fun NotesGrid(
     isDeleteClicked: Boolean,
     animationFinished: (Int) -> Unit,
     onPinNote: (Note) -> Unit = {},
+    onTagNote: (Note) -> Unit = {},
     swipeEnabled: Boolean = true
 ) {
     // Splitting the note list is pure work over the whole list: keep it tied to `notes` instead of
@@ -114,6 +116,21 @@ fun NotesGrid(
                     Icon(
                         imageVector = Icons.Rounded.PushPin,
                         contentDescription = stringResource(R.string.pin)
+                    )
+                }
+                FilledTonalIconButton(
+                    onClick = {
+                        isRevealed.value = false
+                        onTagNote(note)
+                    },
+                    colors = IconButtonDefaults.filledTonalIconButtonColors(
+                        containerColor = MaterialTheme.colorScheme.tertiaryContainer,
+                        contentColor = MaterialTheme.colorScheme.onTertiaryContainer
+                    )
+                ) {
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Rounded.Label,
+                        contentDescription = stringResource(R.string.nav_tags)
                     )
                 }
                 FilledTonalIconButton(

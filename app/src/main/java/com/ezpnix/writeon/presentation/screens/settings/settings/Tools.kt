@@ -49,7 +49,6 @@ fun ToolsScreen(navController: NavController, settingsViewModel: SettingsViewMod
     val context = LocalContext.current
     settingsViewModel.noteUseCase.observe()
     var showSearchDialog by remember { mutableStateOf(false) }
-    var showFontSizeDialog by remember { mutableStateOf(false) }
     var dynamicPlaceholderInput by remember { mutableStateOf(context.getString(R.string.app_subtitle)) }
     SettingsScaffold(
         settingsViewModel = settingsViewModel,
@@ -155,28 +154,13 @@ fun ToolsScreen(navController: NavController, settingsViewModel: SettingsViewMod
             }
             item {
                 SettingsBox(
-                    isBig = true,
-                    title = stringResource(id = R.string.font_size),
-                    description = stringResource(id = R.string.enter_font_size_description),
-                    icon = Icons.Rounded.TextFields,
-                    actionType = ActionType.CUSTOM,
-                    radius = shapeManager(
-                        isFirst = true,
-                        radius = settingsViewModel.settings.value.cornerRadius
-                    ),
-                    customAction = {
-                        showFontSizeDialog = true
-                    }
-                )
-            }
-            item {
-                SettingsBox(
                     title = stringResource(id = R.string.enter_placeholder),
                     description = stringResource(id = R.string.enter_placeholder_description),
                     icon = Icons.Rounded.AutoFixHigh,
                     actionType = ActionType.CUSTOM,
                     radius = shapeManager(
                         radius = settingsViewModel.settings.value.cornerRadius,
+                        isFirst = true,
                         isLast = false
                     ),
                     customAction = {
@@ -254,49 +238,6 @@ fun ToolsScreen(navController: NavController, settingsViewModel: SettingsViewMod
                             .show()
                     }) {
                         Text(context.getString(R.string.action_exit))
-                    }
-                }
-            )
-        }
-        if (showFontSizeDialog) {
-            AlertDialog(
-                onDismissRequest = { showFontSizeDialog = true },
-                title = { Text(stringResource(id = R.string.select_font_size)) },
-                text = {
-                    Column {
-                        val fontSizeOptions =
-                            listOf(12f, 14f, 16f, 18f, 20f, 24f, 28f, 32f)
-
-                        fontSizeOptions.forEach { size ->
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clickable {
-                                        showFontSizeDialog = false
-                                    }
-                                    .padding(1.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Checkbox(
-                                    checked = settingsViewModel.settings.value.fontSize == size,
-                                    onCheckedChange = { settingsViewModel.updateFontSize(size) }
-                                )
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text(text = "${size.toInt()} sp", fontSize = size.sp)
-                            }
-                        }
-                    }
-                },
-                confirmButton = {
-                    TextButton(onClick = {
-                        showFontSizeDialog = false
-                        repeat(2) {
-                            navController.popBackStack(NavRoutes.Home.route, inclusive = false)
-                        }
-                        Toast.makeText(context, context.getString(R.string.tools_saved_exclaim), Toast.LENGTH_SHORT)
-                            .show()
-                    }) {
-                        Text(stringResource(id = R.string.save_and_exit))
                     }
                 }
             )

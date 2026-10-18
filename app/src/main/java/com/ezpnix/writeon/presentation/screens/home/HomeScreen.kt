@@ -409,7 +409,12 @@ fun HomeView(
                                     val note = displayedNotes.find { note -> note.id == it }
                                     note?.let { n -> viewModel.noteUseCase.moveToTrash(n) }
                                 },
-                                onPinNote = { note -> viewModel.pinOrUnpinNote(note) }
+                                onPinNote = { note -> viewModel.pinOrUnpinNote(note) },
+                                onTagNote = { note ->
+                                    viewModel.selectedNotes.clear()
+                                    viewModel.selectedNotes.add(note)
+                                    viewModel.showTagDialog.value = true
+                                }
                             )
                         }
                     }
