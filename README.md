@@ -35,7 +35,7 @@ foreground services, and only the permissions the features actually need.
 
 **Writing**
 - Markdown editing with an expanded 5-item-per-page formatting toolbar (headings `##`, hyperlinks `[](url)`, horizontal dividers `---`, quotes `>`, code blocks, checkboxes, bullet/ordered lists, bold / italic / underline / strikethrough, highlights, images, mic recording and timestamps)
-- Note attachments, audio recording & in-app playback, audio auto-cleanup on deletion
+- Note attachments, audio recording & in-app playback with a draggable seek bar, 0.5×–2× speed control, per-recording renaming and save-to-folder export, plus audio auto-cleanup on deletion
 - Dynamic theming support across notes and flashcards, customizable font size and persistent custom local font import (.ttf/.otf), grid or column layout, minimalistic mode, adjustable corner radius
 - Diverse sorting dimensions (Creation Time, Last Modified Time, Title) with dedicated Ascending/Descending controls
 - Note details dialog with Last Modified Time tracking and Word/Character stats
@@ -48,7 +48,7 @@ foreground services, and only the permissions the features actually need.
 - Home-screen widgets honour the app lock — with a lock configured they show a placeholder instead of note text
 
 **Extras**
-- Adaptive Material 3 & HyperOS home-screen widgets (free-form resizing with 24dp rounded corners, quick add + note preview), built-in calendar, calculator, scratchpad and dynamic-themed flashcards
+- Adaptive Material 3 & HyperOS home-screen widgets (free-form resizing with 24dp rounded corners, vertically centred note text, quick add + note preview), built-in calendar, calculator, scratchpad and dynamic-themed flashcards
 - Save a note as an image, export to TXT/Markdown, and local backup / restore (with an optional password)
 
 ---

@@ -13,7 +13,8 @@ import androidx.glance.action.clickable
 import androidx.glance.appwidget.appWidgetBackground
 import androidx.glance.appwidget.cornerRadius
 import androidx.glance.background
-import androidx.glance.layout.Column
+import androidx.glance.layout.Alignment
+import androidx.glance.layout.Box
 import androidx.glance.layout.fillMaxSize
 import androidx.glance.layout.fillMaxWidth
 import androidx.glance.layout.padding
@@ -59,13 +60,18 @@ fun SelectedNote(note: Note, noteUseCase: NoteUseCase, widgetId: Int) {
         context.startActivity(intent)
     }
 
-    Column(
+    // Centred rather than pinned to the top. A note that is one or two lines long used to sit at
+    // the very top of the widget with a large empty area underneath, which reads as a broken
+    // layout on a launcher grid; the short note now sits in the middle of the cell the same way
+    // the empty state already does.
+    Box(
         modifier = glanceModifier
             .fillMaxSize()
             .appWidgetBackground()
             .background(GlanceTheme.colors.surface)
             .cornerRadius(24.dp)
-            .padding(horizontal = 16.dp, vertical = 14.dp)
+            .padding(horizontal = 16.dp, vertical = 14.dp),
+        contentAlignment = Alignment.Center
     ) {
         if (lockManager.anyLockEnabled()) {
             WidgetText(
@@ -88,7 +94,7 @@ fun SelectedNote(note: Note, noteUseCase: NoteUseCase, widgetId: Int) {
 
             if (combinedMarkdown.isNotBlank()) {
                 WidgetText(
-                    modifier = GlanceModifier.fillMaxSize(),
+                    modifier = GlanceModifier.fillMaxWidth(),
                     markdown = combinedMarkdown,
                     weight = FontWeight.Normal,
                     fontSize = 13.sp,

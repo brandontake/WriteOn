@@ -330,6 +330,13 @@
     <string name="audio_play">播放</string>
     <string name="audio_pause">暂停</string>
     <string name="audio_recording_label">语音备忘</string>
+    <string name="audio_more">更多选项</string>
+    <string name="audio_save_to_folder">保存到文件夹</string>
+    <string name="audio_rename">重命名</string>
+    <string name="audio_rename_title">重命名录音</string>
+    <string name="audio_rename_hint">名称</string>
+    <string name="audio_saved">录音已保存</string>
+    <string name="audio_save_failed">无法保存录音</string>
     <string name="fmt_italic">斜体</string>
     <string name="fmt_order_list">编号列表</string>
     <string name="fmt_quote">引用</string>

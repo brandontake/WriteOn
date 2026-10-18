@@ -43,7 +43,14 @@
 - [x] **Full Material 3 Design Alignment.** Navigation Drawer, Settings screens, Cards, OutlinedCards (removed unknown elevation drop shadows in FlashcardScreen), TextButtons, and colorScheme tokens (primaryContainer/onPrimaryContainer) strictly MD3 compliant.
 - [x] **Audio note insertion and in-app player.** Zero-overhead AAC recording and playback directly within note Markdown text using `?audio(filepath)`.
 - [x] **Custom Font Support.** Import `.ttf`/`.otf` via system SAF, robust fallback preventing crashes, synced note rendering and image export.
-- [x] **100% Bilingual localization.** 413 strings strictly paired between English and Simplified Chinese, zero hardcoded strings.
+- [x] **100% Bilingual localization.** 439 strings strictly paired between English and Simplified Chinese, zero hardcoded strings.
+- [x] **Widget note text vertically centred.** The Glance note block is wrapped in a centring `Box`, so short notes sit in the middle of the widget cell instead of being pinned to the top edge.
+- [x] **Audio player overhaul.**
+  - Draggable seek bar replacing the read-only progress indicator; dragging suspends ticker updates so the thumb does not fight the playback position.
+  - Playback speed cycling 0.5× / 0.75× / 1× / 1.25× / 1.5× / 2× through `MediaPlayer.PlaybackParams`, re-applied on every `start()`.
+  - Per-recording rename, persisted by path in `AudioLabelStore` so the label survives note edits and app restarts.
+  - Save to folder through the Storage Access Framework, copying the AAC out of `filesDir/audios`.
+  - Long recording names now ellipsize on one line instead of pushing the `mm:ss / mm:ss` label onto a second line.
 - [x] Cleaned up callback unregistration to `callback.isEnabled = false` matching `androidx.activity:activity:1.9.2` API contract.
 - [x] Rebuilt with release keystore (`writeon-upload.jks`), `lintVitalRelease` passed with zero errors, SHA-256 verified.
 

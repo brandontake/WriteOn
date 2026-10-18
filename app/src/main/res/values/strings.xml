@@ -369,6 +369,13 @@
     <string name="audio_play">Play</string>
     <string name="audio_pause">Pause</string>
     <string name="audio_recording_label">Voice Memo</string>
+    <string name="audio_more">More options</string>
+    <string name="audio_save_to_folder">Save to folder</string>
+    <string name="audio_rename">Rename</string>
+    <string name="audio_rename_title">Rename recording</string>
+    <string name="audio_rename_hint">Name</string>
+    <string name="audio_saved">Recording saved</string>
+    <string name="audio_save_failed">Could not save the recording</string>
     <string name="fmt_italic">Italic</string>
     <string name="fmt_order_list">Order List</string>
     <string name="fmt_quote">Quote</string>

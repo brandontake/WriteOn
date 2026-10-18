@@ -35,6 +35,14 @@ object GlobalAudioPlayer {
     var currentPositionMs by mutableIntStateOf(0)
         private set
 
+    /**
+     * Playback speed, persisted for the lifetime of the process so picking 1.5x once applies to
+     * every clip played afterwards — a user who listens to voice memos at 1.5x does not want to
+     * set it again for each recording.
+     */
+    var speed by mutableFloatStateOf(1f)
+        private set
+
     private val progressUpdater = object : Runnable {
         override fun run() {
             val player = mediaPlayer ?: return
@@ -92,6 +100,9 @@ object GlobalAudioPlayer {
                         true
                     }
                     start()
+                    // A fresh MediaPlayer always starts at 1x, so the user's chosen speed has to
+                    // be re-applied after every start().
+                    applySpeed(this, speed)
                 }
                 currentPlayingPath = filePath
                 isPlaying = true
@@ -125,6 +136,31 @@ object GlobalAudioPlayer {
         } catch (e: Exception) {
             Log.e("GlobalAudioPlayer", "Failed to resume playback", e)
             stop()
+        }
+    }
+
+    /** The speeds offered by the player card, in the order the button cycles them. */
+    val speedOptions = listOf(0.5f, 0.75f, 1f, 1.25f, 1.5f, 2f)
+
+    /**
+     * Changes the playback rate. Applied to the live player when one exists, and remembered for the
+     * next clip because a fresh [MediaPlayer] always starts at 1x.
+     *
+     * Named setPlaybackSpeed rather than setSpeed: the synthesised setter of [speed] already owns
+     * the JVM signature setSpeed(F)V.
+     */
+    fun setPlaybackSpeed(value: Float) {
+        speed = value.coerceIn(speedOptions.first(), speedOptions.last())
+        mediaPlayer?.let { applySpeed(it, speed) }
+    }
+
+    private fun applySpeed(player: MediaPlayer, value: Float) {
+        try {
+            player.playbackParams = player.playbackParams.setSpeed(value)
+        } catch (e: Exception) {
+            // Some codecs reject speed changes; keep playing at the previous rate rather than
+            // tearing the player down for a cosmetic feature.
+            Log.e("GlobalAudioPlayer", "Failed to set playback speed to $value", e)
         }
     }
 
