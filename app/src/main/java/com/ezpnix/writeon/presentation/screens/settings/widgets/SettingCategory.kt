@@ -61,10 +61,16 @@ fun SettingCategory(
                 }
             },
         colors = if (smallSetting)
-            CardDefaults.elevatedCardColors(containerColor = MaterialTheme.colorScheme.primary)
+            CardDefaults.elevatedCardColors(
+                containerColor = MaterialTheme.colorScheme.primaryContainer,
+                contentColor = MaterialTheme.colorScheme.onPrimaryContainer
+            )
         else
-            CardDefaults.elevatedCardColors(containerColor = MaterialTheme.colorScheme.surface),
-        elevation = CardDefaults.elevatedCardElevation(defaultElevation = 6.dp),
+            CardDefaults.elevatedCardColors(
+                containerColor = MaterialTheme.colorScheme.surface,
+                contentColor = MaterialTheme.colorScheme.onSurface
+            ),
+        elevation = CardDefaults.elevatedCardElevation(defaultElevation = 2.dp),
     ) {
         Row(
             modifier = Modifier
@@ -73,18 +79,18 @@ fun SettingCategory(
         ) {
             if (smallSetting) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    RenderCategoryTitle(title = title)
+                    RenderCategoryTitle(title = title, smallSetting = true)
                     Spacer(modifier = Modifier.weight(1f))
                     RenderCategoryDescription(subTitle = subTitle, smallSetting = true)
-                    RenderCategoryIcon(icon, true)
+                    RenderCategoryIcon(icon, isHighlighted = true)
                 }
             } else {
                 Column {
-                    RenderCategoryTitle(title = title)
+                    RenderCategoryTitle(title = title, smallSetting = false)
                     RenderCategoryDescription(subTitle = subTitle, smallSetting = false)
                 }
                 Spacer(modifier = Modifier.weight(1f))
-                RenderCategoryIcon(icon, false)
+                RenderCategoryIcon(icon, isHighlighted = false)
             }
         }
     }
@@ -92,11 +98,12 @@ fun SettingCategory(
 }
 
 @Composable
-private fun RenderCategoryTitle(title: String) {
+private fun RenderCategoryTitle(title: String, smallSetting: Boolean) {
     Text(
         text = title,
-        fontSize = 16.sp,
-        fontWeight = FontWeight.Bold,
+        style = MaterialTheme.typography.titleMedium,
+        fontWeight = FontWeight.SemiBold,
+        color = if (smallSetting) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface,
         modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
     )
 }
@@ -105,29 +112,29 @@ private fun RenderCategoryTitle(title: String) {
 private fun RenderCategoryDescription(subTitle: String, smallSetting: Boolean) {
     if (subTitle.isNotBlank()) {
         Text(
-            color = if (smallSetting) MaterialTheme.colorScheme.surfaceContainerHigh else MaterialTheme.colorScheme.primary,
+            color = if (smallSetting) MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f) else MaterialTheme.colorScheme.onSurfaceVariant,
             text = subTitle,
-            fontSize = if (smallSetting) 12.sp else 11.sp,
+            style = MaterialTheme.typography.bodySmall,
             modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
         )
     }
 }
 
 @Composable
-private fun RenderCategoryIcon(icon: ImageVector, reverseColors: Boolean) {
+private fun RenderCategoryIcon(icon: ImageVector, isHighlighted: Boolean) {
     Box(
         modifier = Modifier
             .background(
-                color = if (reverseColors) MaterialTheme.colorScheme.surfaceContainerHighest else MaterialTheme.colorScheme.primary,
+                color = if (isHighlighted) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceContainerHighest,
                 shape = RoundedCornerShape(50)
             ),
     ) {
         Icon(
             imageVector = icon,
             contentDescription = null,
-            tint = if (reverseColors) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.surfaceContainerHigh,
+            tint = if (isHighlighted) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.primary,
             modifier = Modifier
-                .scale(if (reverseColors) 0.8f else 1f)
+                .scale(if (isHighlighted) 0.85f else 1f)
                 .padding(6.dp)
         )
     }

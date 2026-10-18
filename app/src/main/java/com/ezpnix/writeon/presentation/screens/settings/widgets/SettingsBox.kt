@@ -68,9 +68,10 @@ fun SettingsBox(
     AnimatedVisibility(visible = isEnabled) {
         ElevatedCard(
             shape = radius,
-            elevation = CardDefaults.cardElevation(defaultElevation = 6.dp),
+            elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
             colors = CardDefaults.elevatedCardColors(
-                containerColor = MaterialTheme.colorScheme.surface
+                containerColor = MaterialTheme.colorScheme.surface,
+                contentColor = MaterialTheme.colorScheme.onSurface
             ),
             modifier = Modifier
                 .padding(bottom = 2.dp)
@@ -105,14 +106,15 @@ fun SettingsBox(
                     Text(
                         text = title,
                         modifier = Modifier.padding(start = 4.dp, end = 4.dp, top = 2.dp),
-                        fontSize = 16.sp
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.onSurface
                     )
                     if (description.isNotEmpty() || actionType == ActionType.CLIPBOARD) {
                         Text(
                             text = if (actionType == ActionType.CLIPBOARD) clipboardText else description,
                             modifier = Modifier.padding(start = 4.dp, end = 4.dp, top = 2.dp),
-                            fontSize = 11.sp,
-                            color = MaterialTheme.colorScheme.primary,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                             lineHeight = 18.sp
                         )
                     }
@@ -230,7 +232,8 @@ private fun CustomIcon() {
 private fun RenderText(customText: String) {
     Text(
         text = customText,
-        fontSize = 14.sp,
+        style = MaterialTheme.typography.bodyMedium,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
         modifier = Modifier.padding(6.dp)
     )
 }

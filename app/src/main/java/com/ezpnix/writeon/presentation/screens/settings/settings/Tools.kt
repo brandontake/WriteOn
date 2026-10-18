@@ -23,6 +23,7 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TextField
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -233,7 +234,7 @@ fun ToolsScreen(navController: NavController, settingsViewModel: SettingsViewMod
                     )
                 },
                 confirmButton = {
-                    Button(onClick = {
+                    TextButton(onClick = {
                         settingsViewModel.updatePlaceholder(dynamicPlaceholderInput)
                         repeat(2) {
                             navController.popBackStack(NavRoutes.Home.route, inclusive = false)
@@ -245,7 +246,7 @@ fun ToolsScreen(navController: NavController, settingsViewModel: SettingsViewMod
                     }
                 },
                 dismissButton = {
-                    Button(onClick = {
+                    TextButton(onClick = {
                         repeat(2) {
                             navController.popBackStack(NavRoutes.Home.route, inclusive = false)
                         }
@@ -287,7 +288,7 @@ fun ToolsScreen(navController: NavController, settingsViewModel: SettingsViewMod
                     }
                 },
                 confirmButton = {
-                    Button(onClick = {
+                    TextButton(onClick = {
                         showFontSizeDialog = false
                         repeat(2) {
                             navController.popBackStack(NavRoutes.Home.route, inclusive = false)

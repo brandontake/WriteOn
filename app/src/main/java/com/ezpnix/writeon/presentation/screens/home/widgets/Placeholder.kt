@@ -33,7 +33,7 @@ fun Placeholder(
             Text(
                 text = placeholderText,
                 color = MaterialTheme.colorScheme.outline,
-                fontSize = 14.sp
+                style = MaterialTheme.typography.bodyMedium
             )
         }
     }

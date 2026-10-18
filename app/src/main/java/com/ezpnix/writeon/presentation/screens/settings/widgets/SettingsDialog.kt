@@ -48,11 +48,12 @@ fun <T> ListDialog(
             Text(
                 text = text,
                 textAlign = TextAlign.Center,
-                fontWeight = FontWeight.Bold,
+                fontWeight = FontWeight.SemiBold,
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(20.dp),
-                fontSize = 20.sp,
+                style = MaterialTheme.typography.titleLarge,
+                color = MaterialTheme.colorScheme.onSurface
             )
             LazyColumn  {
                 initialItem?.let { initial ->

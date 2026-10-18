@@ -410,7 +410,7 @@ fun HomeView(
                         )
                     },
                     confirmButton = {
-                        Button(onClick = {
+                        TextButton(onClick = {
                             viewModel.addTagToSelectedNotes()
                             viewModel.showTagDialog.value = false
                             viewModel.newTagName.value = ""
@@ -419,7 +419,7 @@ fun HomeView(
                         }
                     },
                     dismissButton = {
-                        Button(onClick = { viewModel.showTagDialog.value = false }) {
+                        TextButton(onClick = { viewModel.showTagDialog.value = false }) {
                             Text(stringResource(R.string.action_cancel))
                         }
                     }
@@ -434,7 +434,7 @@ fun HomeView(
                             viewModel.selectedTagsToRemove.clear()
                         },
                         confirmButton = {
-                            Button(onClick = {
+                            TextButton(onClick = {
                                 if (viewModel.selectedTagsToRemove.isNotEmpty()) {
                                     viewModel.removeTagsFromSelectedNotes()
                                     viewModel.showRemoveTagDialog.value = false
@@ -446,11 +446,14 @@ fun HomeView(
                                     ).show()
                                 }
                             }) {
-                                Text(stringResource(R.string.action_remove))
+                                Text(
+                                    text = stringResource(R.string.action_remove),
+                                    color = MaterialTheme.colorScheme.error
+                                )
                             }
                         },
                         dismissButton = {
-                            Button(onClick = {
+                            TextButton(onClick = {
                                 viewModel.showRemoveTagDialog.value = false
                                 viewModel.selectedTagsToRemove.clear()
                             }) {
@@ -845,7 +848,7 @@ fun FloatingBottomButtons(
             title = { Text(stringResource(R.string.quick_action_calculator)) },
             text = { CalculatorUI() },
             confirmButton = {
-                Button(onClick = { showCalculator = false }) {
+                TextButton(onClick = { showCalculator = false }) {
                     Text(stringResource(R.string.action_close))
                 }
             }
@@ -863,7 +866,7 @@ fun FloatingBottomButtons(
                 )
             },
             confirmButton = {
-                Button(onClick = {
+                TextButton(onClick = {
                     openFileLauncher.launch("rename.txt")
                     showDialog = false
                 }) {
@@ -871,7 +874,7 @@ fun FloatingBottomButtons(
                 }
             },
             dismissButton = {
-                Button(onClick = { showDialog = false }) {
+                TextButton(onClick = { showDialog = false }) {
                     Text(stringResource(R.string.action_cancel))
                 }
             }

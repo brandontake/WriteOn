@@ -40,6 +40,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TextField
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -277,7 +278,7 @@ fun CalculatorButton() {
                 CalculatorUI()
             },
             confirmButton = {
-                Button(onClick = { showDialog.value = false }) {
+                TextButton(onClick = { showDialog.value = false }) {
                     Text(stringResource(R.string.action_close))
                 }
             }

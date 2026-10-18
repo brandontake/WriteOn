@@ -52,14 +52,15 @@ fun GridItem(itemName: String, onClick: () -> Unit) {
             .fillMaxWidth()
             .padding(8.dp)
             .clickable(
-                // Bare `clickable` gives TalkBack no idea what this control does or that it is a
-                // button; the role and the label come from the card's own text.
                 role = Role.Button,
                 onClickLabel = itemName,
                 onClick = onClick
             ),
         shape = appCornerShape(),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primary)
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.primaryContainer,
+            contentColor = MaterialTheme.colorScheme.onPrimaryContainer
+        )
     ) {
         Box(
             contentAlignment = Alignment.Center,
@@ -69,13 +70,9 @@ fun GridItem(itemName: String, onClick: () -> Unit) {
         ) {
             Text(
                 text = itemName,
-                fontSize = 18.sp,
-                fontWeight = FontWeight.Bold,
-                // The card is filled with colorScheme.primary, so the text has to use the colour the
-                // theme designates as readable on top of it. A hardcoded Color.White looked fine in
-                // light mode and became unreadable in dark mode, where primary is a pale mint and
-                // white text on it sits around 1.2:1 contrast.
-                color = MaterialTheme.colorScheme.onPrimary
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onPrimaryContainer
             )
         }
     }

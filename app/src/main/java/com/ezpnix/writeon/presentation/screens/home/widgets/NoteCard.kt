@@ -72,7 +72,7 @@ fun NoteCard(
                     shape = shape
                 ) else Modifier
             ),
-        elevation = CardDefaults.cardElevation(defaultElevation = 6.dp),
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
         colors = CardDefaults.elevatedCardColors(
             containerColor = if (containerColor != Color.Black) containerColor else MaterialTheme.colorScheme.surface
         )
