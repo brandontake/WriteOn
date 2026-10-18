@@ -94,3 +94,14 @@ class AudioInsertionProcessor : MarkdownLineProcessor {
         builder.add(AudioInsertion(audioUri))
     }
 }
+
+class HorizontalRuleProcessor : MarkdownLineProcessor {
+    override fun canProcessLine(line: String): Boolean {
+        val trimmed = line.trim()
+        return (trimmed == "---" || trimmed == "***" || trimmed == "___")
+    }
+
+    override fun processLine(line: String, builder: MarkdownBuilder) {
+        builder.add(HorizontalRule)
+    }
+}

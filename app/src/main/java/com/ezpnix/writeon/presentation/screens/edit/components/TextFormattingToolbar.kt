@@ -23,9 +23,12 @@ import androidx.compose.material.icons.rounded.FormatItalic
 import androidx.compose.material.icons.rounded.FormatListNumbered
 import androidx.compose.material.icons.rounded.FormatQuote
 import androidx.compose.material.icons.rounded.FormatUnderlined
+import androidx.compose.material.icons.rounded.HorizontalRule
 import androidx.compose.material.icons.rounded.Image
+import androidx.compose.material.icons.rounded.Link
 import androidx.compose.material.icons.rounded.Mic
 import androidx.compose.material.icons.rounded.StrikethroughS
+import androidx.compose.material.icons.rounded.Title
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -95,15 +98,14 @@ fun TextFormattingToolbar(viewModel: EditViewModel) {
 
     val toolbarSets = remember {
         listOf(
+            // Page 0: Common Actions (5 items: Checkbox, Numbered, Bullet, Image, Mic)
             listOf(
-                ToolbarItem(Icons.AutoMirrored.Rounded.ArrowBackIos,context.getString(R.string.fmt_bullet_list), color = colorArrow) {
-
+                ToolbarItem(Icons.AutoMirrored.Rounded.ArrowBackIos, "", color = colorArrow) {
                 },
                 ToolbarItem(Icons.Rounded.CheckBox, context.getString(R.string.fmt_checkbox), color = colorIcon) {
                     viewModel.insertText("[x] \n[ ] ")
                 },
-                ToolbarItem(
-                    Icons.Rounded.FormatListNumbered, context.getString(R.string.fmt_order_list), color = colorIcon) {
+                ToolbarItem(Icons.Rounded.FormatListNumbered, context.getString(R.string.fmt_order_list), color = colorIcon) {
                     viewModel.insertNumberedText()
                 },
                 ToolbarItem(Icons.AutoMirrored.Rounded.ViewList, context.getString(R.string.fmt_bullet_list), color = colorIcon) {
@@ -115,48 +117,68 @@ fun TextFormattingToolbar(viewModel: EditViewModel) {
                 ToolbarItem(Icons.Rounded.Mic, context.getString(R.string.fmt_record_audio), color = colorIcon) {
                     showRecordAudioDialog = true
                 },
-                ToolbarItem(Icons.AutoMirrored.Rounded.ArrowForwardIos,context.getString(R.string.fmt_bullet_list), color = colorArrow) {
+                ToolbarItem(Icons.AutoMirrored.Rounded.ArrowForwardIos, "", color = colorArrow) {
                     currentIndex++
                 },
             ),
+            // Page 1: Structure & Typography (5 items: Heading, Link, Divider, Quote, Code)
             listOf(
-                ToolbarItem(Icons.AutoMirrored.Rounded.ArrowBackIos,context.getString(R.string.fmt_bullet_list), color = colorArrow) {
+                ToolbarItem(Icons.AutoMirrored.Rounded.ArrowBackIos, "", color = colorArrow) {
+                    currentIndex--
+                },
+                ToolbarItem(Icons.Rounded.Title, context.getString(R.string.fmt_heading), color = colorIcon) {
+                    viewModel.insertText("## ", newLine = true)
+                },
+                ToolbarItem(Icons.Rounded.Link, context.getString(R.string.fmt_link), color = colorIcon) {
+                    viewModel.insertText("[](url)", offset = -5, newLine = false)
+                },
+                ToolbarItem(Icons.Rounded.HorizontalRule, context.getString(R.string.fmt_divider), color = colorIcon) {
+                    viewModel.insertText("\n---\n", newLine = false)
+                },
+                ToolbarItem(Icons.Rounded.FormatQuote, context.getString(R.string.fmt_quote), color = colorIcon) {
+                    viewModel.insertText("> ", newLine = true)
+                },
+                ToolbarItem(Icons.Rounded.Code, context.getString(R.string.fmt_code_block), color = colorIcon) {
+                    viewModel.insertText("```\n\n```", -4)
+                },
+                ToolbarItem(Icons.AutoMirrored.Rounded.ArrowForwardIos, "", color = colorArrow) {
+                    currentIndex++
+                },
+            ),
+            // Page 2: Inline Styles & Utilities (5 items: Bold, Italic, Underline, Strikethrough, Highlight)
+            listOf(
+                ToolbarItem(Icons.AutoMirrored.Rounded.ArrowBackIos, "", color = colorArrow) {
                     currentIndex--
                 },
                 ToolbarItem(Icons.Rounded.FormatBold, context.getString(R.string.fmt_bold), color = colorIcon) {
                     viewModel.insertText("**", offset = 2, newLine = false)
                 },
+                ToolbarItem(Icons.Rounded.FormatItalic, context.getString(R.string.fmt_italic), color = colorIcon) {
+                    viewModel.insertText("***", offset = -2, newLine = false)
+                },
                 ToolbarItem(Icons.Rounded.FormatUnderlined, context.getString(R.string.fmt_underline), color = colorIcon) {
-                    viewModel.insertText("__", -1 , newLine = false)
+                    viewModel.insertText("__", -1, newLine = false)
                 },
                 ToolbarItem(Icons.Rounded.StrikethroughS, context.getString(R.string.fmt_strikethrough), color = colorIcon) {
-                    viewModel.insertText("~~~~", -2 , newLine = false)
+                    viewModel.insertText("~~~~", -2, newLine = false)
                 },
                 ToolbarItem(Icons.Rounded.AutoFixHigh, context.getString(R.string.fmt_highlight), color = colorIcon) {
                     viewModel.insertText("====", offset = -2, newLine = false)
                 },
-                ToolbarItem(Icons.AutoMirrored.Rounded.ArrowForwardIos,context.getString(R.string.fmt_bullet_list), color = colorArrow) {
+                ToolbarItem(Icons.AutoMirrored.Rounded.ArrowForwardIos, "", color = colorArrow) {
                     currentIndex++
                 },
             ),
+            // Page 3: Additional Tools (DateTime)
             listOf(
-                ToolbarItem(Icons.AutoMirrored.Rounded.ArrowBackIos,context.getString(R.string.fmt_bullet_list), color = colorArrow) {
+                ToolbarItem(Icons.AutoMirrored.Rounded.ArrowBackIos, "", color = colorArrow) {
                     currentIndex--
-                },
-                ToolbarItem(Icons.Rounded.FormatItalic, context.getString(R.string.fmt_italic), color = colorIcon) {
-                    viewModel.insertText("***", offset = -2, newLine = false)
-                },
-                ToolbarItem(Icons.Rounded.Code, context.getString(R.string.fmt_code_block), color = colorIcon) {
-                    viewModel.insertText("```\n\n```", -4)
-                },
-                ToolbarItem(Icons.Rounded.FormatQuote, context.getString(R.string.fmt_quote), color = colorIcon) {
-                    viewModel.insertText("> ", newLine = true)
                 },
                 ToolbarItem(Icons.Rounded.AccessTime, context.getString(R.string.fmt_insert_datetime), color = colorIcon) {
                     val dateTime = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"))
                     viewModel.insertText(dateTime, newLine = false)
                 },
-                        ToolbarItem(Icons.AutoMirrored.Rounded.ArrowForwardIos,context.getString(R.string.fmt_bullet_list), color = colorArrow) {
+                ToolbarItem(Icons.AutoMirrored.Rounded.ArrowForwardIos, "", color = colorArrow) {
                 },
             ),
         )

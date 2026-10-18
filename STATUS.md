@@ -18,13 +18,17 @@
 
 ## Done in v1.10
 - [x] **Bump version to v1.10** (`versionCode 11`, `versionName "1.10"`).
+- [x] **Expanded Markdown Syntaxes & 5-item-per-page Formatting Toolbar.**
+  - Added native support for Headings (`##`), Hyperlinks (`[title](url)` with in-app click-to-open and safe URL handling), Horizontal Dividers (`---`), Quotes (`>`), and Code Blocks (```` ````).
+  - Redesigned the formatting toolbar pagination to strictly display 5 functional buttons per page between navigation arrows, preventing visual overflow and button congestion.
+- [x] **Dynamic Color Theming for Flashcards.** Flashcard cards, input textfields and completion cards now dynamically sample MaterialTheme semantic tokens (`surfaceVariant`, `onSurfaceVariant`, `primary`), adapting naturally to wallpaper colors (Android 12+) and dark/light mode shifts.
 - [x] **Save-as-image hardware bitmap conversion completed.** `raw.toSoftwareBitmapOrSelf()` previously caught exceptions inside its software `Canvas` copy, which caught the very same `IllegalArgumentException: Software rendering doesn't support hardware bitmaps` and returned the raw hardware bitmap, causing `writeJpeg` to immediately fail with identical error. Replaced with `Bitmap.copy(Bitmap.Config.ARGB_8888, false)` via `toArgb8888()`, the only valid public Android API to read hardware bitmaps on CPU.
 - [x] **Back gesture collapse behavior fixed.** When Drawer, FAB, or selection was active, swipe back was ineffective or exiting. Handled via dynamic `OnBackPressedCallback` in `overlayBackHandler` within `HomeView` and `MainActivity`, ensuring Drawer closes first, then FAB collapses, before exiting to home.
 - [x] **Dark theme cold-start bug fixed.** Theme initialization now correctly follows system dark theme immediately on first frame without flickering or needing toggle cycles.
 - [x] **Full Material 3 Design Alignment.** Navigation Drawer, Settings screens, Cards, OutlinedCards (removed unknown elevation drop shadows in FlashcardScreen), TextButtons, and colorScheme tokens (primaryContainer/onPrimaryContainer) strictly MD3 compliant.
 - [x] **Audio note insertion and in-app player.** Zero-overhead AAC recording and playback directly within note Markdown text using `?audio(filepath)`.
 - [x] **Custom Font Support.** Import `.ttf`/`.otf` via system SAF, robust fallback preventing crashes, synced note rendering and image export.
-- [x] **100% Bilingual localization.** 407 strings strictly paired between English and Simplified Chinese, zero hardcoded strings.
+- [x] **100% Bilingual localization.** 410 strings strictly paired between English and Simplified Chinese, zero hardcoded strings.
 - [x] Cleaned up callback unregistration to `callback.isEnabled = false` matching `androidx.activity:activity:1.9.2` API contract.
 - [x] Rebuilt with release keystore (`writeon-upload.jks`), `lintVitalRelease` passed with zero errors, SHA-256 verified.
 

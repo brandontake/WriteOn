@@ -55,3 +55,9 @@ data class AudioInsertion(val audioUri: String) : MarkdownElement {
         builder.append("?audio($audioUri)\n\n")
     }
 }
+
+data object HorizontalRule : MarkdownElement {
+    override fun render(builder: StringBuilder) {
+        builder.append("---\n\n")
+    }
+}

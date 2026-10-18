@@ -1,9 +1,13 @@
 package com.ezpnix.writeon.presentation.components.markdown
 
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.LinkAnnotation
 import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextLinkStyles
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.withStyle
 
 class MarkdownBuilder(internal val lines: List<String>, private var lineProcessors: List<MarkdownLineProcessor>) {
@@ -81,7 +85,58 @@ private class StyledRun(val start: Int, val endExclusive: Int, val styleMask: In
  * Rendering is unchanged: styles are merged in the same order, and characters that form part of any
  * delimiter are still dropped from the output.
  */
-fun buildString(input: String, defaultFontWeight: FontWeight = FontWeight.Normal): AnnotatedString {
+fun buildString(
+    input: String,
+    defaultFontWeight: FontWeight = FontWeight.Normal,
+    linkColor: Color = Color(0xFF1976D2)
+): AnnotatedString {
+    if (input.isEmpty()) return AnnotatedString("")
+
+    // Check for markdown links: [text](url)
+    val linkRegex = Regex("\\[([^\\]]+)\\]\\(([^\\)]+)\\)")
+    val linkMatches = linkRegex.findAll(input).toList()
+
+    if (linkMatches.isEmpty()) {
+        return buildStyledRunString(input, defaultFontWeight)
+    }
+
+    return buildAnnotatedString {
+        var lastIndex = 0
+        for (match in linkMatches) {
+            val range = match.range
+            if (range.first > lastIndex) {
+                append(buildStyledRunString(input.substring(lastIndex, range.first), defaultFontWeight))
+            }
+            val linkText = match.groupValues[1]
+            val linkUrl = match.groupValues[2]
+            val styledLinkText = buildStyledRunString(linkText, defaultFontWeight)
+
+            val startPos = length
+            append(styledLinkText)
+            val endPos = length
+
+            addLink(
+                url = LinkAnnotation.Url(
+                    url = linkUrl,
+                    styles = TextLinkStyles(
+                        style = SpanStyle(
+                            color = linkColor,
+                            textDecoration = TextDecoration.Underline
+                        )
+                    )
+                ),
+                start = startPos,
+                end = endPos
+            )
+            lastIndex = range.last + 1
+        }
+        if (lastIndex < input.length) {
+            append(buildStyledRunString(input.substring(lastIndex), defaultFontWeight))
+        }
+    }
+}
+
+private fun buildStyledRunString(input: String, defaultFontWeight: FontWeight): AnnotatedString {
     if (input.isEmpty()) return AnnotatedString("")
 
     val segments: List<TextStyleSegment> = listOf(
@@ -92,8 +147,6 @@ fun buildString(input: String, defaultFontWeight: FontWeight = FontWeight.Normal
         Underline()
     )
 
-    // Mark which offsets each style covers in one pass per style, rather than asking every style
-    // whether it contains the current index while iterating over the characters.
     val covered = Array(segments.size) { BooleanArray(input.length) }
     val delimiterChars = HashSet<Char>()
     segments.forEachIndexed { index, segment ->

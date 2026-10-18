@@ -44,6 +44,7 @@ fun WidgetText(
     val lines = markdown.lines()
     val lineProcessors = listOf(
         HeadingProcessor(),
+        HorizontalRuleProcessor(),
         ListItemProcessor(),
         CodeBlockProcessor(),
         QuoteProcessor(),
@@ -161,6 +162,16 @@ fun WidgetMarkdownElement(
                 )
             }
 
+            is HorizontalRule -> {
+                Text(
+                    text = "──────────",
+                    style = TextStyle(
+                        fontSize = fontSize,
+                        fontWeight = weight,
+                        color = color
+                    )
+                )
+            }
             is NormalText -> {
                 Text(
                     text = element.text,

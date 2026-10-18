@@ -301,6 +301,9 @@
     <string name="flashcard_wrong_answer">错误！正确答案：%1$s</string>
     <string name="flashcard_wrong_answers">❌ 错误：%1$d 题</string>
     <string name="flashcards">单词卡</string>
+    <string name="fmt_heading">标题</string>
+    <string name="fmt_link">插入链接</string>
+    <string name="fmt_divider">分割线</string>
     <string name="fmt_bold">加粗</string>
     <string name="fmt_bullet_list">项目符号列表</string>
     <string name="fmt_checkbox">复选框</string>

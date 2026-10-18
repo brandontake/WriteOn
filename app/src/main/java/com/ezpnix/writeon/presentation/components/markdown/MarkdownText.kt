@@ -17,6 +17,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.Checkbox
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -160,6 +161,7 @@ fun MarkdownText(
             lines = lines,
             lineProcessors = listOf(
                 HeadingProcessor(),
+                HorizontalRuleProcessor(),
                 ListItemProcessor(),
                 CodeBlockProcessor(),
                 QuoteProcessor(),
@@ -419,6 +421,15 @@ fun RenderMarkdownElement(
                             overflow = overflow
                         )
                     }
+                )
+            }
+            is HorizontalRule -> {
+                HorizontalDivider(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 12.dp),
+                    thickness = 1.dp,
+                    color = MaterialTheme.colorScheme.outlineVariant
                 )
             }
             is NormalText -> {

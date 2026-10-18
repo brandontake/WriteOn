@@ -340,6 +340,9 @@
     <string name="flashcard_wrong_answer">Wrong! Correct answer: %1$s</string>
     <string name="flashcard_wrong_answers">❌ Wrong answers: %1$d</string>
     <string name="flashcards">Flashcards</string>
+    <string name="fmt_heading">Heading</string>
+    <string name="fmt_link">Insert Link</string>
+    <string name="fmt_divider">Divider Line</string>
     <string name="fmt_bold">Bold</string>
     <string name="fmt_bullet_list">Bullet List</string>
     <string name="fmt_checkbox">Checkbox</string>

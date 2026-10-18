@@ -34,9 +34,9 @@ foreground services, and only the permissions the features actually need.
 ## 👋 Features
 
 **Writing**
-- Markdown editing with a formatting toolbar (headings, lists, quotes, code blocks, checkboxes, bold / italic / underline / strikethrough)
+- Markdown editing with an expanded 5-item-per-page formatting toolbar (headings `##`, hyperlinks `[](url)`, horizontal dividers `---`, quotes `>`, code blocks, checkboxes, bullet/ordered lists, bold / italic / underline / strikethrough, highlights, images, mic recording and timestamps)
 - Image attachments, tags and categories, search, pinning, a recycle bin and per-note details
-- Font size and font family options, grid or column layout, minimalistic mode, adjustable corner radius
+- Dynamic theming support across notes and flashcards, font size and custom local font import (.ttf/.otf), grid or column layout, minimalistic mode, adjustable corner radius
 
 **Privacy**
 - App lock with biometric authentication, PIN (PBKDF2-HMAC-SHA256, 600 000 iterations) or pattern, a 5-attempt lockout and screen protection
@@ -144,20 +144,18 @@ Play deadlines: new apps and updates must target API 36 since 2026-08-31 (extens
 
 ### How the build is verified
 
-Both variants were built on **2026-10-17** with `:app:assembleDebug` and `:app:assembleRelease` (offline,
-JDK 21.0.12.1, Gradle 8.9). The figures below are from the **latest** run, after the interaction and
-attribution batch:
+Both variants were built on **2026-10-18** with `:app:assembleDebug` and `:app:assembleRelease` (offline,
+JDK 21.0.12.1, Gradle 8.9). The figures below are from the **latest** release build, incorporating the
+extended Markdown toolbars and dynamic theme flashcards:
 
 | Variant | Size | applicationId | Notes |
 | --- | --- | --- | --- |
-| Debug | **7.47 MB** (7,837,158 bytes) | `com.ezpnix.writeon.debug` | R8 runs, but `isDebuggable` keeps optimisation/obfuscation off; installs alongside the release build |
-| Release | **3.73 MB** (3,911,482 bytes) | `com.ezpnix.writeon` | full R8 optimisation + obfuscation; ships two baseline profiles (API 28–30, 31+); signed with the project's upload key, not the debug certificate |
+| Release | **3.68 MB** (3,862,886 bytes) | `com.ezpnix.writeon` | full R8 optimisation + obfuscation; ships two baseline profiles (API 28–30, 31+); signed with the project's upload key (`CN=Brandontake, OU=WriteOn, O=WriteOn, C=US`) |
 
-SHA-256: debug `594B534E2E2CCA07F0FD0E61FDB7F7BEF9B63587B22B5E20CAF0D399E0481961`, release
-`33C7FD51645742440A218D723C0A70F5722BBBB5FACA1E8CD7FDB0C3FD5B74EC`.
+SHA-256 (Release): `CEC2B4631A55289D4591EC62CD2533F79828A327A65DC1F635859CBC6ADEF4D0`.
 
-Both report `versionCode 10` / `versionName 1.9`, `minSdk 26`, `targetSdk 36`, only the `zh` + default
-locales, and four ABIs. The preceding security batch built the same two variants at 7.47 MB / 3.73 MB
+Both report `versionCode 11` / `versionName 1.10`, `minSdk 26`, `targetSdk 36`, only the `zh` + default
+locales, and four ABIs.
 and caught and fixed six real compiler errors; it also produced `app/schemas/…/6.json` from the Room
 schema export.
 

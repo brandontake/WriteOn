@@ -81,11 +81,15 @@ fun FlashcardScreen(
                         modifier = Modifier.fillMaxWidth(),
                         shape = appCornerShape(),
                         colors = CardDefaults.outlinedCardColors(
-                            containerColor = MaterialTheme.colorScheme.surface
+                            containerColor = MaterialTheme.colorScheme.surfaceVariant
                         )
                     ) {
                         Column(modifier = Modifier.padding(16.dp)) {
-                            Text(stringResource(R.string.flashcard_add), style = MaterialTheme.typography.titleMedium)
+                            Text(
+                                stringResource(R.string.flashcard_add),
+                                style = MaterialTheme.typography.titleMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
                             Spacer(Modifier.height(8.dp))
                             OutlinedTextField(
                                 value = newWord,
@@ -126,7 +130,7 @@ fun FlashcardScreen(
                                     .padding(vertical = 4.dp),
                                 shape = appCornerShape(),
                                 colors = CardDefaults.outlinedCardColors(
-                                    containerColor = MaterialTheme.colorScheme.surface
+                                    containerColor = MaterialTheme.colorScheme.surfaceVariant
                                 )
                             ) {
                                 Column(modifier = Modifier.padding(12.dp)) {
@@ -145,7 +149,10 @@ fun FlashcardScreen(
                                             singleLine = true
                                         )
                                     } else {
-                                        Text(stringResource(R.string.flashcard_list_item, index + 1, card.word, card.meaning))
+                                        Text(
+                                            stringResource(R.string.flashcard_list_item, index + 1, card.word, card.meaning),
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
                                     }
                                     Spacer(Modifier.height(8.dp))
                                     Row(
@@ -286,7 +293,11 @@ fun FlashcardScreen(
                             )
                         ) {
                             Column(modifier = Modifier.padding(16.dp)) {
-                                Text(stringResource(R.string.flashcard_finished), style = MaterialTheme.typography.titleMedium)
+                                Text(
+                                    stringResource(R.string.flashcard_finished),
+                                    style = MaterialTheme.typography.titleMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
                                 Spacer(Modifier.height(8.dp))
                                 Button(
                                     onClick = {
