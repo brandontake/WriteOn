@@ -20,11 +20,9 @@ import androidx.compose.material.icons.rounded.FormatSize
 import androidx.compose.material.icons.rounded.Translate
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Checkbox
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.TextButton
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -47,12 +45,33 @@ import com.ezpnix.writeon.presentation.screens.settings.widgets.ListDialog
 import com.ezpnix.writeon.presentation.screens.settings.widgets.SettingsBox
 import com.ezpnix.writeon.presentation.theme.NoteFontManager
 
+/**
+ * MIME types accepted by the SAF font picker.
+ *
+ * `application/octet-stream` is required in practice: several OEM file managers
+ * (including HyperOS / MIUI DocumentsUI) report `.ttf` and `.otf` files with that
+ * generic type, and without it the user's font appears greyed out in the picker.
+ * The file is still validated for real after selection, so a wrong pick fails with
+ * a clear message instead of silently applying a broken font.
+ */
+private val FONT_MIME_TYPES = arrayOf(
+    "font/ttf",
+    "font/otf",
+    "font/ttc",
+    "application/x-font-ttf",
+    "application/x-font-otf",
+    "application/x-font",
+    "application/octet-stream"
+)
+
 @Composable
 fun LanguageScreen(navController: NavController, settingsViewModel: SettingsViewModel) {
     val context = LocalContext.current
     var showFontSizeDialog by remember { mutableStateOf(false) }
     var showFontAppliedDialog by remember { mutableStateOf(false) }
+    var showFontActionsDialog by remember { mutableStateOf(false) }
     var newlyAppliedFontName by remember { mutableStateOf("") }
+    var hasCustomFont by remember { mutableStateOf(NoteFontManager.getFontName(context) != null) }
     var currentFontName by remember {
         mutableStateOf(NoteFontManager.getFontName(context) ?: context.getString(R.string.default_font_name))
     }
@@ -64,6 +83,7 @@ fun LanguageScreen(navController: NavController, settingsViewModel: SettingsView
             try {
                 val fontName = NoteFontManager.importFont(context, uri)
                 currentFontName = fontName
+                hasCustomFont = true
                 newlyAppliedFontName = fontName
                 showFontAppliedDialog = true
             } catch (e: Exception) {
@@ -118,16 +138,11 @@ fun LanguageScreen(navController: NavController, settingsViewModel: SettingsView
                         isLast = true,
                         radius = settingsViewModel.settings.value.cornerRadius
                     ),
-                    customAction = {
-                        if (currentFontName != context.getString(R.string.default_font_name)) {
-                            // Already has custom font: offer reset or replace
-                            NoteFontManager.resetDefaultFont(context)
-                            currentFontName = context.getString(R.string.default_font_name)
-                            Toast.makeText(context, context.getString(R.string.font_reset_success), Toast.LENGTH_SHORT).show()
-                        } else {
-                            fontPickerLauncher.launch(arrayOf("font/ttf", "font/otf", "application/x-font-ttf", "application/x-font-otf", "*/*"))
-                        }
-                    }
+                    // IMPORTANT: the tap must NOT run side effects from `customAction`,
+                    // because `customAction` is composed content that re-executes on every
+                    // recomposition. Wiring the click here keeps launch/reset strictly
+                    // inside event handlers.
+                    onCardClick = { showFontActionsDialog = true }
                 )
                 Spacer(modifier = Modifier.height(18.dp))
             }
@@ -173,6 +188,55 @@ fun LanguageScreen(navController: NavController, settingsViewModel: SettingsView
                             .show()
                     }) {
                         Text(stringResource(id = R.string.save_and_exit))
+                    }
+                }
+            )
+        }
+
+        if (showFontActionsDialog) {
+            AlertDialog(
+                onDismissRequest = { showFontActionsDialog = false },
+                title = { Text(stringResource(R.string.custom_font_title)) },
+                text = {
+                    Column {
+                        Text(
+                            text = stringResource(R.string.current_font_label, currentFontName),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Spacer(modifier = Modifier.height(16.dp))
+                        TextButton(
+                            onClick = {
+                                showFontActionsDialog = false
+                                fontPickerLauncher.launch(FONT_MIME_TYPES)
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text(stringResource(R.string.choose_local_font))
+                        }
+                        if (hasCustomFont) {
+                            TextButton(
+                                onClick = {
+                                    NoteFontManager.resetDefaultFont(context)
+                                    currentFontName = context.getString(R.string.default_font_name)
+                                    hasCustomFont = false
+                                    showFontActionsDialog = false
+                                    Toast.makeText(
+                                        context,
+                                        context.getString(R.string.font_reset_success),
+                                        Toast.LENGTH_SHORT
+                                    ).show()
+                                },
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text(stringResource(R.string.reset_default_font))
+                            }
+                        }
+                    }
+                },
+                confirmButton = {
+                    TextButton(onClick = { showFontActionsDialog = false }) {
+                        Text(stringResource(R.string.cancel))
                     }
                 }
             )

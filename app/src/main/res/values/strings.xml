@@ -463,6 +463,7 @@
     <string name="custom_font_title">Custom Note Font</string>
     <string name="custom_font_desc">Select a local font file (.ttf / .otf) for note content.</string>
     <string name="select_font_file">Select Font File</string>
+    <string name="choose_local_font">Choose Local Font</string>
     <string name="reset_default_font">Restore Default Font</string>
     <string name="font_loaded_success">Font applied: %1$s</string>
     <string name="font_load_failed">Failed to load font file: %1$s</string>

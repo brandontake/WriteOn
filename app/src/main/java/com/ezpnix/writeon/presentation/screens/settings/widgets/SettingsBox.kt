@@ -59,6 +59,7 @@ fun SettingsBox(
     switchEnabled: (Boolean) -> Unit = {},
     linkClicked: () -> Unit = {},
     customAction: @Composable (() -> Unit) -> Unit = {},
+    onCardClick: (() -> Unit)? = null,
     customText: String = "",
     clipboardText: String = ""
 ) {
@@ -78,15 +79,20 @@ fun SettingsBox(
                 .padding(2.dp)
                 .clip(radius)
                 .clickable {
-                    handleAction(
-                        context,
-                        actionType,
-                        variable,
-                        switchEnabled,
-                        { showCustomAction = !showCustomAction },
-                        linkClicked,
-                        clipboardText
-                    )
+                    val override = onCardClick
+                    if (override != null) {
+                        override()
+                    } else {
+                        handleAction(
+                            context,
+                            actionType,
+                            variable,
+                            switchEnabled,
+                            { showCustomAction = !showCustomAction },
+                            linkClicked,
+                            clipboardText
+                        )
+                    }
                 }
         ) {
             Row(

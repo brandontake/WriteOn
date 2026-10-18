@@ -1,6 +1,7 @@
 package com.ezpnix.writeon.presentation.theme
 
 import android.content.Context
+import android.graphics.Typeface
 import android.net.Uri
 import android.provider.OpenableColumns
 import android.util.Log
@@ -19,6 +20,7 @@ object NoteFontManager {
     private const val TAG = "NoteFontManager"
     private const val PREFS_NAME = "custom_font_prefs"
     private const val KEY_FONT_NAME = "custom_font_name"
+    private const val KEY_FONT_FILE = "custom_font_file"
     private const val FONT_DIR = "fonts"
     private const val FONT_FILE_NAME = "custom_note_font.ttf"
 
@@ -53,10 +55,7 @@ object NoteFontManager {
      */
     fun getFontFamily(context: Context): FontFamily? {
         if (cachedFontFamily != null) return cachedFontFamily
-        val fontFile = File(context.filesDir, "$FONT_DIR/$FONT_FILE_NAME")
-        if (!fontFile.exists() || fontFile.length() == 0L) {
-            return null
-        }
+        val fontFile = currentFontFile(context) ?: return null
         return try {
             val family = FontFamily(Font(fontFile))
             cachedFontFamily = family
@@ -66,6 +65,27 @@ object NoteFontManager {
             cachedFontFamily = null
             null
         }
+    }
+
+    /**
+     * Resolves the font file that is currently active.
+     *
+     * Each import writes a brand-new file name. Compose caches resolved typefaces by
+     * the [Font] instance, which compares the backing file path, so re-using a single
+     * fixed file name would keep rendering the previously imported font until the
+     * process restarted. The legacy fixed name is still honoured for upgrades.
+     */
+    private fun currentFontFile(context: Context): File? {
+        val dir = File(context.filesDir, FONT_DIR)
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val stored = prefs.getString(KEY_FONT_FILE, null)
+        if (!stored.isNullOrBlank()) {
+            val file = File(dir, stored)
+            if (file.exists() && file.length() > 0L) return file
+            return null
+        }
+        val legacy = File(dir, FONT_FILE_NAME)
+        return if (legacy.exists() && legacy.length() > 0L) legacy else null
     }
 
     /**
@@ -88,14 +108,27 @@ object NoteFontManager {
                 throw IllegalStateException("Font file is empty")
             }
 
-            // Test loading the font to verify validity before replacing the active font
-            FontFamily(Font(tempFile))
+            // Really parse the selected file before replacing the active font.
+            // Compose's FontFamily(Font(file)) is lazy and would happily accept a
+            // corrupt/unsupported file, so it must NOT be used as validation.
+            // Typeface.Builder.build() returns null (instead of throwing) when the
+            // file is not a loadable font, which is exactly what we need here.
+            // (Typeface.Builder is API 26+, matching this app's minSdk.)
+            Typeface.Builder(tempFile).build()
+                ?: throw IllegalStateException("The selected file is not a valid font")
 
-            val targetFile = File(dir, FONT_FILE_NAME)
-            if (targetFile.exists()) targetFile.delete()
+            val targetName = "note_font_${System.currentTimeMillis()}.ttf"
+            val targetFile = File(dir, targetName)
             if (!tempFile.renameTo(targetFile)) {
                 tempFile.copyTo(targetFile, overwrite = true)
                 tempFile.delete()
+            }
+
+            // Keep only the newly imported font so stale files never linger.
+            dir.listFiles()?.forEach { file ->
+                if (file.isFile && file.name != targetName) {
+                    runCatching { file.delete() }
+                }
             }
 
             var displayName = queryFileName(context, uri) ?: "custom_font.ttf"
@@ -104,7 +137,10 @@ object NoteFontManager {
             }
 
             val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-            prefs.edit().putString(KEY_FONT_NAME, displayName).apply()
+            prefs.edit()
+                .putString(KEY_FONT_NAME, displayName)
+                .putString(KEY_FONT_FILE, targetName)
+                .apply()
 
             cachedFontName = displayName
             val family = FontFamily(Font(targetFile))
@@ -119,12 +155,12 @@ object NoteFontManager {
     }
 
     fun resetDefaultFont(context: Context) {
-        val targetFile = File(context.filesDir, "$FONT_DIR/$FONT_FILE_NAME")
-        if (targetFile.exists()) {
-            targetFile.delete()
+        val dir = File(context.filesDir, FONT_DIR)
+        dir.listFiles()?.forEach { file ->
+            if (file.isFile) runCatching { file.delete() }
         }
         val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        prefs.edit().remove(KEY_FONT_NAME).apply()
+        prefs.edit().remove(KEY_FONT_NAME).remove(KEY_FONT_FILE).apply()
         cachedFontName = null
         cachedFontFamily = null
         _fontState.value = null
