@@ -43,7 +43,7 @@
 - [x] **Full Material 3 Design Alignment.** Navigation Drawer, Settings screens, Cards, OutlinedCards (removed unknown elevation drop shadows in FlashcardScreen), TextButtons, and colorScheme tokens (primaryContainer/onPrimaryContainer) strictly MD3 compliant.
 - [x] **Audio note insertion and in-app player.** Zero-overhead AAC recording and playback directly within note Markdown text using `?audio(filepath)`.
 - [x] **Custom Font Support.** Import `.ttf`/`.otf` via system SAF, robust fallback preventing crashes, synced note rendering and image export.
-- [x] **100% Bilingual localization.** 439 strings strictly paired between English and Simplified Chinese, zero hardcoded strings.
+- [x] **Trilingual localization (English / 简体中文 / 日本語).** 439 string keys present in all three `values`, `values-zh` and `values-ja` resource sets, key-for-key identical, zero hardcoded strings. Japanese was added end-to-end: `res/values-ja/strings.xml`, `xml/locales_config.xml` and `resourceConfigurations` in `app/build.gradle.kts`, so the language also appears in the per-app language picker (Settings → Language & Text).
 - [x] **Widget note text vertically centred.** The Glance note block is wrapped in a centring `Box`, so short notes sit in the middle of the widget cell instead of being pinned to the top edge.
 - [x] **Audio player overhaul.**
   - Draggable seek bar replacing the read-only progress indicator; dragging suspends ticker updates so the thumb does not fight the playback position.

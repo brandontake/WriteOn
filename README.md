@@ -40,6 +40,7 @@ foreground services, and only the permissions the features actually need.
 - Diverse sorting dimensions (Creation Time, Last Modified Time, Title) with dedicated Ascending/Descending controls
 - Note details dialog with Last Modified Time tracking and Word/Character stats
 - Launcher App Shortcut for quick note creation
+- UI available in English, 简体中文 and 日本語 — switchable inside the app or through the system per-app language picker
 
 **Privacy**
 - App lock with biometric authentication, PIN (PBKDF2-HMAC-SHA256, 600 000 iterations) or pattern, a 5-attempt lockout and screen protection
@@ -134,8 +135,8 @@ somewhere safe. Without it you cannot publish an update that replaces a shipped 
 - R8 code shrinking/optimisation **and** resource shrinking are enabled for **both** build types; the
   unused icons of `material-icons-extended`, unused AndroidX classes and unreferenced resources are
   all removed (icons and library classes are only kept when a source file actually uses them).
-- The resource configuration list limits the app to the `en` and `zh` translations that exist, so no
-  library locale resources are packaged.
+- The resource configuration list limits the app to the `en`, `zh` and `ja` translations that exist, so
+  no library locale resources are packaged.
 - No Material 2 dependency, no unused libraries, and lossless WebP artwork for the widget previews.
 - No foreground services, no extra permissions and no native libraries beyond two tiny `.so` files
   shipped by AndroidX.

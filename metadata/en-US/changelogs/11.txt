@@ -4,6 +4,7 @@ v1.10 - Material 3 Redesign, Custom Fonts, Audio Memos & Modern Widgets:
 - In-note voice recording with an embedded player: seek bar, 0.5x-2x speed, rename, save to folder.
 - Audio cleanup on deletion, plus a battery and memory audit pass (mic and codec release, bounded image export).
 - Full multi-attribute note sorting (Creation date, Last modified date, Title) and Order switch.
+- Japanese (日本語) UI, alongside English and Simplified Chinese; renamed recordings keep their name when saved to a folder.
 - Adaptive widgets (24dp corners, free resizing, vertically centred note text).
 - App Shortcut for quick note creation.
 - Seamless predictive back gestures and system dark/light theme alignment.

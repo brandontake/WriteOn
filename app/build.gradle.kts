@@ -39,10 +39,11 @@ android {
         }
 
         // https://developer.android.com/guide/topics/resources/app-languages#gradle-config
-        // Ship only the locales the app actually has translations for (res/values + res/values-zh).
-        // NOTE: the previous `resourceConfigurations.plus(listOf("en"))` was a no-op - `plus` on a
-        // List returns a new list that was discarded, so no resource stripping happened at all.
-        resourceConfigurations += setOf("en", "zh")
+        // Ship only the locales the app actually has translations for (res/values + res/values-zh
+        // + res/values-ja). NOTE: the previous `resourceConfigurations.plus(listOf("en"))` was a
+        // no-op - `plus` on a List returns a new list that was discarded, so no resource stripping
+        // happened at all.
+        resourceConfigurations += setOf("en", "zh", "ja")
     }
 
     signingConfigs {

@@ -1,0 +1,488 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- App Info -->
+    <string name="app_name">WriteOn</string>
+    <string name="version">アプリのバージョン</string>
+    <string name="build_type">ビルドの種類</string>
+    <string name="latest_release">最新リリースを確認</string>
+    <string name="source_code">オープンソースコードを開く</string>
+    <string name="app_list">バージョン一覧</string>
+    <string name="android">端末情報</string>
+    <string name="android_description">詳細</string>
+    <string name="about">アプリについて</string>
+    <string name="description_about">GitHub • バージョン • メール</string>
+    <string name="credits_title">クレジット</string>
+    <string name="credits_fork">このフォーク</string>
+    <string name="credits_upstream">上流プロジェクト</string>
+
+    <!-- Welcome / Greeting -->
+        <string name="startup">"ヘルプ ~ 作成 ~ 共有"</string>
+    <string name="enter_placeholder">ホームのあいさつ</string>
+    <string name="enter_placeholder_description">好きなテキストを入力できます</string>
+
+    <!-- Notes -->
+    <string name="add_note">新しいノート</string>
+    <string name="new_note">作成</string>
+    <string name="created_time">作成日時</string>
+    <string name="updated_time">更新日時</string>
+    <string name="select_note">ノートを選択</string>
+    <string name="untitled">無題</string>
+    <string name="description">説明</string>
+    <string name="pinned">ピン留め済み</string>
+    <string name="pin">ピン留め</string>
+    <string name="delete">削除</string>
+    <string name="alert_text">このノートをゴミ箱に移動しますか？</string>
+    <string name="yes"> 確認</string>
+    <string name="cancel"> キャンセル</string>
+    <string name="share">共有</string>
+    <string name="share_text">テキストを共有</string>
+    <string name="save_as_image">画像として保存</string>
+    <string name="msg_image_saved">画像を %1$s に保存しました</string>
+    <string name="msg_image_save_failed">画像を保存できませんでした</string>
+    <string name="msg_image_save_failed_reason">画像を保存できませんでした: %1$s</string>
+
+    <!-- Sort & View -->
+    <string name="grid_view">グリッド表示</string>
+    <string name="column_view">リスト表示</string>
+    <string name="columns">グリッドの列数</string>
+    <string name="columns_description">グリッドの列数を選択</string>
+    <string name="sort_ascending">昇順で並べ替え</string>
+    <string name="shortcut_new_note_short">新しいノート</string>
+    <string name="shortcut_new_note_long">新しいノートを作成</string>
+    <string name="sort_descending">降順で並べ替え</string>
+    <string name="sort_description">ノートを昇順または降順で並べ替えます</string>
+    <string name="sort_by_title">並べ替えの基準</string>
+    <string name="sort_by_description">ノートを並べ替える基準を選択</string>
+    <string name="sort_by_created">作成日</string>
+    <string name="sort_by_updated">更新日</string>
+    <string name="sort_by_name">タイトル</string>
+    <string name="view_style_description">ノートの並べ替え方法を選択</string>
+
+    <!-- Search -->
+    <string name="search">検索</string>
+    <string name="search_note">検索</string>
+
+    <!-- Selection -->
+    <string name="select_all">すべて選択</string>
+    <string name="deselect_all">選択をすべて解除</string>
+
+    <!-- Word & Character Count -->
+    <string name="words">単語数</string>
+    <string name="characters">文字数</string>
+
+    <!-- Settings -->
+    <string name="screen_settings">設定</string>
+    <string name="display">表示</string>
+    <string name="color_styles">カラー &amp; スタイル</string>
+    <string name="description_color_styles">スタイル • テーマ</string>
+    <string name="language">言語 &amp; テキスト</string>
+    <string name="system_language">システム言語</string>
+    <string name="language_description">アプリの言語と文字サイズを変更します</string>
+    <string name="description_language">言語 • 文字サイズ</string>
+    <string name="radius">角の丸み</string>
+    <string name="select_radius">角の丸みを選択</string>
+    <string name="radius_description">角の丸みを調整します</string>
+    <string name="font_size">文字サイズ</string>
+    <string name="select_font_size">文字サイズを選択</string>
+    <string name="enter_font_size_description">編集時とプレビューの文字サイズを調整します</string>
+    <string name="select_font">フォント</string>
+
+    <!-- Themes -->
+    <string name="system_theme">システムテーマ</string>
+    <string name="dark_theme">ダークテーマ</string>
+    <string name="dynamic_colors">ダイナミックカラー</string>
+    <string name="amoled_colors">AMOLED カラー</string>
+    <string name="extreme_amoled_mode">極限 AMOLED カラー</string>
+    <string name="system_theme_description">システムの既定の配色に合わせます</string>
+    <string name="dark_theme_description">ライトテーマとダークテーマを切り替えます</string>
+    <string name="dynamic_colors_description">壁紙に合わせて配色を調整します</string>
+    <string name="amoled_colors_description">より深い暗色の背景を使用します</string>
+    <string name="extreme_amoled_mode_description">AMOLED 搭載端末に最適です</string>
+
+    <!-- View / Reader -->
+    <string name="minimalistic_mode">リーダーモード</string>
+    <string name="minimalistic_mode_description">ノートの見た目を切り替えます</string>
+
+    <!-- Backup / Restore -->
+    <string name="backup_restore">指紋 • セキュリティ</string>
+    <string name="database_backup">データベースのバックアップ</string>
+    <string name="database_restore">データベースの復元</string>
+    <string name="backup">バックアップ</string>
+    <string name="restore">復元</string>
+    <string name="auto_backup">自動バックアップ</string>
+    <string name="auto_backup_description">Android/data フォルダに自動で保存します（Android 10 以降の端末では、現在の Android の仕様によりアクセスに ROOT 権限が必要です）</string>
+    <string name="backup_dropdown">バックアップ</string>
+    <string name="backup_description">すべてのノートを zip ファイルに保存、または zip ファイルから復元します。なお、この操作は既存のノートをすべて置き換え、ゴミ箱も空になります。</string>
+    <string name="restore_description">zip ファイルからノートを復元します</string>
+
+    <!-- File Import -->
+    <string name="file_import_title">インポート</string>
+    <string name="file_import_description">他のテキストファイルをノートとしてインポートします</string>
+    <string name="file_import_success">インポートしました</string>
+    <string name="file_import_error">インポートできませんでした</string>
+    <string name="file_import_partial_error">一部のファイルをインポートできませんでした</string>
+
+    <!-- Markdown / Extras -->
+    <string name="markdown">追加のカスタマイズ</string>
+    <string name="markdown_description">箇条書き • チェックリスト • 画像</string>
+    <string name="description_markdown">サポート • 画像</string>
+    <string name="images_support">画像のサポート</string>
+    <string name="description_widgets">ウィジェット • Markdown</string>
+
+    <!-- Tools -->
+    <string name="tools">ツール</string>
+    <string name="description_tools">並べ替え • カスタマイズ</string>
+
+    <!-- History -->
+    <string name="history">履歴</string>
+    <string name="description_history">履歴 • 元に戻す</string>
+
+    <!-- Security / Vault -->
+    <string name="security">セキュリティ</string>
+    <string name="encrypt_database">データベースを暗号化</string>
+    <string name="encrypt_database_description">バックアップ時にデータベースを保護します</string>
+    <string name="database_restore_error">パスワードが正しくないか、データベースが暗号化されていません</string>
+    <string name="password_prompt">パスワードを入力</string>
+    <string name="password_continue">続行</string>
+    <string name="invalid_password">パスワードが正しくありません</string>
+    <string name="password_delete">パスワードを削除</string>
+    <string name="screen_protection">画面保護</string>
+    <string name="screen_protection_description">アプリを切り替えると内容をぼかします。\nスクリーンショットからアプリを保護します…</string>
+    <string name="biometric_authentication">生体認証</string>
+    <string name="biometric_authentication_description">指紋または顔認証で WriteOn のロックを解除します</string>
+    <string name="vault_description">保護レイヤーを追加します</string>
+
+    <!-- General -->
+    <string name="database">データベース</string>
+    <string name="not_supported">未対応です</string>
+    <string name="note_details">ノートの詳細</string>
+    <string name="cloud">クラウド</string>
+    <string name="predictive_back">予測型の戻る</string>
+    <string name="predictive_back_description">戻るスワイプ時に前の画面をプレビューします</string>
+    <string name="homepage">ホームに戻る</string>
+    <string name="others">その他</string>
+    <string name="feature">こんにちは</string>
+    <string name="support">(✦) WriteOn: シンプルなメモ帳</string>
+    <string name="support_description">ぜひ応援してください</string>
+    <string name="issue">不具合の報告</string>
+    <string name="issue_description">開発者に機能を提案する</string>
+    <string name="guide">ヘルプ &amp; 回答</string>
+    <string name="description_guide">ショートカット • ガイド • ヒント</string>
+    <string name="invalid_input">入力が正しくありません</string>
+    <string name="save_and_exit">保存して終了</string>
+
+    <!-- Behavior -->
+    <string name="Behavior">動作</string>
+    <string name="always_edit">ノートを開いたときの動作</string>
+    <string name="always_edit_description">無効 - 閲覧モードを優先\n有効 - 編集モードを優先</string>
+    <string name="show_only_title">ホーム画面にタイトルのみ表示</string>
+    <string name="show_only_title_description">内容を隠して表示スペースを広げます</string>
+
+    <!-- Terms of Service -->
+    <string name="terms_of_service">利用規約</string>
+    <string name="agree">同意</string>
+    <string name="terms_acceptance_title">1. 規約への同意</string>
+    <string name="terms_acceptance_body">WriteOn へようこそ。本アプリケーションを使用することで、本利用規約に同意したものとみなされます。よくお読みください。</string>
+    <string name="terms_license_title">2. ライセンスについて</string>
+    <string name="terms_license_body">WriteOn は **GNU General Public License (GPL) version 3** の下でライセンスされています。これにより、次のことが可能です:\n- アプリケーションを自由に使用、改変、共有できます。\n- ソースコードを頒布し GPL ライセンスを保持することを条件に、アプリケーションまたは改変版を配布できます。</string>
+    <string name="terms_responsibilities_title">3. ユーザーの責任</string>
+    <string name="terms_responsibilities_body">アカウント情報の機密を保持し、アカウントで行われるすべての行為について責任を負うものとします。</string>
+    <string name="terms_liabilities_title">4. 責任の制限</string>
+    <string name="terms_liabilities_body">WriteOn は「現状のまま」提供され、いかなる保証も行いません。本アプリにエラーがないこと、安全であること、中断なく動作することを保証するものではありません。</string>
+    <string name="terms_warranties_title">5. 保証の否認</string>
+    <string name="terms_warranties_body">WriteOn の使用に起因するいかなる損害（間接的、偶発的、結果的損害を含みます）についても、当方は責任を負いません。</string>
+    <string name="terms_changes_title">6. 規約の変更</string>
+    <string name="terms_changes_body">本規約は随時更新されることがあります。更新後の規約はウェブサイトに掲載され、発効日もあわせて更新されます。</string>
+    <string name="terms_privacy_title">7. プライバシーポリシー</string>
+    <string name="terms_privacy_body">WriteOn は個人データを一切収集しません。詳細については、以下で公開しているプライバシーポリシーをご参照ください。</string>
+    <string name="terms_contact_title">8. お問い合わせ</string>
+    <string name="terms_contact_body">本利用規約に関するご質問は、以下までお問い合わせください。</string>
+    <string name="terms_effective_date">発効日</string>
+
+    <!-- Fun -->
+    <string name="announcements">✦ オープンソースライセンス</string>
+    <string name="discord">Discord</string>
+    <string name="privacy">プライバシー</string>
+    <string name="unsupported_image_size">画像サイズが大きすぎます（15MB）</string>
+    <string name="description_cloud">ノートを端末内とクラウドに保存します</string>
+    <string name="pattern_authentication">パターン認証</string>
+    <string name="pattern_authentication_description">パターンを描いて WriteOn のロックを解除します</string>
+    <string name="pin_authentication">PIN 認証</string>
+    <string name="pin_authentication_description">4〜6 桁の PIN を入力して WriteOn のロックを解除します</string>
+
+    <string name="trash">ゴミ箱</string>
+    <string name="trash_empty">ゴミ箱は空です</string>
+    <string name="delete_forever">削除</string>
+    <string name="confirm_restore">選択したノートを復元しますか？</string>
+    <string name="confirm_delete">ノートを完全に削除しますか？</string>
+    <string name="edit">編集</string>
+    <string name="empty_description">説明はまだありません…</string>
+    <!-- Recovered from the last resource merge after an accidental re-encoding. -->
+    <string name="about_androidx_libraries">AndroidX ライブラリ:\n</string>
+    <string name="about_apache_note">掲載されているライブラリの多くは Apache License 2.0 の下でライセンスされています。これは寛容なオープンソースライセンスで、ソフトウェアを自由に使用、改変、配布できます。\n</string>
+    <string name="about_google_dagger_hilt">Google Dagger Hilt:\n</string>
+    <string name="about_third_party_libraries">サードパーティ製ライブラリ:\n</string>
+    <string name="action_add">追加</string>
+    <string name="action_cancel">キャンセル</string>
+    <string name="action_clear">クリア</string>
+    <string name="action_close">閉じる</string>
+    <string name="action_collapse">折りたたむ</string>
+    <string name="action_discard">破棄</string>
+    <string name="action_done">完了</string>
+    <string name="action_end_test">テストを終了</string>
+    <string name="action_enter">決定</string>
+    <string name="action_exit">終了</string>
+    <string name="action_expand">展開</string>
+    <string name="action_next">次へ</string>
+    <string name="action_ok">OK</string>
+    <string name="action_remove">削除</string>
+    <string name="action_restart">再起動</string>
+    <string name="action_save">保存</string>
+    <string name="action_start_test">テストを開始</string>
+
+    <string name="activate_search">検索を開始</string>
+    <string name="app_list_latest">最新リリース</string>
+    <string name="app_subtitle">シンプルなメモ帳</string>
+    <string name="backup_successful">バックアップに成功しました</string>
+    <string name="calculator_result">結果</string>
+    <string name="cd_back">戻る</string>
+    <string name="cd_copy_and_save">コピーして保存</string>
+    <string name="cd_details">詳細</string>
+    <string name="cd_guide">ガイド</string>
+    <string name="cd_info">情報</string>
+    <string name="cd_note_image">ノートの画像</string>
+    <string name="cd_options">オプション</string>
+    <string name="cd_preview">プレビュー</string>
+    <string name="cd_redo">やり直し</string>
+    <string name="cd_select_all">すべて選択</string>
+    <string name="cd_show_options">オプションを表示</string>
+    <string name="cd_undo">元に戻す</string>
+    <string name="clipboard_label_copied_text">コピーしたテキスト</string>
+    <string name="cloud_auto_backup_disabled">自動バックアップは無効です</string>
+    <string name="cloud_auto_backup_enabled">有効 - 毎日バックアップ</string>
+    <string name="cloud_backup_as_txt">TXT としてバックアップ</string>
+    <string name="cloud_backup_as_txt_desc">ノートを暗号化なしのプレーンな TXT ファイルとして書き出し、1 つの zip ファイルにまとめます</string>
+    <string name="cloud_backup_options">バックアップのオプション</string>
+    <string name="cloud_backup_passphrase">バックアップのパスフレーズ</string>
+    <string name="cloud_backup_passphrase_desc">WebDAV にアップロードするアーカイブを暗号化します。クラウドからの復元には同じパスフレーズが必要になるため、安全な場所に控えを保管してください。</string>
+    <string name="cloud_backup_passphrase_missing">WebDAV のバックアップまたは復元を使用する前に、バックアップのパスフレーズを設定してください</string>
+    <string name="cloud_backup_restore_title">バックアップ &amp; 復元</string>
+    <string name="cloud_backup_to_cloud">クラウドへバックアップ</string>
+    <string name="cloud_backup_to_webdav">WebDAV へバックアップ</string>
+    <string name="cloud_backup_to_webdav_desc">暗号化したノートを WebDAV サーバー（例: Nextcloud、Koofr）にアップロードします</string>
+    <string name="cloud_enter_webdav_first">先に WebDAV 情報を入力してください</string>
+    <string name="cloud_experimental">⚠️ 試験的な機能</string>
+    <string name="cloud_experimental_desc">この機能はまだ開発中です。当面は手動でのバックアップまたは復元をおすすめします。</string>
+    <string name="cloud_export">エクスポート</string>
+    <string name="cloud_imported_restart">インポートしました。アプリを再起動します。</string>
+    <string name="cloud_password">パスワード</string>
+    <string name="cloud_restore_failed">バックアップの復元に失敗しました: %1$s</string>
+    <string name="cloud_restore_txt_failed">TXT バックアップの復元に失敗しました: %1$s</string>
+    <string name="cloud_restored_restart">復元しました。アプリを再起動します。</string>
+    <string name="cloud_save_webdav_info">WebDAV 情報を保存</string>
+    <string name="cloud_txt_backup_saved">TXT バックアップを保存しました</string>
+    <string name="cloud_username">ユーザー名</string>
+    <string name="cloud_webdav_backup_started">WebDAV バックアップを開始しました</string>
+    <string name="cloud_webdav_restore_completed">WebDAV の復元が完了しました。アプリを再起動します。</string>
+    <string name="cloud_webdav_restore_started">WebDAV の復元を開始しました</string>
+    <string name="cloud_webdav_saved">WebDAV の認証情報を保存しました</string>
+    <string name="cloud_webdav_settings">WebDAV 設定</string>
+    <string name="cloud_webdav_url">WebDAV URL</string>
+    <string name="columns_dialog_count">%1$d 列</string>
+    <string name="columns_dialog_title">列数を選択</string>
+    <string name="customize_quick_actions">クイックアクションをカスタマイズ</string>
+    <string name="device_android_version">Android バージョン</string>
+    <string name="device_board">ボード</string>
+    <string name="device_bootloader">ブートローダー</string>
+    <string name="device_brand">ブランド</string>
+    <string name="device_build_id">ビルド ID</string>
+    <string name="device_build_time">ビルド日時</string>
+    <string name="device_cpu_abi">CPU ABI</string>
+    <string name="device_device">デバイス</string>
+    <string name="device_display">ディスプレイ</string>
+    <string name="device_fingerprint">フィンガープリント</string>
+    <string name="device_hardware">ハードウェア</string>
+    <string name="device_host">ホスト</string>
+    <string name="device_manufacturer">メーカー</string>
+    <string name="device_model">モデル</string>
+    <string name="device_radio_version">ラジオのバージョン</string>
+    <string name="device_sdk_level">SDK レベル</string>
+    <string name="device_security_patch">セキュリティパッチ</string>
+    <string name="device_storage">ストレージ</string>
+    <string name="drawer_user">ユーザー</string>
+    <string name="enter_text">テキストを入力</string>
+    <string name="error">エラー</string>
+    <string name="expand_collapse">展開/折りたたみ</string>
+    <string name="export_failed">エクスポートに失敗しました: %1$s</string>
+    <string name="export_successful">エクスポートしました</string>
+
+    <string name="faq_a_auto_backup_files">現在は Android/data フォルダにありますが、現在の Android の仕様により、一部の環境ではアクセスできません</string>
+    <string name="faq_a_delete_note">ホーム画面でノートを長押しすると、利用できるオプションが表示されます。ほかにも、ノートをスワイプして編集/プレビューするなどの隠し機能があります。</string>
+    <string name="faq_a_developer">WriteOn は、小規模なオープンソースアプリやゲームを手がける電子工学専攻の大学生 @3zpnix によって作られました。このビルドは、自身の必要に合わせてフォークし改良を行っているバイブコーディング初心者の @Brandontake が管理しています。</string>
+    <string name="faq_a_feature_requests">もちろんです。改善のためのフィードバックや提案を歓迎します。開発者は通常 1〜2 日以内に返信します。</string>
+    <string name="faq_a_lost_data">ノートのデータベースを扱う処理に変更が加えられた際によく起こります。元に戻すには、以前のバージョンのアプリにあった旧リカバリー機能を使用してください。</string>
+    <string name="faq_a_open_source">はい。フォークやコードの改変はご自由にどうぞ。怪しいものは何もなく、ウイルスも強制広告もありません。クリーンなオープンソースアプリです。</string>
+    <string name="faq_a_recover_deleted">はい。ナビゲーションドロワーまたはクイックアクションメニューにあるゴミ箱から復元できます。</string>
+    <string name="faq_a_report_issue">公式の GitHub ページを訪れるか、開発者のソーシャルメディアアカウントで直接チャットしてください。</string>
+    <string name="faq_a_update_frequency">開発者は通常 1〜2 か月ごとにアップデートを公開します。頻度は実生活の忙しさによって変わります。</string>
+    <string name="faq_a_what_is_writeon">WriteOn はメモを取るためのシンプルなアプリで、特別な機能はありません。画像を追加するなど、いろいろできます。</string>
+    <string name="faq_q_auto_backup_files">自動バックアップファイルの保存場所は？</string>
+    <string name="faq_q_delete_note">ノートを削除するには？</string>
+    <string name="faq_q_developer">このアプリの開発者は？</string>
+    <string name="faq_q_feature_requests">機能のリクエストは受け付けていますか？</string>
+    <string name="faq_q_lost_data">アップデート中にデータを失いました</string>
+    <string name="faq_q_open_source">このアプリは完全にオープンソースですか？</string>
+    <string name="faq_q_recover_deleted">削除したノートを復元できますか？</string>
+    <string name="faq_q_report_issue">不具合やバグはどう報告すればいい？</string>
+    <string name="faq_q_update_frequency">アップデートの頻度は？</string>
+    <string name="faq_q_what_is_writeon">WriteOn とは？</string>
+    <string name="flashcard_add">単語カードを追加</string>
+    <string name="flashcard_answer">答え</string>
+    <string name="flashcard_card_of">カード %1$d / %2$d</string>
+    <string name="flashcard_correct">正解</string>
+    <string name="flashcard_correct_answers">✅ 正解数: %1$d</string>
+    <string name="flashcard_correct_exclaim">正解！</string>
+    <string name="flashcard_finished">終了しますか？</string>
+    <string name="flashcard_list_item">%1$d. %2$s — %3$s</string>
+    <string name="flashcard_question">問題</string>
+    <string name="flashcard_test_complete">テスト完了</string>
+    <string name="flashcard_type_meaning">意味を入力</string>
+    <string name="flashcard_word">単語: %1$s</string>
+    <string name="flashcard_wrong_answer">不正解！ 正しい答え: %1$s</string>
+    <string name="flashcard_wrong_answers">❌ 不正解数: %1$d</string>
+    <string name="flashcards">単語カード</string>
+    <string name="fmt_heading">見出し</string>
+    <string name="fmt_link">リンクを挿入</string>
+    <string name="fmt_divider">区切り線</string>
+    <string name="fmt_bold">太字</string>
+    <string name="fmt_bullet_list">箇条書き</string>
+    <string name="fmt_checkbox">チェックボックス</string>
+    <string name="fmt_code_block">コードブロック</string>
+    <string name="fmt_highlight">ハイライト</string>
+    <string name="fmt_insert_datetime">日付/時刻を挿入</string>
+    <string name="fmt_insert_image">画像を挿入</string>
+    <string name="fmt_record_audio">音声を録音</string>
+    <string name="record_audio_title">音声を録音</string>
+    <string name="record_audio_start">開始</string>
+    <string name="record_audio_stop_insert">完了して挿入</string>
+    <string name="record_audio_recording">録音中...</string>
+    <string name="record_audio_ready">録音の準備完了</string>
+    <string name="record_audio_permission_denied">マイクの権限がありません</string>
+    <string name="record_audio_failed">録音に失敗しました</string>
+    <string name="audio_play">再生</string>
+    <string name="audio_pause">一時停止</string>
+    <string name="audio_recording_label">ボイスメモ</string>
+    <string name="audio_more">その他のオプション</string>
+    <string name="audio_save_to_folder">フォルダに保存</string>
+    <string name="audio_rename">名前を変更</string>
+    <string name="audio_rename_title">録音の名前を変更</string>
+    <string name="audio_rename_hint">名前</string>
+    <string name="audio_saved">録音を保存しました</string>
+    <string name="audio_save_failed">録音を保存できませんでした</string>
+    <string name="fmt_italic">斜体</string>
+    <string name="fmt_order_list">番号付きリスト</string>
+    <string name="fmt_quote">引用</string>
+    <string name="fmt_strikethrough">取り消し線</string>
+    <string name="fmt_underline">下線</string>
+    <string name="guide_faq_title">ガイド &amp; よくある質問</string>
+    <string name="import_failed">インポートに失敗しました: %1$s</string>
+    <string name="import_stream_error">ContentResolver がインポート対象ファイルの InputStream を開けませんでした。</string>
+    <string name="import_successful">インポートしました</string>
+    <string name="issue_item">項目 %1$d</string>
+    <string name="msg_error_saving_file">ファイルの保存エラー: %1$s</string>
+    <string name="msg_error_with_message">エラー: %1$s</string>
+    <string name="msg_exporting">エクスポート中…</string>
+
+    <string name="msg_link_copied">リンクをクリップボードにコピーしました</string>
+    <string name="msg_no_browser_found">ブラウザが見つかりません</string>
+    <string name="msg_note_saved">ノートを保存しました</string>
+    <string name="msg_opening_browser">既定のブラウザを開いています…</string>
+    <string name="msg_storage_permission_required">画像の読み込み/保存にはストレージの権限が必要です</string>
+    <string name="msg_text_saved">テキストを保存しました</string>
+    <string name="nav_all_notes">すべてのノート</string>
+    <string name="nav_homepage">ホーム</string>
+    <string name="nav_pinned_notes">ピン留めしたノート</string>
+    <string name="nav_tags">タグ</string>
+    <string name="nav_trash">ゴミ箱</string>
+    <string name="note_filter_support">(^-^) ご支援いただけると嬉しいです！ https://github.com/Brandontake/Writeon</string>
+    <string name="notif_channel_pinned_notes">ピン留めしたノート</string>
+    <string name="notif_channel_pinned_notes_description">ピン留めしたノートを常時表示します</string>
+    <string name="notif_no_content">内容がありません</string>
+    <string name="notif_pin_denied">権限がありません。通知にピン留めできません。</string>
+    <string name="notif_pinned_to">通知にピン留めしました</string>
+    <string name="notif_unpinned">通知へのピン留めを解除しました</string>
+    <string name="notif_untitled_note">無題のノート</string>
+    <string name="notification_permission_denied">通知の権限がありません</string>
+    <string name="notification_permission_granted">通知の権限が許可されました</string>
+    <string name="open_drawer">ドロワーを開く</string>
+    <string name="pin_to_notification">通知にピン留め</string>
+    <string name="privacy_db_encryption_disabled">データベースの暗号化は無効</string>
+    <string name="privacy_db_encryption_enabled">データベースの暗号化は有効</string>
+    <string name="privacy_screen_protected">画面保護中</string>
+    <string name="privacy_screen_unprotected">画面保護なし</string>
+    <string name="quick_action_browser">ブラウザ</string>
+    <string name="quick_action_calculator">電卓</string>
+    <string name="quick_action_calendar">カレンダー</string>
+    <string name="quick_action_flashcard">単語カード</string>
+    <string name="quick_action_modify">変更</string>
+    <string name="quick_action_save_txt">TXT を保存</string>
+    <string name="quick_action_scratchpad">スクラッチパッド</string>
+    <string name="quick_export">クイックエクスポート</string>
+    <string name="save_as_txt">TXT として保存</string>
+    <string name="scratchpad_about">このセクションでは、1 つの入力欄に自由に文字を入力できます。注意: アプリを再起動したりアンインストールしたりすると、データは削除されます。</string>
+    <string name="select_an_item">項目を選択</string>
+    <string name="settings_locked">ロック中</string>
+    <string name="settings_locked_message">このセクションは開発者によりロックされています。ご了承ください。</string>
+    <string name="settings_locked_ok">> 了解しました &lt;</string>
+    <string name="storage_free_of_total">空き %1$s / 合計 %2$s</string>
+    <string name="tag_add">タグを追加</string>
+    <string name="tag_added_count">タグ「%1$s」を %2$d 件のノートに追加しました</string>
+    <string name="tag_already_exists">タグ「%1$s」は選択したすべてのノートに既にあります</string>
+    <string name="tag_delete">タグを削除</string>
+    <string name="tag_deleted">タグ「%1$s」を削除しました</string>
+    <string name="tag_name_empty">タグ名を空にすることはできません</string>
+    <string name="tag_name_hint">タグ名</string>
+    <string name="tag_none_removed">削除されたタグはありません</string>
+    <string name="tag_none_selected">削除するタグが選択されていません</string>
+    <string name="tag_none_to_remove">削除するタグがありません</string>
+    <string name="tag_none_yet">タグはまだありません</string>
+    <string name="tag_remove_many">タグを削除</string>
+    <string name="tag_remove_one">タグを削除</string>
+    <string name="tag_removed_count">%2$d 件のノートから %1$d 個のタグを削除しました</string>
+    <string name="tag_select_at_least_one">削除するタグを 1 つ以上選択してください</string>
+    <string name="tag_still_in_use">タグ「%1$s」は一部のノートで使用中です</string>
+    <string name="tagged_note">タグ付きノート</string>
+    <string name="tools_autohide_desc">ノートの編集中にキーボードが表示されているとき、ボタンを非表示にします。</string>
+    <string name="tools_autohide_title">表示ボタンを自動で隠す</string>
+    <string name="tools_disabled">無効</string>
+    <string name="tools_edit_mode">&lt;編集モード></string>
+    <string name="tools_enabled_recommended">有効（推奨）</string>
+    <string name="tools_example_text">例: こんにちは！</string>
+    <string name="tools_saved_exclaim">保存しました</string>
+    <string name="tools_text_not_updated">テキストは更新されませんでした</string>
+    <string name="tools_text_updated">テキストを更新しました</string>
+    <string name="tools_title_only">&lt;タイトルのみ></string>
+    <string name="tools_title_with_desc">&lt;タイトルと説明></string>
+    <string name="tools_view_mode">&lt;閲覧モード></string>
+    <string name="unknown">不明</string>
+    <string name="unsaved_changes_message">未保存の変更があります。保存してから移動しますか？</string>
+    <string name="unsaved_changes_title">変更を保存しますか？</string>
+    <string name="widget_locked_notice">このノートを表示するには WriteOn を開いてください</string>
+    <string name="nav_drawer_subtitle">%1$d 件のノート</string>
+
+    <!-- Custom Font in Note -->
+    <string name="custom_font_title">ノートのカスタムフォント</string>
+    <string name="custom_font_desc">ノート本文に使用するローカルのフォントファイル（.ttf / .otf）を選択します。</string>
+    <string name="select_font_file">フォントファイルを選択</string>
+    <string name="choose_local_font">ローカルのフォントを選択</string>
+    <string name="reset_default_font">既定のフォントに戻す</string>
+    <string name="font_loaded_success">フォントを適用しました: %1$s</string>
+    <string name="font_load_failed">フォントファイルの読み込みに失敗しました: %1$s</string>
+    <string name="font_reset_success">既定のフォントに戻しました</string>
+    <string name="current_font_label">現在のフォント: %1$s</string>
+    <string name="default_font_name">システムの既定</string>
+    <string name="font_applied_dialog_title">フォントを適用しました</string>
+    <string name="font_applied_dialog_msg">カスタムフォント「%1$s」を適用しました。今すぐホームに戻りますか？</string>
+    <string name="return_to_home">ホームに戻る</string>
+    <string name="stay_here">このまま留まる</string>
+</resources>

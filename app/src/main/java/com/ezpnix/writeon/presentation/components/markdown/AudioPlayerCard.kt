@@ -100,10 +100,21 @@ fun AudioPlayerCard(
     var showMenu by remember { mutableStateOf(false) }
     var showRename by remember { mutableStateOf(false) }
 
-    val exportName = if (displayName.endsWith(".m4a", ignoreCase = true)) {
-        displayName
-    } else {
-        "$displayName.m4a"
+    // The name suggested to the system file picker follows the user's own label, so a renamed memo
+    // is saved under the name they chose rather than the opaque recording timestamp. An unlabelled
+    // memo falls back to its own file name instead of the localized "Voice Memo" default, because
+    // that placeholder cannot tell two saved recordings apart. Characters that FAT/exFAT cards
+    // reject are replaced, and the stem is capped so the picker never sees an over-long name.
+    val exportName = remember(storedLabel, file) {
+        val stem = storedLabel
+            .ifBlank { file.nameWithoutExtension }
+            .replace(Regex("[\\\\/:*?\"<>|]"), "_")
+            .trim()
+            .trimEnd('.')
+            .take(80)
+            .trim()
+            .ifBlank { "audio" }
+        if (stem.endsWith(".m4a", ignoreCase = true)) stem else "$stem.m4a"
     }
 
     val saveLauncher = rememberLauncherForActivityResult(
