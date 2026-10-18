@@ -5,6 +5,7 @@
     <!-- Permissions -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
 
     <!-- Removed ones -->
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" tools:node="remove"/>

@@ -82,3 +82,15 @@ class ImageInsertionProcessor : MarkdownLineProcessor {
         builder.add(ImageInsertion(photoUri))
     }
 }
+
+class AudioInsertionProcessor : MarkdownLineProcessor {
+    override fun canProcessLine(line: String): Boolean {
+        val trimmed = line.trim()
+        return trimmed.startsWith("?audio(") && trimmed.endsWith(")")
+    }
+
+    override fun processLine(line: String, builder: MarkdownBuilder) {
+        val audioUri = line.trim().substringAfter("?audio(", "").substringBefore(")")
+        builder.add(AudioInsertion(audioUri))
+    }
+}

@@ -2,6 +2,7 @@ package com.ezpnix.writeon.presentation.screens.edit
 
 import android.Manifest
 import android.annotation.SuppressLint
+import android.content.pm.PackageManager
 import android.content.Intent
 import android.icu.text.SimpleDateFormat
 import android.os.Build
@@ -9,6 +10,8 @@ import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.app.NotificationManagerCompat
+import androidx.core.content.ContextCompat
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -188,6 +191,47 @@ fun TopBarActions(pagerState: PagerState, onClickBack: () -> Unit, viewModel: Ed
     val context = LocalContext.current
     val isPinned = viewModel.isPinned.value
 
+    fun triggerPinNotification() {
+        NoteNotificationManager.showPinnedNotification(
+            context,
+            viewModel.noteName.value.text.ifBlank { context.getString(R.string.notif_untitled_note) },
+            viewModel.noteDescription.value.text.ifBlank { context.getString(R.string.notif_no_content) }
+        )
+        viewModel.toggleNotePin(true)
+        Toast.makeText(context, context.getString(R.string.notif_pinned_to), Toast.LENGTH_SHORT).show()
+    }
+
+    val notificationPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { isGranted ->
+        if (isGranted) {
+            triggerPinNotification()
+        } else {
+            Toast.makeText(context, context.getString(R.string.notif_pin_denied), Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    fun requestPinWithPermissionCheck() {
+        if (!NotificationManagerCompat.from(context).areNotificationsEnabled()) {
+            Toast.makeText(context, context.getString(R.string.notif_pin_denied), Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            val permissionCheck = ContextCompat.checkSelfPermission(
+                context,
+                Manifest.permission.POST_NOTIFICATIONS
+            )
+            if (permissionCheck == PackageManager.PERMISSION_GRANTED) {
+                triggerPinNotification()
+            } else {
+                notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+            }
+        } else {
+            triggerPinNotification()
+        }
+    }
+
     when (pagerState.currentPage) {
 
         0 -> {
@@ -223,13 +267,7 @@ fun TopBarActions(pagerState: PagerState, onClickBack: () -> Unit, viewModel: Ed
                                     viewModel.toggleNotePin(false)
                                     Toast.makeText(context, context.getString(R.string.notif_unpinned), Toast.LENGTH_SHORT).show()
                                 } else {
-                                    NoteNotificationManager.showPinnedNotification(
-                                        context,
-                                        viewModel.noteName.value.text.ifBlank { context.getString(R.string.notif_untitled_note) },
-                                        viewModel.noteDescription.value.text.ifBlank { context.getString(R.string.notif_no_content) }
-                                    )
-                                    viewModel.toggleNotePin(true)
-                                    Toast.makeText(context, context.getString(R.string.notif_pinned_to), Toast.LENGTH_SHORT).show()
+                                    requestPinWithPermissionCheck()
                                 }
                                 viewModel.toggleEditMenuVisibility(false)
                             }

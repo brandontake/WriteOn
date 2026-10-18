@@ -347,6 +347,17 @@
     <string name="fmt_highlight">Highlight</string>
     <string name="fmt_insert_datetime">Insert Date/Time</string>
     <string name="fmt_insert_image">Insert Image</string>
+    <string name="fmt_record_audio">Record Audio</string>
+    <string name="record_audio_title">Record Audio</string>
+    <string name="record_audio_start">Start</string>
+    <string name="record_audio_stop_insert">Done &amp; Insert</string>
+    <string name="record_audio_recording">Recording...</string>
+    <string name="record_audio_ready">Ready to record</string>
+    <string name="record_audio_permission_denied">Microphone permission denied</string>
+    <string name="record_audio_failed">Recording failed</string>
+    <string name="audio_play">Play</string>
+    <string name="audio_pause">Pause</string>
+    <string name="audio_recording_label">Voice Memo</string>
     <string name="fmt_italic">Italic</string>
     <string name="fmt_order_list">Order List</string>
     <string name="fmt_quote">Quote</string>

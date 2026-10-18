@@ -48,6 +48,7 @@ fun WidgetText(
         CodeBlockProcessor(),
         QuoteProcessor(),
         ImageInsertionProcessor(),
+        AudioInsertionProcessor(),
         CheckboxProcessor()
     )
     val markdownBuilder = MarkdownBuilder(lines, lineProcessors)
@@ -148,6 +149,16 @@ fun WidgetMarkdownElement(
                         )
                     }
                 }
+            }
+            is AudioInsertion -> {
+                Text(
+                    text = "[Voice Memo]",
+                    style = TextStyle(
+                        fontSize = fontSize,
+                        fontWeight = weight,
+                        color = color
+                    )
+                )
             }
 
             is NormalText -> {

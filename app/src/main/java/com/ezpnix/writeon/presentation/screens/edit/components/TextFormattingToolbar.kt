@@ -24,6 +24,7 @@ import androidx.compose.material.icons.rounded.FormatListNumbered
 import androidx.compose.material.icons.rounded.FormatQuote
 import androidx.compose.material.icons.rounded.FormatUnderlined
 import androidx.compose.material.icons.rounded.Image
+import androidx.compose.material.icons.rounded.Mic
 import androidx.compose.material.icons.rounded.StrikethroughS
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -31,6 +32,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
@@ -62,6 +64,7 @@ fun TextFormattingToolbar(viewModel: EditViewModel) {
     val colorArrow = MaterialTheme.colorScheme.outlineVariant
     val colorIcon = MaterialTheme.colorScheme.inverseSurface
     var currentIndex by remember { mutableIntStateOf(0) }
+    var showRecordAudioDialog by remember { mutableStateOf(false) }
     val context = LocalContext.current
     val launcher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         uri?.let {
@@ -72,6 +75,15 @@ fun TextFormattingToolbar(viewModel: EditViewModel) {
                 viewModel.insertText("!($savedUri)")
             }
         }
+    }
+
+    if (showRecordAudioDialog) {
+        AudioRecordDialog(
+            onDismiss = { showRecordAudioDialog = false },
+            onAudioRecorded = { audioFile ->
+                viewModel.insertText("?audio(${audioFile.absolutePath})")
+            }
+        )
     }
 
     val toolbarSets = remember {
@@ -90,11 +102,14 @@ fun TextFormattingToolbar(viewModel: EditViewModel) {
                 ToolbarItem(Icons.AutoMirrored.Rounded.ViewList, context.getString(R.string.fmt_bullet_list), color = colorIcon) {
                     viewModel.insertText("- ")
                 },
-                        ToolbarItem(Icons.Rounded.Image, context.getString(R.string.fmt_insert_image), color = colorIcon) {
+                ToolbarItem(Icons.Rounded.Image, context.getString(R.string.fmt_insert_image), color = colorIcon) {
                     launcher.launch("image/*")
                 },
+                ToolbarItem(Icons.Rounded.Mic, context.getString(R.string.fmt_record_audio), color = colorIcon) {
+                    showRecordAudioDialog = true
+                },
                 ToolbarItem(Icons.AutoMirrored.Rounded.ArrowForwardIos,context.getString(R.string.fmt_bullet_list), color = colorArrow) {
-                        currentIndex++
+                    currentIndex++
                 },
             ),
             listOf(

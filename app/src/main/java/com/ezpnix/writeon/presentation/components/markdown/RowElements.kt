@@ -49,3 +49,9 @@ data class ImageInsertion(val photoUri: String) : MarkdownElement {
         builder.append("!($photoUri)\n\n")
     }
 }
+
+data class AudioInsertion(val audioUri: String) : MarkdownElement {
+    override fun render(builder: StringBuilder) {
+        builder.append("?audio($audioUri)\n\n")
+    }
+}

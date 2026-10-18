@@ -161,6 +161,7 @@ fun MarkdownText(
                 CodeBlockProcessor(),
                 QuoteProcessor(),
                 ImageInsertionProcessor(),
+                AudioInsertionProcessor(),
                 CheckboxProcessor()
             )
         ).apply { parse() }.content
@@ -381,6 +382,15 @@ fun RenderMarkdownElement(
                     onError = {
                         android.util.Log.e("MarkdownText", "Failed to load image: ${element.photoUri}")
                     }
+                )
+            }
+            is AudioInsertion -> {
+                AudioPlayerCard(
+                    audioUri = element.audioUri,
+                    radius = radius,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 4.dp)
                 )
             }
             is CodeBlock -> {
