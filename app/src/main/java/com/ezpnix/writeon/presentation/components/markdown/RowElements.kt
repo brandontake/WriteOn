@@ -80,3 +80,19 @@ data object HorizontalRule : MarkdownElement {
         builder.append("---\n\n")
     }
 }
+
+/**
+ * A pipe table. [rows] holds the header first and the body rows after it; the alignment row
+ * (`| --- |`) is dropped by [TableProcessor] and the column alignment it carries is not honoured —
+ * every cell is rendered left aligned, which is what a note-sized table needs.
+ */
+data class TableElement(val rows: List<List<String>>) : MarkdownElement {
+    override fun render(builder: StringBuilder) {
+        rows.forEach { row ->
+            builder.append("| ")
+            builder.append(row.joinToString(" | "))
+            builder.append(" |\n")
+        }
+        builder.append("\n")
+    }
+}

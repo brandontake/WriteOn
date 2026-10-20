@@ -53,6 +53,7 @@ class AttachmentAudioProcessor : MarkdownLineProcessor {
 fun defaultMarkdownLineProcessors(): List<MarkdownLineProcessor> = listOf(
     AttachmentImageProcessor(),
     AttachmentAudioProcessor(),
+    TableProcessor(),
     HeadingProcessor(),
     HorizontalRuleProcessor(),
     ListItemProcessor(),
@@ -62,6 +63,70 @@ fun defaultMarkdownLineProcessors(): List<MarkdownLineProcessor> = listOf(
     AudioInsertionProcessor(),
     CheckboxProcessor()
 )
+
+
+/**
+ * A pipe table:
+ *
+ * ```
+ * | a | b |
+ * | --- | --- |
+ * | 1 | 2 |
+ * ```
+ *
+ * Consecutive rows are consumed as one element so the renderer can draw a grid instead of a run of
+ * paragraphs. The row whose cells are all dashes is the alignment row and is dropped. Cells are
+ * split on unescaped pipes only, so a cell can contain a literal `\|`.
+ */
+class TableProcessor : MarkdownLineProcessor {
+    override fun canProcessLine(line: String): Boolean = line.trim().startsWith("|")
+
+    override fun processLine(line: String, builder: MarkdownBuilder) {
+        val rows = mutableListOf(splitCells(line))
+
+        while (builder.lineIndex + 1 < builder.lines.size) {
+            val next = builder.lines[builder.lineIndex + 1]
+            if (!next.trim().startsWith("|")) break
+            builder.lineIndex++
+            rows.add(splitCells(next))
+        }
+
+        val body = rows.filterNot { row -> row.all { ALIGNMENT_CELL.matches(it) } }
+        if (body.isEmpty()) {
+            builder.add(NormalText(line))
+            return
+        }
+        builder.add(TableElement(body))
+    }
+
+    private fun splitCells(line: String): List<String> {
+        val trimmed = line.trim().removePrefix("|").removeSuffix("|")
+        val cells = mutableListOf<String>()
+        val cell = StringBuilder()
+        var index = 0
+        while (index < trimmed.length) {
+            val char = trimmed[index]
+            if (char == '\\' && index + 1 < trimmed.length && trimmed[index + 1] == '|') {
+                cell.append('|')
+                index += 2
+                continue
+            }
+            if (char == '|') {
+                cells.add(cell.toString().trim())
+                cell.setLength(0)
+            } else {
+                cell.append(char)
+            }
+            index++
+        }
+        cells.add(cell.toString().trim())
+        return cells
+    }
+
+    private companion object {
+        val ALIGNMENT_CELL = Regex("^:?-{2,}:?$")
+    }
+}
 
 
 class CodeBlockProcessor : MarkdownLineProcessor {

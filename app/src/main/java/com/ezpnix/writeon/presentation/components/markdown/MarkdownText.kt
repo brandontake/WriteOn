@@ -321,10 +321,10 @@ fun RenderMarkdownElement(
             is Heading -> {
                 Text(
                     text = buildString(element.text, weight),
-                    fontSize = when (element.level) {
-                        in 1..6 -> (28 - (2 * element.level) - fontSize.value / 3).sp
-                        else -> fontSize
-                    },
+                    // Two steps, not six: the toolbar only offers one heading button (`##`), and a
+                    // note that carries `#` or `###` asks for a section break rather than a smaller
+                    // heading. Scaling also stops overriding the reader's own text size.
+                    fontSize = (fontSize.value * if (element.level == 1 || element.level == 3) 1.35f else 1.15f).sp,
                     fontWeight = weight,
                     fontFamily = customFont,
                     modifier = Modifier.padding(vertical = 10.dp),
@@ -457,6 +457,45 @@ fun RenderMarkdownElement(
                         )
                     }
                 )
+            }
+            is TableElement -> {
+                // Cells share the row's width evenly; the header row is the only one set in a
+                // heavier weight, and rows are separated by the same hairline the divider element
+                // uses so a table reads as one block instead of a stack of paragraphs.
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 8.dp)
+                ) {
+                    element.rows.forEachIndexed { rowIndex, row ->
+                        if (rowIndex > 0) {
+                            HorizontalDivider(
+                                thickness = 1.dp,
+                                color = MaterialTheme.colorScheme.outlineVariant
+                            )
+                        }
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 6.dp)
+                        ) {
+                            row.forEachIndexed { cellIndex, cell ->
+                                if (cellIndex > 0) Spacer(Modifier.width(12.dp))
+                                Text(
+                                    text = buildString(
+                                        cell,
+                                        if (rowIndex == 0) FontWeight.SemiBold else weight
+                                    ),
+                                    fontSize = fontSize,
+                                    fontFamily = customFont,
+                                    modifier = Modifier.weight(1f),
+                                    maxLines = maxLines,
+                                    overflow = overflow
+                                )
+                            }
+                        }
+                    }
+                }
             }
             is HorizontalRule -> {
                 HorizontalDivider(

@@ -488,5 +488,13 @@
     <string name="attachment_missing">添付ファイルを表示できません</string>
     <string name="search_no_results">検索に一致するノートはありません</string>
     <string name="fmt_inline_code">インラインコード</string>
+    <string name="fmt_table">表</string>
+    <string name="fmt_table_header">| 列1 | 列2 |</string>
+    <string name="fmt_indent">インデント</string>
+    <string name="fmt_escape">エスケープ文字</string>
+    <string name="cloud_conflict_title">バックアップを別名で保存しました</string>
+    <string name="cloud_conflict_desc">前回のアップロード後にリモートのバックアップが変更されたため、上書きせず別名で保存しました。統合する場合はダウンロードしてください。</string>
+    <string name="cloud_conflict_copy">リンクをコピー</string>
+    <string name="cloud_conflict_dismiss">OK</string>
     <string name="msg_image_saved_pages">%1$d ページを保存しました。1 枚目: %2$s</string>
 </resources>

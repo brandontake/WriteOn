@@ -18,7 +18,9 @@ import androidx.compose.material.icons.rounded.AccessTime
 import androidx.compose.material.icons.rounded.AutoFixHigh
 import androidx.compose.material.icons.rounded.CheckBox
 import androidx.compose.material.icons.rounded.Code
+import androidx.compose.material.icons.rounded.DataObject
 import androidx.compose.material.icons.rounded.FormatBold
+import androidx.compose.material.icons.rounded.FormatIndentIncrease
 import androidx.compose.material.icons.rounded.FormatItalic
 import androidx.compose.material.icons.rounded.FormatListNumbered
 import androidx.compose.material.icons.rounded.FormatQuote
@@ -28,6 +30,8 @@ import androidx.compose.material.icons.rounded.Image
 import androidx.compose.material.icons.rounded.Link
 import androidx.compose.material.icons.rounded.Mic
 import androidx.compose.material.icons.rounded.StrikethroughS
+import androidx.compose.material.icons.rounded.TableChart
+import androidx.compose.material.icons.rounded.Terminal
 import androidx.compose.material.icons.rounded.Title
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -138,17 +142,18 @@ fun TextFormattingToolbar(viewModel: EditViewModel, modifier: Modifier = Modifie
                 ToolbarItem(Icons.Rounded.FormatQuote, context.getString(R.string.fmt_quote), color = colorIcon) {
                     viewModel.insertText("> ", newLine = true)
                 },
-                ToolbarItem(Icons.Rounded.Code, context.getString(R.string.fmt_code_block), color = colorIcon) {
+                ToolbarItem(Icons.Rounded.Terminal, context.getString(R.string.fmt_code_block), color = colorIcon) {
                     viewModel.insertText("```\n\n```", -4)
                 },
                 ToolbarItem(Icons.AutoMirrored.Rounded.ArrowForwardIos, "", color = colorArrow) {
                     currentIndex++
                 },
             ),
-            // Page 2: Inline styles (5 items: Bold, Italic, Strikethrough, Highlight, Inline code).
+            // Page 2: Inline styles (5 items: Bold, Italic, Underline, Strikethrough, Highlight).
             // These act on the selection - see EditViewModel.applyFormat - so a highlighted word is
-            // wrapped rather than having markers typed in front of it. Underline left the toolbar:
-            // it was the one style the renderer never agreed with, and inline code is more useful.
+            // wrapped rather than having markers typed in front of it. Inline code moved to page 3:
+            // it shares a page with the other block-level insertions, and its icon no longer has to
+            // double as the code-block button.
             listOf(
                 ToolbarItem(Icons.AutoMirrored.Rounded.ArrowBackIos, "", color = colorArrow) {
                     currentIndex--
@@ -159,23 +164,35 @@ fun TextFormattingToolbar(viewModel: EditViewModel, modifier: Modifier = Modifie
                 ToolbarItem(Icons.Rounded.FormatItalic, context.getString(R.string.fmt_italic), color = colorIcon) {
                     viewModel.applyFormat("*")
                 },
+                ToolbarItem(Icons.Rounded.FormatUnderlined, context.getString(R.string.fmt_underline), color = colorIcon) {
+                    viewModel.applyFormat("_")
+                },
                 ToolbarItem(Icons.Rounded.StrikethroughS, context.getString(R.string.fmt_strikethrough), color = colorIcon) {
                     viewModel.applyFormat("~~")
                 },
                 ToolbarItem(Icons.Rounded.AutoFixHigh, context.getString(R.string.fmt_highlight), color = colorIcon) {
                     viewModel.applyFormat("==")
                 },
-                ToolbarItem(Icons.Rounded.Code, context.getString(R.string.fmt_inline_code), color = colorIcon) {
-                    viewModel.applyFormat("`")
-                },
                 ToolbarItem(Icons.AutoMirrored.Rounded.ArrowForwardIos, "", color = colorArrow) {
                     currentIndex++
                 },
             ),
-            // Page 3: Additional Tools (DateTime)
+            // Page 3: Blocks and literal text (inline code, table, indent, escape, date/time).
             listOf(
                 ToolbarItem(Icons.AutoMirrored.Rounded.ArrowBackIos, "", color = colorArrow) {
                     currentIndex--
+                },
+                ToolbarItem(Icons.Rounded.Code, context.getString(R.string.fmt_inline_code), color = colorIcon) {
+                    viewModel.applyFormat("`")
+                },
+                ToolbarItem(Icons.Rounded.TableChart, context.getString(R.string.fmt_table), color = colorIcon) {
+                    viewModel.insertTable()
+                },
+                ToolbarItem(Icons.Rounded.FormatIndentIncrease, context.getString(R.string.fmt_indent), color = colorIcon) {
+                    viewModel.applyIndent()
+                },
+                ToolbarItem(Icons.Rounded.DataObject, context.getString(R.string.fmt_escape), color = colorIcon) {
+                    viewModel.applyEscape()
                 },
                 ToolbarItem(Icons.Rounded.AccessTime, context.getString(R.string.fmt_insert_datetime), color = colorIcon) {
                     val dateTime = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"))

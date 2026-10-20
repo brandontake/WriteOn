@@ -3,7 +3,7 @@ WriteOn is a note-taking app designed with simplicity and usability at its core 
 🛠️ Key Features:
 • ☁️ Backup & Restore notes (offline & WebDAV supported)
 • 👁️ Screen protection (prevents screenshots & previews)
-• 🖋️ Markdown editing with a formatting toolbar that styles exactly what you select
+• 🖋️ Markdown editing with a formatting toolbar that styles exactly what you select — bold, italic, underline, strikethrough, highlight, inline code, headings, lists, quotes, links, tables, indentation and escaping
 • 🎨 Customizable themes for light/dark comfort
 • 📶 Works both offline and online
 • 🔒 Privacy-respecting – no access to your personal data

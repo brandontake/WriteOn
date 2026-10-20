@@ -1,9 +1,10 @@
 v2.0 - Portable note bodies, share intake, paged images & tablet layout:
 - Note images and recordings are stored as ordinary Markdown links (`![](attachment://...)`), so renaming or moving a file no longer breaks a note. Existing notes are converted once on upgrade; downgrading to 1.10 or older is not supported.
 - Redesigned editing screen: copy, calendar, preview, calculator and export sit in a row above the note, and the formatting toolbar docks under the note next to the keyboard, so the buttons never cover the text.
-- Formatting wraps the selected text, or inserts at the caret when nothing is selected - headings, lists, quotes, links, timestamps, code fences, bold, italic, strikethrough, highlight and inline code.
+- Formatting wraps the selected text, or inserts at the caret when nothing is selected - headings, lists, quotes, links, timestamps, code fences, bold, italic, underline, strikethrough, highlight and inline code.
+- Markdown also covers real tables with a header row, four-space indentation and `\` escaping for characters that would otherwise turn into markup; `##` renders a small heading while `#` and `###` render larger.
 - Share text or images from any other app straight into a new note; shared images are copied in as attachments.
 - Long notes export as numbered image pages instead of being cut off at the first 8 MP.
 - Trash search, a note count beside every drawer item and tag, and ten seconds of undo after a save. Emptying a note and saving moves it to the trash instead of leaving a blank row.
-- WebDAV backups compare ETags and keep a timestamped conflict copy rather than overwriting another device's backup; a restore closes the live database first.
+- WebDAV backups compare ETags and keep a timestamped conflict copy rather than overwriting another device's backup, and the cloud screen shows where that copy went; a restore closes the live database first.
 - Tablet-ready: the home grid adds columns with the available width and the editor keeps its text column at a readable width.

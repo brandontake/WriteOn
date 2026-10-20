@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.ArrowCircleUp
@@ -32,6 +33,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -43,6 +45,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
@@ -60,6 +63,7 @@ import com.ezpnix.writeon.core.constant.DatabaseConst
 import com.ezpnix.writeon.presentation.screens.edit.components.CustomTextField
 import com.ezpnix.writeon.presentation.screens.settings.SettingsScaffold
 import com.ezpnix.writeon.presentation.screens.settings.TxtBackupHelper
+import com.ezpnix.writeon.presentation.screens.settings.WebDavBackupState
 import com.ezpnix.writeon.presentation.screens.settings.WebDavPrefs
 import com.ezpnix.writeon.presentation.screens.settings.WebDavPrefsCipher
 import com.ezpnix.writeon.presentation.screens.settings.model.SettingsViewModel
@@ -107,6 +111,10 @@ fun CloudScreen(navController: NavController, settingsViewModel: SettingsViewMod
     var backupPassphrase by remember { mutableStateOf("") }
     var hasBackupPassphrase by remember { mutableStateOf(false) }
 
+    // Where the last backup had to park this device's archive because the remote had changed, if it
+    // had to at all. The worker writes it in the background, so it is read when the screen opens.
+    var conflictBackupUrl by remember { mutableStateOf(WebDavBackupState.conflictUrl(context)) }
+
     LaunchedEffect(Unit) {
         context.webDavDataStore.data.first().let { prefs ->
             webdavUrl = prefs[webdavUrlKey] ?: ""
@@ -116,6 +124,7 @@ fun CloudScreen(navController: NavController, settingsViewModel: SettingsViewMod
             } ?: ""
             hasBackupPassphrase = !prefs[backupPassphraseKey].isNullOrBlank()
         }
+        conflictBackupUrl = WebDavBackupState.conflictUrl(context)
     }
 
     var txtBackupUri by remember { mutableStateOf<Uri?>(null) }
@@ -265,6 +274,69 @@ fun CloudScreen(navController: NavController, settingsViewModel: SettingsViewMod
                 }
             }) {
                 Text(context.getString(R.string.cloud_save_webdav_info))
+            }
+
+            // The conflict copy only exists as a file on the server, so nothing in the app would
+            // ever mention it: this card is the only place the user learns a backup did not
+            // replace the remote one, and where the copy they can download lives.
+            conflictBackupUrl?.let { conflictUrl ->
+                Spacer(Modifier.height(16.dp))
+                Card(
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.secondaryContainer
+                    ),
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = appCornerShape()
+                ) {
+                    Column(modifier = Modifier.padding(12.dp)) {
+                        Text(
+                            text = stringResource(R.string.cloud_conflict_title),
+                            style = MaterialTheme.typography.titleSmall,
+                            color = MaterialTheme.colorScheme.onSecondaryContainer
+                        )
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            text = stringResource(R.string.cloud_conflict_desc),
+                            fontSize = 13.sp,
+                            color = MaterialTheme.colorScheme.onSecondaryContainer
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        SelectionContainer {
+                            Text(
+                                text = conflictUrl,
+                                fontSize = 12.sp,
+                                fontFamily = FontFamily.Monospace,
+                                color = MaterialTheme.colorScheme.onSecondaryContainer
+                            )
+                        }
+                        Spacer(Modifier.height(4.dp))
+                        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                            TextButton(onClick = {
+                                val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE)
+                                    as? android.content.ClipboardManager
+                                clipboard?.setPrimaryClip(
+                                    android.content.ClipData.newPlainText(
+                                        context.getString(R.string.cloud_conflict_title),
+                                        conflictUrl
+                                    )
+                                )
+                                Toast.makeText(
+                                    context,
+                                    context.getString(R.string.msg_link_copied),
+                                    Toast.LENGTH_SHORT
+                                ).show()
+                            }) {
+                                Text(stringResource(R.string.cloud_conflict_copy))
+                            }
+                            TextButton(onClick = {
+                                WebDavBackupState.clearConflict(context)
+                                conflictBackupUrl = null
+                            }) {
+                                Text(stringResource(R.string.cloud_conflict_dismiss))
+                            }
+                        }
+                    }
+                }
             }
 
             Spacer(Modifier.height(16.dp))

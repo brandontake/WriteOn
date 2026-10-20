@@ -484,5 +484,13 @@
     <string name="attachment_missing">Attached file unavailable</string>
     <string name="search_no_results">No notes match your search</string>
     <string name="fmt_inline_code">Inline code</string>
+    <string name="fmt_table">Table</string>
+    <string name="fmt_table_header">| Column 1 | Column 2 |</string>
+    <string name="fmt_indent">Indent</string>
+    <string name="fmt_escape">Escape character</string>
+    <string name="cloud_conflict_title">Backup kept as a separate copy</string>
+    <string name="cloud_conflict_desc">The remote backup had changed since this device last uploaded, so this device\'s version was saved beside it instead of replacing it. Download it if you want to merge both.</string>
+    <string name="cloud_conflict_copy">Copy link</string>
+    <string name="cloud_conflict_dismiss">Got it</string>
     <string name="msg_image_saved_pages">Saved %1$d pages. First one: %2$s</string>
 </resources>

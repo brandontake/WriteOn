@@ -34,7 +34,8 @@ foreground services, and only the permissions the features actually need.
 ## 👋 Features
 
 **Writing**
-- Markdown editing with an expanded 5-item-per-page formatting toolbar (headings `##`, hyperlinks `[](url)`, horizontal dividers `---`, quotes `>`, code blocks, checkboxes, bullet/ordered lists, bold / italic / strikethrough / highlight / inline code, images, mic recording and timestamps). A style wraps the selected text, or lands at the caret when nothing is selected, and the toolbar docks under the note so it never covers what you are writing
+- Markdown editing with an expanded 5-item-per-page formatting toolbar (headings `##`, hyperlinks `[](url)`, horizontal dividers `---`, quotes `>`, code blocks, checkboxes, bullet/ordered lists, bold / italic / underline / strikethrough / highlight / inline code, tables, indentation, escaping of Markdown characters, images, mic recording and timestamps). A style wraps the selected text, or lands at the caret when nothing is selected, and the toolbar docks under the note so it never covers what you are writing
+- Underline `_text_`, real tables (`| a | b |`, with a header row), four-space indentation and `\`-escaping for the characters that would otherwise become markup; `##` renders a small heading while `#` and `###` render larger, so one note can carry a title above its sections
 - Note attachments stored as ordinary Markdown links (`![](attachment://…)` for images, `[Recording name](attachment://…)` for audio), audio recording & in-app playback with a draggable seek bar, 0.5×–2× speed control, per-recording renaming and save-to-folder export, plus automatic cleanup of a note's attachments when it is deleted
 - Dynamic theming support across notes and flashcards, customizable font size and persistent custom local font import (.ttf/.otf), grid or column layout, minimalistic mode, adjustable corner radius
 - Diverse sorting dimensions (Creation Time, Last Modified Time, Title) with dedicated Ascending/Descending controls
@@ -51,7 +52,7 @@ foreground services, and only the permissions the features actually need.
 **Extras**
 - Adaptive Material 3 & HyperOS home-screen widgets (free-form resizing with 24dp rounded corners, vertically centred note text, quick add + note preview), built-in calendar, calculator, scratchpad and dynamic-themed flashcards
 - Share text or images into the app from any other app's share sheet; each share opens a new note, and shared images are copied in as attachments
-- Save a note as an image — a note taller than one bitmap is split into numbered pages instead of being cut off — export to TXT/Markdown, and local backup / restore (with an optional password)
+- Save a note as an image — a note taller than one bitmap is split into numbered pages instead of being cut off — export to TXT/Markdown, and local backup / restore (with an optional password). WebDAV uploads check the server's copy before replacing it, so a backup written by another device is never silently overwritten: the newer upload is kept beside it under its own name, and the cloud screen shows where that copy went
 - Trash search, a note count beside every drawer item and tag, ten-second undo after a save, and a note you empty is moved to the trash instead of lingering as a blank row
 - Layout that scales from phone to tablet: the home grid adds columns with the available width and the editor caps its text column at a readable width
 
@@ -164,15 +165,15 @@ Play deadlines: new apps and updates must target API 36 since 2026-08-31 (extens
 
 ### How the build is verified
 
-Both variants were built on **2026-10-20** with `:app:assembleDebug` and `:app:assembleRelease` (offline,
+Both variants were built on **2026-10-21** with `:app:assembleDebug` and `:app:assembleRelease` (offline,
 JDK 21.0.12.1, Gradle 8.9). The figures below are from the **latest** release build, which carries the
-2.0 body format, the reworked editing screen and the phone-to-tablet layout:
+2.0 body format, the reworked editing screen, tables/underline/escaping and the phone-to-tablet layout:
 
 | Variant | Size | applicationId | Notes |
 | --- | --- | --- | --- |
-| Release | **3.75 MB** (3,930,191 bytes) | `com.ezpnix.writeon` | full R8 optimisation + obfuscation; ships two baseline profiles (API 28–30, 31+); signed with the project's upload key (`CN=Brandontake, OU=WriteOn, O=WriteOn, C=US`) |
+| Release | **3.75 MB** (3,931,907 bytes) | `com.ezpnix.writeon` | full R8 optimisation + obfuscation; ships two baseline profiles (API 28–30, 31+); signed with the project's upload key (`CN=Brandontake, OU=WriteOn, O=WriteOn, C=US`) |
 
-SHA-256 (Release): `F61B826D11E9EA25DEB1BDD554796DF4CD42DAB8EB6728E986DC7138E1063A35`.
+SHA-256 (Release): `D7B39672AAE90025E95E6373F7E91B4E697B7E29A0254159D0FA2BF88F411EB9`.
 
 Both report `versionCode 12` / `versionName 2.0`, `minSdk 26`, `targetSdk 36`, the default + `ja` + `zh`
 locales, and four ABIs. The release run also wrote `app/schemas/com.ezpnix.writeon.data.local.database.NoteDatabase/8.json`,

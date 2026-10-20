@@ -168,11 +168,7 @@ class WebDAVBackupWorker(
         val upload = putArchive(target, authorization, archive, null)
         if (upload.code in 200..299) {
             Log.w(TAG, "Remote backup had changed; this device's copy was kept at " + target)
-            applicationContext
-                .getSharedPreferences(CONFLICT_PREFS, Context.MODE_PRIVATE)
-                .edit()
-                .putString(CONFLICT_KEY, target)
-                .apply()
+            WebDavBackupState.recordConflict(applicationContext, target)
         } else {
             Log.e(TAG, "Remote backup had changed and the conflict copy failed with HTTP " + upload.code)
         }
@@ -263,9 +259,5 @@ class WebDAVBackupWorker(
 
         /** WebDAV: the precondition failed, i.e. the remote file changed under us. */
         const val PRECONDITION_FAILED = 412
-
-        /** Breadcrumb naming the last conflict copy, for the settings screen to surface. */
-        const val CONFLICT_PREFS = "webdav_backup_state"
-        const val CONFLICT_KEY = "last_conflict_file"
     }
 }

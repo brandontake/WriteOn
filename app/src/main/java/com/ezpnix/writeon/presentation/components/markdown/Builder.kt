@@ -92,9 +92,13 @@ fun buildString(
 ): AnnotatedString {
     if (input.isEmpty()) return AnnotatedString("")
 
-    // Check for markdown links: [text](url)
+    // Check for markdown links: [text](url). A backslash in front of the opening bracket marks it as
+    // an escaped literal (see protectEscapes), so those matches are left to the styled-run builder
+    // and render as text instead of turning into a tappable link.
     val linkRegex = Regex("\\[([^\\]]+)\\]\\(([^\\)]+)\\)")
-    val linkMatches = linkRegex.findAll(input).toList()
+    val linkMatches = linkRegex.findAll(input)
+        .filterNot { match -> match.range.first > 0 && input[match.range.first - 1] == '\\' }
+        .toList()
 
     if (linkMatches.isEmpty()) {
         return buildStyledRunString(input, defaultFontWeight)
@@ -136,8 +140,13 @@ fun buildString(
     }
 }
 
-private fun buildStyledRunString(input: String, defaultFontWeight: FontWeight): AnnotatedString {
-    if (input.isEmpty()) return AnnotatedString("")
+private fun buildStyledRunString(rawInput: String, defaultFontWeight: FontWeight): AnnotatedString {
+    if (rawInput.isEmpty()) return AnnotatedString("")
+
+    // Escaped characters are swapped for sentinels before anything is measured: a delimiter
+    // character is dropped from the output by design below, so `\*` has to stop looking like a
+    // delimiter. The sentinel is a private-use code point, which no delimiter can match.
+    val input = protectEscapes(rawInput)
 
     val segments: List<TextStyleSegment> = listOf(
         BoldSegment(),
@@ -197,8 +206,75 @@ private fun buildStyledRunString(input: String, defaultFontWeight: FontWeight): 
     return buildAnnotatedString {
         runs.forEach { run ->
             withStyle(style = styleFor(run.styleMask)) {
-                append(input, run.start, run.endExclusive)
+                append(restoreEscapes(input, run.start, run.endExclusive))
             }
         }
     }
+}
+
+/**
+ * Base code point used to stand in for an escaped ASCII character. U+E000..U+E05E is the private-use
+ * area, so a sentinel can never be mistaken for one of the markdown delimiters (`* _ = ~ ` |`).
+ */
+private const val ESCAPE_SENTINEL_BASE = 0xE000
+
+/** Lowest and highest escaped code points the sentinel range covers (printable ASCII 0x20..0x7E). */
+private const val ESCAPE_SENTINEL_FIRST = 0x20
+private const val ESCAPE_SENTINEL_LAST = 0x7E
+
+/**
+ * Replaces `\X` with a sentinel character carrying X, so the delimiters a writer escaped stay
+ * literal. A lone backslash at the end of the text is kept as-is.
+ */
+private fun protectEscapes(input: String): String {
+    if (input.indexOf('\\') == -1) return input
+
+    val out = StringBuilder(input.length)
+    var index = 0
+    while (index < input.length) {
+        val char = input[index]
+        val next = input.getOrNull(index + 1)
+        if (char == '\\' && next != null) {
+            out.append(
+                if (next.code in ESCAPE_SENTINEL_FIRST..ESCAPE_SENTINEL_LAST) {
+                    (ESCAPE_SENTINEL_BASE + next.code - ESCAPE_SENTINEL_FIRST).toChar()
+                } else {
+                    // Non-ASCII escapes (a Chinese character after a backslash, say) have nothing to
+                    // escape, so the backslash is dropped and the character kept.
+                    next
+                }
+            )
+            index += 2
+        } else {
+            out.append(char)
+            index++
+        }
+    }
+    return out.toString()
+}
+
+/** Turns the sentinels in [start] until [endExclusive] back into the characters they stand for. */
+private fun restoreEscapes(input: String, start: Int, endExclusive: Int): String {
+    var needsRestore = false
+    for (index in start until endExclusive) {
+        if (input[index].code >= ESCAPE_SENTINEL_BASE) {
+            needsRestore = true
+            break
+        }
+    }
+    if (!needsRestore) return input.substring(start, endExclusive)
+
+    val out = StringBuilder(endExclusive - start)
+    for (index in start until endExclusive) {
+        val char = input[index]
+        val code = char.code
+        out.append(
+            if (code in ESCAPE_SENTINEL_BASE..(ESCAPE_SENTINEL_BASE + ESCAPE_SENTINEL_LAST - ESCAPE_SENTINEL_FIRST)) {
+                (code - ESCAPE_SENTINEL_BASE + ESCAPE_SENTINEL_FIRST).toChar()
+            } else {
+                char
+            }
+        )
+    }
+    return out.toString()
 }

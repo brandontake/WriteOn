@@ -16,6 +16,7 @@ import androidx.glance.appwidget.lazy.LazyColumn
 import androidx.glance.background
 import androidx.glance.layout.Alignment
 import androidx.glance.layout.Box
+import androidx.glance.layout.Column
 import androidx.glance.layout.ContentScale
 import androidx.glance.layout.Row
 import androidx.glance.layout.Spacer
@@ -108,10 +109,9 @@ fun WidgetMarkdownElement(
                 Text(
                     text = element.text,
                     style = TextStyle(
-                        fontSize = when (element.level) {
-                            in 1..6 -> (28 - (2 * element.level)).sp
-                            else -> fontSize
-                        },
+                        // Same two-step scale as the in-app renderer: a `#`/`###` heading is a
+                        // section break, the toolbar's `##` is a subheading.
+                        fontSize = (fontSize.value * if (element.level == 1 || element.level == 3) 1.35f else 1.15f).sp,
                         fontWeight = weight,
                         color = color
                     )
@@ -165,6 +165,22 @@ fun WidgetMarkdownElement(
                 )
             }
 
+            is TableElement -> {
+                // A widget has no room for a real grid: each row becomes one line with the cells
+                // separated by a middot, and the header keeps the heavier weight.
+                Column {
+                    element.rows.forEachIndexed { rowIndex, row ->
+                        Text(
+                            text = row.joinToString(separator = "  ·  "),
+                            style = TextStyle(
+                                fontSize = fontSize,
+                                fontWeight = if (rowIndex == 0) FontWeight.Bold else weight,
+                                color = color
+                            )
+                        )
+                    }
+                }
+            }
             is HorizontalRule -> {
                 Text(
                     text = "──────────",

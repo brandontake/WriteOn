@@ -9,6 +9,7 @@ import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.ezpnix.writeon.R
 import com.ezpnix.writeon.core.attachment.AttachmentFiles
 import com.ezpnix.writeon.core.attachment.AttachmentSyntax
 import com.ezpnix.writeon.data.local.database.LegacyBodyMigration
@@ -448,6 +449,84 @@ class EditViewModel @Inject constructor(
         _noteDescription.value = TextFieldValue(text = updated, selection = selection)
     }
 
+    /**
+     * Escapes the markdown syntax inside the selection, or drops a single backslash at the caret
+     * when nothing is selected - the "type the character first, then escape it" flow.
+     *
+     * Escaping is what makes a literal `*`, `_` or `#` possible at all: the renderer treats those
+     * characters as delimiters and never prints them, so text that needs one has to opt out
+     * explicitly. Characters that are already escaped are left alone, so pressing twice is safe.
+     */
+    fun applyEscape() {
+        val value = noteDescription.value
+        val text = value.text
+        val start = value.selection.min.coerceIn(0, text.length)
+        val end = value.selection.max.coerceIn(0, text.length)
+        if (start == end) {
+            insertText("\\", newLine = false)
+            return
+        }
+
+        val selected = text.substring(start, end)
+        val escaped = buildString {
+            selected.forEachIndexed { index, char ->
+                val alreadyEscaped = index > 0 && selected[index - 1] == '\\'
+                if (char in ESCAPABLE_CHARACTERS && !alreadyEscaped) append('\\')
+                append(char)
+            }
+        }
+        if (escaped == selected) return
+
+        val updated = text.replaceRange(start, end, escaped)
+        _noteDescription.value = TextFieldValue(
+            text = updated,
+            selection = TextRange(start, (start + escaped.length).coerceAtMost(updated.length))
+        )
+    }
+
+    /**
+     * Toggles a four-space indent on every line the selection touches. When all of them are already
+     * indented the indent is removed instead, so one button walks a paragraph in and back out.
+     */
+    fun applyIndent() {
+        val value = noteDescription.value
+        val text = value.text
+        val selectionStart = value.selection.min.coerceIn(0, text.length)
+        val selectionEnd = value.selection.max.coerceIn(0, text.length)
+        val blockStart = lineStartIndex(text, selectionStart)
+        val blockEnd = lineEndIndex(text, selectionEnd)
+
+        val lines = text.substring(blockStart, blockEnd).split("\n")
+        val indented = lines.filter { it.isNotBlank() }
+        if (indented.isEmpty()) return
+        val outdent = indented.all { it.startsWith(INDENT) }
+
+        val updatedLines = lines.map { line ->
+            when {
+                line.isBlank() -> line
+                outdent -> line.removePrefix(INDENT)
+                else -> INDENT + line
+            }
+        }
+        val updatedBlock = updatedLines.joinToString("\n")
+        val updated = text.replaceRange(blockStart, blockEnd, updatedBlock)
+        val delta = if (outdent) -INDENT.length else INDENT.length
+        val caret = (selectionStart + delta)
+            .coerceIn(blockStart, blockStart + updatedBlock.length)
+            .coerceIn(0, updated.length)
+
+        _noteDescription.value = TextFieldValue(text = updated, selection = TextRange(caret))
+    }
+
+    /**
+     * Drops a two-column pipe table on its own line. The header row is localised because it is the
+     * part a writer replaces by typing; the alignment row is syntax and stays as-is.
+     */
+    fun insertTable() {
+        val header = application.getString(R.string.fmt_table_header)
+        insertBlock("$header\n$TABLE_ALIGNMENT_ROW\n|  |  |")
+    }
+
     fun insertText(insertText: String, offset: Int = 1, newLine: Boolean = true) {
         val value = _noteDescription.value
         val text = value.text
@@ -603,5 +682,16 @@ class EditViewModel @Inject constructor(
                 )
             }
         }
+    }
+
+    private companion object {
+        /** The characters the markdown renderer treats as syntax, and therefore swallows. */
+        val ESCAPABLE_CHARACTERS = setOf('\\', '`', '*', '_', '=', '~', '|', '#', '>', '[', ']', '(', ')')
+
+        /** One indent step; four spaces is also what the renderer needs to keep a line preformatted. */
+        const val INDENT = "    "
+
+        /** The row that marks the header/body split in a pipe table. */
+        const val TABLE_ALIGNMENT_ROW = "| --- | --- |"
     }
 }
