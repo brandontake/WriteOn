@@ -97,6 +97,9 @@
 - [x] **Trash search field follows Material 3.** The bare outlined field became a filled, fully rounded search bar with a tonal surface and no indicator line, matching the drawer and settings screens.
 - [x] **The conflict backup is reachable from Settings.** When an upload keeps a separate copy, the cloud screen shows its URL with a copy-link action and a dismiss button instead of leaving the only trace in SharedPreferences.
 
+## After the v2.0 release
+- [x] **Split preview on a tablet in landscape.** The note and its rendering sit side by side instead of on separate pages; the right half runs the same pass the preview page and the image export use, sampled with a short debounce so a keystroke does not reparse a long note. Geometry decides the layout and the Markdown preference still gates it: with Markdown off the screen keeps one column, because a half-width copy of plain text would just be the same text twice.
+
 ## Open / Future
 - [ ] Unit tests for the vault KDF, the atomic restore and the DAO transaction
 - [ ] detekt / ktlint / CI gating

@@ -66,11 +66,15 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.material3.VerticalDivider
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -200,10 +204,16 @@ fun EditNoteView(
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
-        NotesScaffold(
-            topBar = { if (!settingsViewModel.settings.value.minimalisticMode) TopBar(pagerState, exitEditor, viewModel, settingsViewModel) },
-            content = { PagerContent(pagerState, coroutineScope, viewModel, settingsViewModel, exitEditor) }
-        )
+        CompositionLocalProvider(
+            LocalSplitPreview provides (
+                shouldSplitPreview() && settingsViewModel.settings.value.isMarkdownEnabled
+                )
+        ) {
+            NotesScaffold(
+                topBar = { if (!settingsViewModel.settings.value.minimalisticMode) TopBar(pagerState, exitEditor, viewModel, settingsViewModel) },
+                content = { PagerContent(pagerState, coroutineScope, viewModel, settingsViewModel, exitEditor) }
+            )
+        }
         AnimatedVisibility(
             visible = undoVisible,
             enter = fadeIn(),
@@ -377,13 +387,32 @@ fun PagerContent(
         )
     }
 
-    HorizontalPager(
-        state = pagerState,
-        modifier = Modifier.imePadding(),
-    ) { page ->
-        when (page) {
-            0 -> EditScreen(viewModel, coroutineScope, settingsViewModel, pagerState, onClickBack)
-            1 -> PreviewScreen(viewModel, settingsViewModel, pagerState, onClickBack)
+    if (isSplitPreviewActive()) {
+        // Tablet in landscape: the editor and its rendering are both permanent, so the preview is
+        // always the current text instead of a page you swipe to. The pager is not removed - the
+        // rest of the screen still reads `pagerState` - it is simply never shown, and page 0 stays
+        // current, which is what the top bar and the undo button already expect.
+        Row(modifier = Modifier.fillMaxSize().imePadding()) {
+            Box(modifier = Modifier.weight(1f).fillMaxHeight()) {
+                EditScreen(viewModel, coroutineScope, settingsViewModel, pagerState, onClickBack)
+            }
+            VerticalDivider(
+                thickness = 1.dp,
+                color = MaterialTheme.colorScheme.outlineVariant
+            )
+            Box(modifier = Modifier.weight(1f).fillMaxHeight()) {
+                LivePreviewPane(viewModel, settingsViewModel)
+            }
+        }
+    } else {
+        HorizontalPager(
+            state = pagerState,
+            modifier = Modifier.imePadding(),
+        ) { page ->
+            when (page) {
+                0 -> EditScreen(viewModel, coroutineScope, settingsViewModel, pagerState, onClickBack)
+                1 -> PreviewScreen(viewModel, settingsViewModel, pagerState, onClickBack)
+            }
         }
     }
 }
@@ -400,7 +429,7 @@ fun TopBar(pagerState: PagerState, onClickBack: () -> Unit, viewModel: EditViewM
                 onValueChange = { viewModel.updateNoteName(it) },
                 placeholder = stringResource(R.string.untitled),
                 shape = titleShape,
-                enabled = pagerState.currentPage == 0,
+                enabled = pagerState.currentPage == 0 || isSplitPreviewActive(),
                 modifier = Modifier.fillMaxWidth(),
             )
         },
@@ -626,11 +655,92 @@ private fun QuickActionRow(
     ) {
         CopyButton(viewModel) {}
         CalButton()
-        PreviewButton(pagerState, coroutineScope) {}
+        // In the split layout the rendering is already on screen, so the button that used to swipe
+        // to it would do nothing visible.
+        if (!isSplitPreviewActive()) {
+            PreviewButton(pagerState, coroutineScope) {}
+        }
         CalculatorButton()
         TxtButton(currentText = viewModel.noteDescription.value.text)
     }
 }
+
+/**
+ * Whether the tablet split view is on. Resolved once per screen ([shouldSplitPreview] plus the
+ * Markdown preference) and published through a local, because it is read by the canvas, the top bar
+ * and the quick-action row: a half-width duplicate of a plain-text editor would just be the same
+ * text twice, so the preference has to take part in the decision, not only the screen shape.
+ */
+internal val LocalSplitPreview = compositionLocalOf { false }
+
+/** Geometry only: a tablet held in landscape, where a permanent second column fits. */
+@Composable
+internal fun shouldSplitPreview(): Boolean {
+    val configuration = LocalConfiguration.current
+    return configuration.smallestScreenWidthDp >= 600 &&
+        configuration.screenWidthDp > configuration.screenHeightDp
+}
+
+@Composable
+internal fun isSplitPreviewActive(): Boolean = LocalSplitPreview.current
+
+/**
+ * The right half of the tablet layout: the same renderer the preview page and the image export use,
+ * fed from the editor's own text.
+ *
+ * The text is sampled with a short debounce because [MarkdownText] parses the whole body: without it
+ * every keystroke of a long note would reparse the entire document, and typing would compete with
+ * layout for the main thread. The initial value is the current text, so opening the screen shows the
+ * note immediately instead of waiting for the first pause.
+ */
+@Composable
+private fun LivePreviewPane(viewModel: EditViewModel, settingsViewModel: SettingsViewModel) {
+    val settings = settingsViewModel.settings.value
+    val body = viewModel.noteDescription.value.text
+    val rendered by produceState(initialValue = body, key1 = body) {
+        delay(LIVE_PREVIEW_DEBOUNCE_MS)
+        value = body
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(horizontal = 12.dp, vertical = 16.dp)
+    ) {
+        MarkdownBox(
+            isExtremeAmoled = settings.extremeAmoledMode,
+            shape = shapeManager(radius = settings.cornerRadius, isFirst = true),
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxWidth(),
+            content = {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(16.dp)
+                ) {
+                    if (rendered.isBlank()) {
+                        Text(
+                            text = stringResource(R.string.empty_description),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    MarkdownText(
+                        radius = settings.cornerRadius,
+                        markdown = rendered,
+                        isEnabled = settings.isMarkdownEnabled,
+                        modifier = Modifier.fillMaxSize(),
+                        fontSize = settings.fontSize.sp,
+                        onContentChange = { viewModel.updateNoteDescription(TextFieldValue(text = it)) }
+                    )
+                }
+            }
+        )
+    }
+}
+
+private const val LIVE_PREVIEW_DEBOUNCE_MS = 120L
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
