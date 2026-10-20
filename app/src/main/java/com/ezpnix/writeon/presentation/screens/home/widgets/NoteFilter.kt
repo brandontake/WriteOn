@@ -99,7 +99,7 @@ fun NoteFilter(
     }
 }
 
-private fun filterNotes(notes: List<Note>, searchText: String?): List<Note> {
+internal fun filterNotes(notes: List<Note>, searchText: String?): List<Note> {
     return searchText?.takeIf { it.isNotBlank() }?.let { query ->
         notes.filter { note ->
             note.name.contains(query, ignoreCase = true) || note.description.contains(query, ignoreCase = true)

@@ -54,6 +54,35 @@ class NoteCrypto {
         return plaintext
     }
 
+    /** True when [value] was produced by [seal] rather than stored as plain text. */
+    fun isSealed(value: String): Boolean = value.startsWith(MARKER)
+
+    /**
+     * Like [open], but returns null when a sealed value cannot be decrypted, so a caller that
+     * rewrites data (the 7 -> 8 body migration) can tell "plain text" from "ciphertext we must not
+     * touch" instead of writing garbage back over an unreadable note.
+     */
+    fun openOrNull(stored: String): String? {
+        if (!stored.startsWith(MARKER)) return stored
+
+        cache[stored]?.let { return it }
+
+        return try {
+            val payload = Base64.decode(stored.substring(MARKER.length), Base64.NO_WRAP)
+            require(payload.size > IV_BYTES) { "ciphertext is too short" }
+
+            val iv = payload.copyOfRange(0, IV_BYTES)
+            val ciphertext = payload.copyOfRange(IV_BYTES, payload.size)
+
+            val cipher = Cipher.getInstance(TRANSFORMATION)
+            cipher.init(Cipher.DECRYPT_MODE, secretKey(), GCMParameterSpec(TAG_BITS, iv))
+            String(cipher.doFinal(ciphertext), Charsets.UTF_8).also { cache[stored] = it }
+        } catch (t: Throwable) {
+            Log.e(TAG, "Could not decrypt note text, leaving the row untouched", t)
+            null
+        }
+    }
+
     private fun decrypt(stored: String): String {
         return try {
             val payload = Base64.decode(stored.substring(MARKER.length), Base64.NO_WRAP)

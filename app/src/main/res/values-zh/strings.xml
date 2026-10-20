@@ -442,4 +442,8 @@
     <string name="font_applied_dialog_msg">自定义字体「%1$s」已成功应用！是否直接返回主页查看笔记效果？</string>
     <string name="return_to_home">返回主页</string>
     <string name="stay_here">留在此页</string>
+    <string name="attachment_missing">附件暂时无法打开</string>
+    <string name="search_no_results">没有匹配的便签</string>
+    <string name="fmt_inline_code">行内代码</string>
+    <string name="msg_image_saved_pages">已保存 %1$d 张图片，第一张：%2$s</string>
 </resources>

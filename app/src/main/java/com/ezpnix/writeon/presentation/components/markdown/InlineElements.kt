@@ -2,6 +2,7 @@ package com.ezpnix.writeon.presentation.components.markdown
 
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
@@ -29,4 +30,15 @@ data class Strikethrough(override val delimiter: String = "~~") : TextStyleSegme
 
 data class Underline(override val delimiter: String = "_") : TextStyleSegment {
     override fun getSpanStyle() = SpanStyle(textDecoration = TextDecoration.Underline)
+}
+
+/**
+ * Inline code: a monospaced, faintly tinted run. Code *blocks* are handled as their own element;
+ * this only covers the one-or-two-word span people mark inside a sentence.
+ */
+data class InlineCode(override val delimiter: String = "`") : TextStyleSegment {
+    override fun getSpanStyle() = SpanStyle(
+        fontFamily = FontFamily.Monospace,
+        background = Color.Gray.copy(alpha = 0.22f)
+    )
 }

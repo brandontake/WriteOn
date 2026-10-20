@@ -1,4 +1,5 @@
 package com.ezpnix.writeon.domain.repository
+import com.ezpnix.writeon.domain.model.Attachment
 import com.ezpnix.writeon.domain.model.Note
 import kotlinx.coroutines.flow.Flow
 interface NoteRepository {
@@ -13,4 +14,11 @@ interface NoteRepository {
     fun getNotesByTag(tag: String): Flow<List<Note>>
     suspend fun getAllTags(): List<String>
     suspend fun batchUpdateNotes(notes: List<Note>)
+
+    // 2.0 attachments: note bodies only hold `attachment://<id>`, the path lives here.
+    suspend fun getAllAttachments(): List<Attachment>
+    suspend fun getAttachmentsForNote(noteId: Int): List<Attachment>
+    suspend fun upsertAttachments(attachments: List<Attachment>)
+    suspend fun assignAttachmentsToNote(noteId: Int, ids: List<String>)
+    suspend fun deleteAttachments(ids: List<String>)
 }

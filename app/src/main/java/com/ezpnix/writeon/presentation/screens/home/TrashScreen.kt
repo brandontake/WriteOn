@@ -13,8 +13,10 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.filled.DeleteForever
 import androidx.compose.material.icons.filled.RestoreFromTrash
+import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.DoneAll
 import androidx.compose.material.icons.rounded.RemoveDone
+import androidx.compose.material.icons.rounded.Search
 import androidx.compose.ui.res.stringResource
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.ezpnix.writeon.R
@@ -23,6 +25,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.navigation.NavController
 import com.ezpnix.writeon.presentation.screens.home.viewmodel.HomeViewModel
 import com.ezpnix.writeon.presentation.screens.home.widgets.NotesGrid
+import com.ezpnix.writeon.presentation.screens.home.widgets.filterNotes
 import com.ezpnix.writeon.presentation.screens.settings.settings.shapeManager
 import com.ezpnix.writeon.presentation.theme.appCornerShape
 
@@ -41,7 +44,14 @@ fun TrashScreen(
     // Parcelable nor Serializable, so it cannot go into a Bundle.
     var longPressedNoteId by rememberSaveable { mutableStateOf<Int?>(null) }
     var pendingPermanentDeleteIds by rememberSaveable { mutableStateOf<List<Int>?>(null) }
-    val allSelected = trashedNotes.isNotEmpty() && selectedNotes.size == trashedNotes.size
+    var searchQuery by rememberSaveable { mutableStateOf("") }
+    // Search narrows the list, so every selection decision is made against what the user can see.
+    // Comparing sizes against the unfiltered list - as this screen used to - reported "all selected"
+    // as soon as one note was hidden by the query, and flipped the toggle to "deselect" instead.
+    val visibleNotes = remember(trashedNotes, searchQuery) { filterNotes(trashedNotes, searchQuery) }
+    val allSelected = visibleNotes.isNotEmpty() && visibleNotes.all { note ->
+        selectedNotes.any { it.id == note.id }
+    }
     val longPressedNote = trashedNotes.firstOrNull { it.id == longPressedNoteId }
 
     BackHandler(enabled = true) {
@@ -82,6 +92,29 @@ fun TrashScreen(
                 .fillMaxSize()
                 .padding(paddingValues)
         ) {
+            OutlinedTextField(
+                value = searchQuery,
+                onValueChange = { searchQuery = it },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp),
+                singleLine = true,
+                placeholder = { Text(stringResource(R.string.search)) },
+                leadingIcon = {
+                    Icon(Icons.Rounded.Search, contentDescription = null)
+                },
+                trailingIcon = {
+                    if (searchQuery.isNotEmpty()) {
+                        IconButton(onClick = { searchQuery = "" }) {
+                            Icon(
+                                imageVector = Icons.Rounded.Close,
+                                contentDescription = stringResource(R.string.cancel)
+                            )
+                        }
+                    }
+                }
+            )
+
             Surface(
                 tonalElevation = 2.dp,
                 shadowElevation = 2.dp,
@@ -130,14 +163,16 @@ fun TrashScreen(
                     // keep enough room for their icon + text on narrow screens.
                     FilledTonalIconButton(
                         onClick = {
-                            if (allSelected) {
-                                selectedNotes.clear()
-                            } else {
-                                selectedNotes.clear()
-                                selectedNotes.addAll(trashedNotes)
+                            // Only what the query left visible: selecting hidden notes too would
+                            // delete notes the user cannot see. Tapping again deselects that set.
+                            selectedNotes.removeAll { selected ->
+                                visibleNotes.any { it.id == selected.id }
+                            }
+                            if (!allSelected) {
+                                selectedNotes.addAll(visibleNotes)
                             }
                         },
-                        enabled = trashedNotes.isNotEmpty()
+                        enabled = visibleNotes.isNotEmpty()
                     ) {
                         Icon(
                             imageVector = if (allSelected) Icons.Rounded.RemoveDone else Icons.Rounded.DoneAll,
@@ -160,12 +195,25 @@ fun TrashScreen(
                         color = MaterialTheme.colorScheme.secondary
                     )
                 }
+            } else if (visibleNotes.isEmpty()) {
+                // The trash has notes, the query matched none of them: say so instead of showing an
+                // empty grid, which reads as if the trash had just been emptied.
+                Box(
+                    modifier = Modifier.fillMaxSize(),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = stringResource(R.string.search_no_results),
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.secondary
+                    )
+                }
             } else {
                 NotesGrid(
                     settingsViewModel = settingsViewModel,
                     containerColor = getContainerColor(settingsViewModel),
                     onNoteClicked = { noteId ->
-                        trashedNotes.find { it.id == noteId }?.let { note ->
+                        visibleNotes.find { it.id == noteId }?.let { note ->
                             if (selectedNotes.contains(note)) selectedNotes.remove(note)
                             else selectedNotes.add(note)
                         }
@@ -174,7 +222,7 @@ fun TrashScreen(
                         radius = settingsViewModel.settings.value.cornerRadius / 2,
                         isBoth = true
                     ),
-                    notes = trashedNotes,
+                    notes = visibleNotes,
                     onNoteUpdate = {},
                     selectedNotes = selectedNotes,
                     viewMode = true,

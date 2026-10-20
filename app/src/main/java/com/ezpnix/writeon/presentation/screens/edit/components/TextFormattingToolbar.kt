@@ -79,10 +79,10 @@ fun TextFormattingToolbar(viewModel: EditViewModel) {
     val launcher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         uri?.let {
             val savedUri = saveImageToAppStorage(context, it)
-            // An empty result means the copy failed; inserting "!()" would leave a broken image
-            // insertion in the note body.
+            // An empty result means the copy failed; inserting a reference to nothing would leave a
+            // permanently unavailable attachment in the note body.
             if (savedUri.isNotEmpty()) {
-                viewModel.insertText("!($savedUri)")
+                viewModel.insertImageAttachment(savedUri)
             }
         }
     }
@@ -91,7 +91,7 @@ fun TextFormattingToolbar(viewModel: EditViewModel) {
         AudioRecordDialog(
             onDismiss = { showRecordAudioDialog = false },
             onAudioRecorded = { audioFile ->
-                viewModel.insertText("?audio(${audioFile.absolutePath})")
+                viewModel.insertAudioAttachment(audioFile.absolutePath, audioFile.nameWithoutExtension)
             }
         )
     }
@@ -145,25 +145,28 @@ fun TextFormattingToolbar(viewModel: EditViewModel) {
                     currentIndex++
                 },
             ),
-            // Page 2: Inline Styles & Utilities (5 items: Bold, Italic, Underline, Strikethrough, Highlight)
+            // Page 2: Inline styles (5 items: Bold, Italic, Strikethrough, Highlight, Inline code).
+            // These act on the selection - see EditViewModel.applyFormat - so a highlighted word is
+            // wrapped rather than having markers typed in front of it. Underline left the toolbar:
+            // it was the one style the renderer never agreed with, and inline code is more useful.
             listOf(
                 ToolbarItem(Icons.AutoMirrored.Rounded.ArrowBackIos, "", color = colorArrow) {
                     currentIndex--
                 },
                 ToolbarItem(Icons.Rounded.FormatBold, context.getString(R.string.fmt_bold), color = colorIcon) {
-                    viewModel.insertText("**", offset = 2, newLine = false)
+                    viewModel.applyFormat("**")
                 },
                 ToolbarItem(Icons.Rounded.FormatItalic, context.getString(R.string.fmt_italic), color = colorIcon) {
-                    viewModel.insertText("***", offset = -2, newLine = false)
-                },
-                ToolbarItem(Icons.Rounded.FormatUnderlined, context.getString(R.string.fmt_underline), color = colorIcon) {
-                    viewModel.insertText("__", -1, newLine = false)
+                    viewModel.applyFormat("*")
                 },
                 ToolbarItem(Icons.Rounded.StrikethroughS, context.getString(R.string.fmt_strikethrough), color = colorIcon) {
-                    viewModel.insertText("~~~~", -2, newLine = false)
+                    viewModel.applyFormat("~~")
                 },
                 ToolbarItem(Icons.Rounded.AutoFixHigh, context.getString(R.string.fmt_highlight), color = colorIcon) {
-                    viewModel.insertText("====", offset = -2, newLine = false)
+                    viewModel.applyFormat("==")
+                },
+                ToolbarItem(Icons.Rounded.Code, context.getString(R.string.fmt_inline_code), color = colorIcon) {
+                    viewModel.applyFormat("`")
                 },
                 ToolbarItem(Icons.AutoMirrored.Rounded.ArrowForwardIos, "", color = colorArrow) {
                     currentIndex++

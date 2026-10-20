@@ -1,5 +1,6 @@
 package com.ezpnix.writeon.presentation
 
+import android.content.Intent
 import android.os.Bundle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -8,6 +9,7 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.unit.dp
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
@@ -25,6 +27,8 @@ import com.ezpnix.writeon.presentation.navigation.HomeOverlayState
 import com.ezpnix.writeon.presentation.navigation.NavRoutes
 import com.ezpnix.writeon.presentation.navigation.PredictiveBackHost
 import com.ezpnix.writeon.presentation.screens.settings.model.SettingsViewModel
+import com.ezpnix.writeon.presentation.share.ShareIntake
+import com.ezpnix.writeon.presentation.share.readShareIntent
 import com.ezpnix.writeon.presentation.theme.LeafNotesTheme
 import com.ezpnix.writeon.presentation.theme.LocalCornerRadius
 import com.ezpnix.writeon.presentation.theme.LocalNoteFontFamily
@@ -58,6 +62,14 @@ class MainActivity : AppCompatActivity() {
         super.onStop()
     }
 
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        // singleTask delivers later shares here instead of creating a second activity, so the
+        // payload is parked and the running composition is asked to open a new note.
+        setIntent(intent)
+        readShareIntent(this, intent)?.let { ShareIntake.offer(it, navigate = true) }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val splashScreen = installSplashScreen()
@@ -75,12 +87,21 @@ class MainActivity : AppCompatActivity() {
         val isNewNoteShortcut = intent?.action == "com.ezpnix.writeon.action.NEW_NOTE" ||
                 intent?.getBooleanExtra("new_note", false) == true
 
+        // A share that starts the process: park the payload and land straight in the editor. The
+        // editor asks ShareIntake for it when it is created, so a cold start needs no extra
+        // navigation - the start destination below already is the editor.
+        val sharedAtLaunch = readShareIntent(this, intent)
+        if (sharedAtLaunch != null) {
+            ShareIntake.offer(sharedAtLaunch, navigate = false)
+        }
+
         lifecycleScope.launch {
             val termsAccepted = settingsRepositoryImpl.getBoolean("termsOfService") ?: false
             startup.complete(termsAccepted)
 
             val startDestination = when {
                 !termsAccepted -> NavRoutes.Terms.route
+                sharedAtLaunch != null -> NavRoutes.Edit.createRoute(0, false)
                 isNewNoteShortcut -> NavRoutes.Edit.createRoute(0, false)
                 noteId == -1 -> NavRoutes.Home.route
                 else -> NavRoutes.Edit.route
@@ -89,6 +110,15 @@ class MainActivity : AppCompatActivity() {
             setContent {
                 val navController = rememberNavController()
                 val backStackEntry by navController.currentBackStackEntryAsState()
+                // A share that arrives while the activity is already alive cannot move the start
+                // destination, so ShareIntake counts those and this effect opens one new note per
+                // share. Cold-start shares never bump the counter, so they do not land here twice.
+                val shareRequests = ShareIntake.navigationRequest
+                LaunchedEffect(shareRequests) {
+                    if (shareRequests > 0) {
+                        navController.navigate(NavRoutes.Edit.createRoute(0, false))
+                    }
+                }
                 val predictiveBackEnabled = settingsViewModel.settings.value.predictiveBackEnabled
                 // One provider for the whole app: every screen and component reads the radius the
                 // user chose in Settings > Colours from this local, so no corner stays hard-coded.

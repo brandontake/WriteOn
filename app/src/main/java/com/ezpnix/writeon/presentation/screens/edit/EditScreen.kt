@@ -15,6 +15,9 @@ import androidx.core.content.ContextCompat
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.material3.Surface
+import androidx.compose.material3.TextButton
+import kotlinx.coroutines.delay
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -180,11 +183,63 @@ fun EditNoteView(
         onClickBack()
     }
 
-    NotesScaffold(
-        topBar = { if (!settingsViewModel.settings.value.minimalisticMode) TopBar(pagerState, exitEditor, viewModel, settingsViewModel) },
-        content = { PagerContent(pagerState, coroutineScope, viewModel, settingsViewModel, exitEditor) }
-    )
+    // The editor persists on ON_STOP, so a note can be saved by a gesture the user did not think of
+    // as saving. The bar is the only way back, and it is shown for a short window: it is a correction
+    // for the save that just happened, not an editing history.
+    var undoVisible by remember { mutableStateOf(false) }
+    val undoToken = viewModel.undoToken
+    LaunchedEffect(undoToken) {
+        if (undoToken > 0 && viewModel.canUndoSave) {
+            undoVisible = true
+            delay(UNDO_WINDOW_MS)
+            undoVisible = false
+        }
+    }
+
+    Box(modifier = Modifier.fillMaxSize()) {
+        NotesScaffold(
+            topBar = { if (!settingsViewModel.settings.value.minimalisticMode) TopBar(pagerState, exitEditor, viewModel, settingsViewModel) },
+            content = { PagerContent(pagerState, coroutineScope, viewModel, settingsViewModel, exitEditor) }
+        )
+        AnimatedVisibility(
+            visible = undoVisible,
+            enter = fadeIn(),
+            exit = fadeOut(),
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .padding(bottom = 24.dp)
+        ) {
+            Surface(
+                shape = RoundedCornerShape(24.dp),
+                color = MaterialTheme.colorScheme.inverseSurface,
+                tonalElevation = 6.dp
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = stringResource(R.string.msg_note_saved),
+                        color = MaterialTheme.colorScheme.inverseOnSurface,
+                        style = MaterialTheme.typography.bodyMedium,
+                        modifier = Modifier.padding(start = 16.dp)
+                    )
+                    TextButton(
+                        onClick = {
+                            undoVisible = false
+                            viewModel.undoLastSave()
+                        }
+                    ) {
+                        Text(
+                            text = stringResource(R.string.cd_undo),
+                            color = MaterialTheme.colorScheme.inversePrimary
+                        )
+                    }
+                }
+            }
+        }
+    }
 }
+
+/** How long the save that just happened stays undoable. */
+private const val UNDO_WINDOW_MS = 10_000L
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable

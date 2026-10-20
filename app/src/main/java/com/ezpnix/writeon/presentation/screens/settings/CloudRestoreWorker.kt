@@ -1,5 +1,8 @@
 package com.ezpnix.writeon.presentation.screens.settings
 
+import android.app.Application
+import androidx.datastore.preferences.core.edit
+import com.ezpnix.writeon.data.local.database.NoteDatabaseProvider
 import android.content.Context
 import android.util.Log
 import android.widget.Toast
@@ -61,6 +64,12 @@ object WebDavPrefs {
      * upload passphrase, and read back here.
      */
     const val BACKUP_PASSPHRASE = "encryption_password"
+
+    /**
+     * Validator of the archive currently on the server, as reported by the last successful upload.
+     * It is how an upload notices that another device replaced the file in the meantime.
+     */
+    const val ETAG = "webdav_etag"
 }
 
 /** Tink keyset for the WebDAV credentials, shared by the settings screen and the workers. */
@@ -142,6 +151,11 @@ class WebDAVRestoreWorker(
             val decryptedBytes = decrypt(encryptedBytes, userPassword) ?: return@withContext Result.failure()
 
             unzipAndReplaceDatabase(decryptedBytes)
+            // The remote archive is now the database we just installed, so the ETag remembered for
+            // the previous one would read as "someone else changed the file" on the next upload.
+            applicationContext.webDavDataStore.edit { prefs ->
+                prefs.remove(stringPreferencesKey(WebDavPrefs.ETAG))
+            }
 
             withContext(Dispatchers.Main) {
                 Toast.makeText(
@@ -196,6 +210,11 @@ class WebDAVRestoreWorker(
      * existing database intact.
      */
     private fun unzipAndReplaceDatabase(zipData: ByteArray) {
+        // The connection has to be closed before its file is replaced. Room keeps the old file
+        // mapped, so a restore that only renamed the new file into place left the running app
+        // reading and writing the previous database - the notes looked restored until the next
+        // write went to the discarded file.
+        NoteDatabaseProvider(applicationContext as Application).close()
         val dbFile = applicationContext.getDatabasePath(DatabaseConst.NOTES_DATABASE_FILE_NAME)
         val tempDir = File(applicationContext.cacheDir, "unzipped_restore")
         tempDir.deleteRecursively()

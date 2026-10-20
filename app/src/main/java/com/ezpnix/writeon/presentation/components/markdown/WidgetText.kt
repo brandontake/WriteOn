@@ -42,17 +42,9 @@ fun WidgetText(
     onContentChange: (String) -> Unit = {}
 ) {
     val lines = markdown.lines()
-    val lineProcessors = listOf(
-        HeadingProcessor(),
-        HorizontalRuleProcessor(),
-        ListItemProcessor(),
-        CodeBlockProcessor(),
-        QuoteProcessor(),
-        ImageInsertionProcessor(),
-        AudioInsertionProcessor(),
-        CheckboxProcessor()
-    )
-    val markdownBuilder = MarkdownBuilder(lines, lineProcessors)
+    // Same pipeline as MarkdownText. This used to be a copy of the list, which meant every new
+    // element had to be added twice and the widget silently fell behind the note list.
+    val markdownBuilder = MarkdownBuilder(lines, defaultMarkdownLineProcessors())
     markdownBuilder.parse()
     MarkdownWidgetContent(
         modifier = modifier,
@@ -126,34 +118,45 @@ fun WidgetMarkdownElement(
                 )
             }
             is ImageInsertion -> {
-                val file = File(element.photoUri)
-                if (file.exists()) {
-                    var bitmap = BitmapFactory.decodeFile(element.photoUri)
-                    val maxFileSize = 15552000
-                    if (bitmap.byteCount < maxFileSize)  {
-                        Image(
-                            provider = ImageProvider(bitmap),
-                            contentDescription = null,
-                            contentScale = ContentScale.Fit,
-                            modifier = GlanceModifier
-                                .padding(6.dp)
-                                .wrapContentHeight()
-                        )
-                    } else {
-                        Text(
-                            text = context.getString(R.string.unsupported_image_size),
-                            style = TextStyle(
-                                fontSize = fontSize,
-                                fontWeight = weight,
-                                color = GlanceTheme.colors.error
+                // The body carries an id; the registry knows the file on this device. A Glance
+                // widget cannot show a "tap to reload" placeholder, so an unresolved or unreadable
+                // image simply renders nothing rather than an error box the user cannot act on.
+                val path = AttachmentRegistry.resolve(element.photoUri)
+                if (path != null) {
+                    val file = File(path)
+                    if (file.exists()) {
+                        val bitmap = BitmapFactory.decodeFile(path)
+                        val maxFileSize = 15552000
+                        if (bitmap != null && bitmap.byteCount < maxFileSize) {
+                            Image(
+                                provider = ImageProvider(bitmap),
+                                contentDescription = null,
+                                contentScale = ContentScale.Fit,
+                                modifier = GlanceModifier
+                                    .padding(6.dp)
+                                    .wrapContentHeight()
                             )
-                        )
+                        } else {
+                            Text(
+                                text = context.getString(R.string.unsupported_image_size),
+                                style = TextStyle(
+                                    fontSize = fontSize,
+                                    fontWeight = weight,
+                                    color = GlanceTheme.colors.error
+                                )
+                            )
+                        }
                     }
                 }
             }
             is AudioInsertion -> {
+                val caption = element.audioUri
+                    .let { com.ezpnix.writeon.core.attachment.AttachmentSyntax.idOf(it) }
+                    ?.let { AttachmentRegistry.attachment(it)?.caption }
+                    ?.takeIf { it.isNotBlank() }
+                    ?: context.getString(R.string.audio_recording_label)
                 Text(
-                    text = "[Voice Memo]",
+                    text = "[$caption]",
                     style = TextStyle(
                         fontSize = fontSize,
                         fontWeight = weight,

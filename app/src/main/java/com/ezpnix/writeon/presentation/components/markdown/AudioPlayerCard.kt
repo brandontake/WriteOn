@@ -77,7 +77,12 @@ private fun nextSpeed(current: Float): Float {
 fun AudioPlayerCard(
     audioUri: String,
     radius: Int = 16,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    /**
+     * Caption stored with the 2.0 attachment row. Shown when the user has not renamed the memo,
+     * so a migrated recording reads "20261018-2245" instead of the generic "Voice Memo".
+     */
+    caption: String? = null
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -91,7 +96,10 @@ fun AudioPlayerCard(
 
     val file = remember(audioUri) { File(audioUri) }
     val storedLabel = AudioLabelStore.label(context, audioUri)
-    val displayName = storedLabel.ifBlank { stringResource(R.string.audio_recording_label) }
+    val displayName = storedLabel
+        .ifBlank { caption.orEmpty().trim() }
+        .ifBlank { stringResource(R.string.audio_recording_label) }
+
 
     // While the thumb is held the card must show the finger position, not the position the ticker
     // reports - otherwise every 250 ms update would yank the thumb back under the finger.

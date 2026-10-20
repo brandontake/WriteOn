@@ -485,4 +485,8 @@
     <string name="font_applied_dialog_msg">カスタムフォント「%1$s」を適用しました。今すぐホームに戻りますか？</string>
     <string name="return_to_home">ホームに戻る</string>
     <string name="stay_here">このまま留まる</string>
+    <string name="attachment_missing">添付ファイルを表示できません</string>
+    <string name="search_no_results">検索に一致するノートはありません</string>
+    <string name="fmt_inline_code">インラインコード</string>
+    <string name="msg_image_saved_pages">%1$d ページを保存しました。1 枚目: %2$s</string>
 </resources>

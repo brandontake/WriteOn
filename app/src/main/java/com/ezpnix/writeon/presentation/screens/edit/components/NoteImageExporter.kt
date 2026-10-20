@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.wrapContentHeight
@@ -28,13 +29,18 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
@@ -44,7 +50,9 @@ import androidx.compose.ui.graphics.layer.drawLayer
 import androidx.compose.ui.graphics.rememberGraphicsLayer
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.layout.layout
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Dp
@@ -102,6 +110,17 @@ fun NoteImageCapture(
     fontSize: Float,
     containerColor: Color,
     cornerRadius: Dp,
+    /**
+     * Zero for a single picture. When positive the capture is one window of this many pixels tall
+     * showing page [pageIndex]: the column keeps its natural height and is shifted up by the page
+     * offset, so the pixels outside the window are never laid out into a clipped constraint.
+     */
+    pageHeightPx: Int = 0,
+    pageIndex: Int = 0,
+    /** Natural height of the note's column, reported once measured. */
+    onMeasuredHeight: (Int) -> Unit = {},
+    /** False for the measuring pass, which must not record a bitmap of the whole note. */
+    captureEnabled: Boolean = true,
     onCaptured: (ImageBitmap) -> Unit,
     onFailed: (Throwable) -> Unit = {},
     modifier: Modifier = Modifier
@@ -115,10 +134,23 @@ fun NoteImageCapture(
         SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date())
     }
 
+    val density = LocalDensity.current
+    val pageHeight: Dp? = if (pageHeightPx > 0) with(density) { pageHeightPx.toDp() } else null
+    var contentHeightPx by remember { mutableIntStateOf(0) }
+    LaunchedEffect(contentHeightPx) {
+        if (contentHeightPx > 0) onMeasuredHeight(contentHeightPx)
+    }
+
     Box(
         modifier = modifier
             .width(EXPORT_WIDTH)
-            .wrapContentHeight(unbounded = true)
+            // A paged capture is exactly one window tall, so the recorded layer never holds more
+            // pixels than the budget allows; the single picture keeps the unbounded layout.
+            .then(
+                if (pageHeight != null) Modifier.height(pageHeight)
+                else Modifier.wrapContentHeight(unbounded = true)
+            )
+            .clipToBounds()
             .clip(RoundedCornerShape(cornerRadius))
             .background(containerColor)
             .drawWithContent {
@@ -134,7 +166,14 @@ fun NoteImageCapture(
                 drawLayer(graphicsLayer)
             }
     ) {
-        Column(modifier = Modifier.fillMaxWidth().padding(EXPORT_PADDING)) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .wrapContentHeight(unbounded = true)
+                .offset { IntOffset(0, if (pageHeightPx > 0) -pageIndex * pageHeightPx else 0) }
+                .onSizeChanged { if (it.height > contentHeightPx) contentHeightPx = it.height }
+                .padding(EXPORT_PADDING)
+        ) {
             Text(
                 text = noteTitle,
                 fontSize = (fontSize + 6).sp,
@@ -190,7 +229,13 @@ fun NoteImageCapture(
         }
     }
 
-    LaunchedEffect(noteTitle, noteBody) {
+    LaunchedEffect(noteTitle, noteBody, pageIndex, contentHeightPx, pageHeightPx, captureEnabled) {
+        // Nothing to record until the column has a height, and a page starting past the end of the
+        // note is empty; capturing it would write a blank page for a count computed from a stale
+        // height.
+        if (!captureEnabled) return@LaunchedEffect
+        if (contentHeightPx == 0) return@LaunchedEffect
+        if (pageHeightPx > 0 && pageIndex * pageHeightPx >= contentHeightPx) return@LaunchedEffect
         repeat(CAPTURE_FRAMES) { withFrameNanos { } }
         // Previously the failure was swallowed here: getOrNull() returned null, onCaptured never
         // ran, and the save host sat in its "saving" state forever with no message. Report it so the
@@ -219,34 +264,58 @@ fun NoteImageSaveHost(
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    val alreadySaved = remember { mutableStateOf(false) }
+    val density = LocalDensity.current
+
+    // Tallest picture one page may hold at the export width. Every page is measured against this,
+    // so no single bitmap can exceed the budget the way the one-shot capture did: a long note used
+    // to be laid out taller than the budget, the excess was clipped away, and the exported picture
+    // silently stopped halfway through the note.
+    val pageHeightPx = remember(density) {
+        val widthPx = with(density) { EXPORT_WIDTH.roundToPx() }.coerceAtLeast(1)
+        (MAX_EXPORT_PIXELS / widthPx).toInt().coerceAtLeast(1)
+    }
+
+    var measured by remember { mutableStateOf(false) }
+    var pageCount by remember { mutableIntStateOf(1) }
+    var pageIndex by remember { mutableIntStateOf(0) }
+    var finished by remember { mutableStateOf(false) }
+    val savedLocations = remember { mutableStateListOf<String>() }
 
     // Report the outcome exactly once and always leave the saving state, whether the capture
     // worked, the capture threw, or the write failed.
     fun finish(message: String) {
+        if (finished) return
+        finished = true
         Toast.makeText(context, message, Toast.LENGTH_LONG).show()
         onFinished()
+    }
+
+    fun reportSuccess() {
+        val first = savedLocations.firstOrNull() ?: return
+        finish(
+            if (savedLocations.size > 1) {
+                context.getString(R.string.msg_image_saved_pages, savedLocations.size, first)
+            } else {
+                context.getString(R.string.msg_image_saved, first)
+            }
+        )
     }
 
     Box(
         modifier = Modifier.layout { measurable, constraints ->
             // `Constraints()` resolves to minWidth = maxWidth = minHeight = maxHeight = 0, which
             // measured the capture into a 0 x 0 node: the bitmap was empty and every later step
-            // failed. The capture is laid out at its own natural height, so it is measured with the
-            // width this host is given and a height bounded by MAX_EXPORT_PIXELS, then reported as a
-            // zero sized node placed off screen so the real UI never moves. Passing
-            // Constraints.Infinity here, as this used to, let the bitmap grow without limit.
+            // failed. Each capture is laid out with the width this host is given and a height bounded
+            // by one page, then reported as a zero sized node placed off screen so the real UI never
+            // moves.
             val widthPx = constraints.maxWidth
                 .takeIf { it != Constraints.Infinity && it > 0 }
-                ?: EXPORT_WIDTH.roundToPx()
-            val maxHeightPx = (MAX_EXPORT_PIXELS / widthPx.coerceAtLeast(1))
-                .toInt()
-                .coerceAtLeast(1)
+                ?: with(density) { EXPORT_WIDTH.roundToPx() }
             val placeable = measurable.measure(
                 constraints.copy(
                     minWidth = 0,
                     minHeight = 0,
-                    maxHeight = maxHeightPx
+                    maxHeight = pageHeightPx
                 )
             )
             layout(0, 0) { placeable.place(IntOffset(OFF_SCREEN_X, 0)) }
@@ -260,19 +329,34 @@ fun NoteImageSaveHost(
             fontSize = fontSize,
             containerColor = containerColor,
             cornerRadius = cornerRadius,
+            // The first pass only measures: it renders nothing, and its height decides whether the
+            // note fits on one page or has to be cut into several.
+            captureEnabled = measured,
+            pageHeightPx = if (pageCount > 1) pageHeightPx else 0,
+            pageIndex = pageIndex,
+            onMeasuredHeight = { height ->
+                if (!measured) {
+                    val pages = ((height + pageHeightPx - 1) / pageHeightPx).coerceAtLeast(1)
+                    pageCount = pages
+                    measured = true
+                }
+            },
             onCaptured = { bitmap ->
-                if (!alreadySaved.value) {
-                    alreadySaved.value = true
+                if (!finished) {
+                    val base = NoteImageSaver.fileBaseName(noteTitle)
+                    val fileName = if (pageCount > 1) {
+                        base + "_" + (pageIndex + 1) + "of" + pageCount
+                    } else {
+                        base
+                    }
                     scope.launch {
                         val location = NoteImageSaver.save(
                             context = context,
                             bitmap = bitmap,
-                            baseName = NoteImageSaver.fileBaseName(noteTitle),
+                            baseName = fileName,
                             backgroundColor = containerColor.toArgb()
                         )
-                        if (location != null) {
-                            finish(context.getString(R.string.msg_image_saved, location))
-                        } else {
+                        if (location == null) {
                             // Surface why: the old code reported a bare "could not save" that gave the
                             // user nothing to act on, and hid the reason the write had failed.
                             val reason = NoteImageSaver.lastFailure
@@ -283,17 +367,27 @@ fun NoteImageSaveHost(
                                     context.getString(R.string.msg_image_save_failed)
                                 }
                             )
+                        } else {
+                            savedLocations.add(location)
+                            if (pageIndex + 1 < pageCount) {
+                                // Recomposition moves the window down the note; that capture writes
+                                // the next page. Pages are written one at a time so only one bitmap
+                                // is alive at once.
+                                pageIndex++
+                            } else {
+                                reportSuccess()
+                            }
                         }
                     }
                 }
             },
             onFailed = { error ->
-                if (!alreadySaved.value) {
-                    alreadySaved.value = true
-                    finish(
-                        context.getString(R.string.msg_image_save_failed_reason, error.message ?: error.javaClass.simpleName)
+                finish(
+                    context.getString(
+                        R.string.msg_image_save_failed_reason,
+                        error.message ?: error.javaClass.simpleName
                     )
-                }
+                )
             }
         )
     }

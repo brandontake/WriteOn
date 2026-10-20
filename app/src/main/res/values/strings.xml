@@ -481,4 +481,8 @@
     <string name="font_applied_dialog_msg">Custom font \'%1$s\' has been applied! Would you like to return to Home now?</string>
     <string name="return_to_home">Return to Home</string>
     <string name="stay_here">Stay Here</string>
+    <string name="attachment_missing">Attached file unavailable</string>
+    <string name="search_no_results">No notes match your search</string>
+    <string name="fmt_inline_code">Inline code</string>
+    <string name="msg_image_saved_pages">Saved %1$d pages. First one: %2$s</string>
 </resources>

@@ -9,13 +9,19 @@ import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.ezpnix.writeon.core.attachment.AttachmentFiles
+import com.ezpnix.writeon.core.attachment.AttachmentSyntax
+import com.ezpnix.writeon.data.local.database.LegacyBodyMigration
+import com.ezpnix.writeon.domain.model.Attachment
 import com.ezpnix.writeon.domain.model.Note
 import com.ezpnix.writeon.domain.usecase.NoteUseCase
 import com.ezpnix.writeon.presentation.components.DecryptionResult
 import com.ezpnix.writeon.presentation.components.EncryptionHelper
-import com.ezpnix.writeon.presentation.screens.edit.components.AudioRecorderManager
+import com.ezpnix.writeon.presentation.components.markdown.AttachmentRegistry
 import com.ezpnix.writeon.presentation.screens.edit.components.UndoRedoState
+import com.ezpnix.writeon.presentation.share.ShareIntake
 import dagger.hilt.android.lifecycle.HiltViewModel
+import java.io.File
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.first
@@ -74,6 +80,74 @@ class EditViewModel @Inject constructor(
         _isImageSaveRequested.value = false
     }
 
+    /**
+     * Attachments this editor produced but has not written yet.
+     *
+     * Kept here rather than in Compose state: they only matter to [saveNote], while the preview
+     * needs the id -> path pair immediately, which is what [AttachmentRegistry] is for. A picture
+     * picked in a note that is never saved leaves a real file behind, so [persistAttachments] also
+     * prunes the ones the final body stopped referencing.
+     */
+    private val pendingAttachments = LinkedHashMap<String, Attachment>()
+
+    /** Notes whose unattributed attachment rows have already been claimed. */
+    private val claimedNoteIds = mutableSetOf<Int>()
+
+    /** What the most recent save replaced. */
+    private data class SavePoint(val noteId: Int, val previous: Note?, val saved: Note)
+
+    /**
+     * The last save, kept only so it can be taken back.
+     *
+     * The editor saves on ON_STOP, and ON_STOP is not always a deliberate exit. Holding the previous
+     * row for ten seconds turns the one unrecoverable mistake - saving a half-edited note or
+     * saving when the user meant to go back - into a single tap.
+     */
+    private var savePoint: SavePoint? = null
+
+    /** Bumped on every save and every undo, so the screen can restart its countdown. */
+    private val _undoToken = mutableIntStateOf(0)
+    val undoToken: Int
+        get() = _undoToken.intValue
+
+    val canUndoSave: Boolean
+        get() = savePoint != null
+
+    fun insertImageAttachment(path: String) {
+        val attachment = Attachment(
+            id = AttachmentSyntax.newId(),
+            noteId = noteId.value,
+            type = Attachment.TYPE_IMAGE,
+            path = path,
+            createdAt = System.currentTimeMillis()
+        )
+        registerPendingAttachment(attachment)
+        insertBlock(AttachmentSyntax.image(attachment.id))
+    }
+
+    fun insertAudioAttachment(path: String, caption: String) {
+        val resolvedCaption = caption.trim().ifBlank {
+            runCatching { File(path).nameWithoutExtension }.getOrDefault("")
+        }
+        val attachment = Attachment(
+            id = AttachmentSyntax.newId(),
+            noteId = noteId.value,
+            type = Attachment.TYPE_AUDIO,
+            path = path,
+            caption = resolvedCaption,
+            createdAt = System.currentTimeMillis()
+        )
+        registerPendingAttachment(attachment)
+        insertBlock(AttachmentSyntax.audio(attachment.id, resolvedCaption))
+    }
+
+    private fun registerPendingAttachment(attachment: Attachment) {
+        pendingAttachments[attachment.id] = attachment
+        // Render now, persist later. The registry is a Compose state map, so the picture appears as
+        // soon as the body text gains its line.
+        AttachmentRegistry.put(attachment)
+    }
+
     fun saveNote(id: Int) {
         viewModelScope.launch {
             // Pinning is already persisted by [toggleNotePin]. Rewriting it here compared
@@ -85,19 +159,22 @@ class EditViewModel @Inject constructor(
             // An empty brand-new note is not worth storing, but an existing note must still be
             // written when the user clears every character, or the previous text silently survives.
             if (hasContent || id != 0) {
-                val currentText = "${noteName.value.text} ${noteDescription.value.text}"
-                val currentAudioPaths = AudioRecorderManager.extractAudioPaths(currentText)
-                _originalNote.value?.let { old ->
-                    val oldText = "${old.name} ${old.description}"
-                    val oldAudioPaths = AudioRecorderManager.extractAudioPaths(oldText)
-                    val removedAudioPaths = oldAudioPaths - currentAudioPaths
-                    if (removedAudioPaths.isNotEmpty()) {
-                        AudioRecorderManager.deleteAudioFiles(
-                            removedAudioPaths,
-                            application.applicationContext
-                        )
-                    }
+                // A vault note keeps its 1.x body until it is opened: the 7 -> 8 migration cannot
+                // decrypt it, so the upgrade happens here, on plain text, the first time the note is
+                // saved. The rewrite is idempotent, which is what makes running it on every save the
+                // simplest way to catch vault notes, restored backups and hand-pasted legacy text.
+                val rewritten = LegacyBodyMigration.rewrite(noteDescription.value.text, id)
+                if (rewritten.changed) {
+                    // Rows the rewrite produced join the editor's own pending attachments, so the
+                    // code below writes one consistent set.
+                    rewritten.attachments.forEach { pendingAttachments[it.id] = it }
+                    val caret = noteDescription.value.selection.end.coerceAtMost(rewritten.body.length)
+                    _noteDescription.value = TextFieldValue(
+                        text = rewritten.body,
+                        selection = TextRange(caret)
+                    )
                 }
+                val description = rewritten.body
 
                 val now = System.currentTimeMillis()
                 // Fall back to the stored row rather than a blank Note: when the editor is saved
@@ -115,7 +192,7 @@ class EditViewModel @Inject constructor(
                 val encrypted = isEncrypted.value && !encryption.isPasswordEmpty()
                 val note = base?.copy(
                     name = noteName.value.text,
-                    description = noteDescription.value.text,
+                    description = description,
                     pinned = isPinned.value,
                     encrypted = encrypted,
                     createdAt = if (noteCreatedTime.value != 0L) noteCreatedTime.value else now,
@@ -123,17 +200,52 @@ class EditViewModel @Inject constructor(
                 ) ?: Note(
                     id = id,
                     name = noteName.value.text,
-                    description = noteDescription.value.text,
+                    description = description,
                     pinned = isPinned.value,
                     encrypted = encrypted,
                     createdAt = if (noteCreatedTime.value != 0L) noteCreatedTime.value else now,
                     updatedAt = now,
                     tags = emptyList()
                 )
+                // Captured before the write: [note] is about to replace this row.
+                savePoint = SavePoint(noteId = id, previous = base, saved = note)
                 noteUseCase.addNote(note)
+                persistAttachments(description, note.id)
+                _undoToken.intValue++
             }
 
             fetchLastNoteAndUpdate()
+        }
+    }
+
+    /**
+     * Takes back the last save.
+     *
+     * Restoring goes through [NoteUseCase.restoreNote] rather than [saveNote]: the stored row is put
+     * back byte for byte, including updatedAt, while a vault note keeps the already-sealed description
+     * that only that path can write. A note that the save created is deleted, along with the
+     * attachments the save had claimed for it.
+     */
+    fun undoLastSave() {
+        val point = savePoint ?: return
+        savePoint = null
+        _undoToken.intValue++
+        viewModelScope.launch {
+            val previous = point.previous
+            if (previous != null) {
+                noteUseCase.restoreNote(previous)
+                syncNote(previous)
+            } else {
+                val savedId = point.saved.id.takeIf { it != 0 } ?: noteId.value
+                if (savedId != 0) noteUseCase.deleteNoteById(savedId)
+                _originalNote.value = null
+                _noteId.value = 0
+                _noteCreatedTime.value = System.currentTimeMillis()
+                _noteUpdatedTime.longValue = 0L
+                _noteName.value = TextFieldValue("")
+                _noteDescription.value = TextFieldValue("")
+                _isPinned.value = false
+            }
         }
     }
 
@@ -155,6 +267,7 @@ class EditViewModel @Inject constructor(
         updateNoteId(note.id)
         updateNotePin(note.pinned)
         updateIsEncrypted(note.encrypted)
+        claimAttachments(note.id)
     }
 
     /**
@@ -302,6 +415,27 @@ class EditViewModel @Inject constructor(
     private val _currentNumber = mutableStateOf(1)
     val currentNumber: State<Int> get() = _currentNumber
 
+    /**
+     * Wraps the current selection in [prefix]/[suffix] instead of dropping bare markers at the
+     * caret. An empty selection still has to produce something usable, so the pair is inserted and
+     * the caret parked between the halves - which is where the text about to be typed belongs. A
+     * non-empty selection is wrapped and left selected, so styles can be stacked.
+     */
+    fun applyFormat(prefix: String, suffix: String = prefix) {
+        val value = noteDescription.value
+        val text = value.text
+        val start = value.selection.min.coerceIn(0, text.length)
+        val end = value.selection.max.coerceIn(0, text.length)
+        val selected = text.substring(start, end)
+        val updated = text.replaceRange(start, end, prefix + selected + suffix)
+        val selection = if (start == end) {
+            TextRange(start + prefix.length)
+        } else {
+            TextRange(start + prefix.length, start + prefix.length + selected.length)
+        }
+        _noteDescription.value = TextFieldValue(text = updated, selection = selection)
+    }
+
     fun insertText(insertText: String, offset: Int = 1, newLine: Boolean = true) {
         val currentText = _noteDescription.value.text
         val resultSelectionIndex: Int
@@ -327,5 +461,121 @@ class EditViewModel @Inject constructor(
             text = updatedText,
             selection = TextRange(resultSelectionIndex + offset)
         )
+    }
+
+    /**
+     * Inserts [block] on a line of its own.
+     *
+     * [insertText] is caret-oriented, which is right for `**bold**` but wrong for an attachment: the
+     * line processors require the whole line to be the image/recording token, so appending one to a
+     * paragraph leaves it unrendered and the raw id visible in the editor. An empty line is reused;
+     * otherwise a new one is opened below it.
+     */
+    private fun insertBlock(block: String) {
+        val text = _noteDescription.value.text
+        val range = getIntRangeForCurrentLine()
+        val lineStart = range.first
+        val lineEndExclusive = (range.last + 1).coerceAtLeast(lineStart)
+        val currentLine = text.substring(lineStart, lineEndExclusive)
+
+        val updatedText: String
+        val caret: Int
+        if (currentLine.isBlank()) {
+            updatedText = text.replaceRange(lineStart, lineEndExclusive, block)
+            caret = lineStart + block.length
+        } else {
+            updatedText = text.substring(0, lineEndExclusive) + "\n" + block +
+                text.substring(lineEndExclusive)
+            caret = lineEndExclusive + 1 + block.length
+        }
+
+        _noteDescription.value = TextFieldValue(text = updatedText, selection = TextRange(caret))
+    }
+
+    /**
+     * Writes the attachment rows the saved body references and removes the ones it stopped using.
+     *
+     * Three groups exist after an edit:
+     *  - pending rows (picked or recorded in this session) that survived in the text -> upsert;
+     *  - rows the note already owned but the text no longer references -> delete row + file;
+     *  - pending rows the user deleted again before the note was ever saved -> delete file.
+     *
+     * A brand-new note has no id yet, so its rows are written with note-id 0 and claimed by
+     * [claimAttachments] once Room has assigned the real id.
+     */
+    private suspend fun persistAttachments(body: String, savedNoteId: Int) {
+        val idsInBody = AttachmentSyntax.idsIn(body)
+        val appContext = application.applicationContext
+
+        val owned = pendingAttachments.values.filter { it.id in idsInBody }
+        if (owned.isNotEmpty()) {
+            noteUseCase.saveAttachments(owned.map { it.copy(noteId = savedNoteId) })
+            owned.forEach { pendingAttachments.remove(it.id) }
+        }
+
+        if (savedNoteId != 0) {
+            val removed = noteUseCase.attachmentsForNote(savedNoteId).filter { it.id !in idsInBody }
+            if (removed.isNotEmpty()) {
+                AttachmentFiles.deleteAll(appContext, removed)
+                noteUseCase.deleteAttachments(removed.map { it.id })
+                AttachmentRegistry.remove(removed.map { it.id })
+            }
+        }
+
+        val abandoned = pendingAttachments.values.filter { it.id !in idsInBody }
+        if (abandoned.isNotEmpty()) {
+            AttachmentFiles.deleteAll(appContext, abandoned)
+            AttachmentRegistry.remove(abandoned.map { it.id })
+            abandoned.forEach { pendingAttachments.remove(it.id) }
+        }
+
+        // Anything the legacy rewrite produced is already in the database now; re-reading keeps the
+        // registry (and therefore every open screen) in step with what was actually stored.
+        noteUseCase.refreshAttachments()
+    }
+
+    /**
+     * Gives the rows written under the placeholder id 0 to the note Room just created. Guarded so
+     * the collector that calls it on every database emission does not relaunch a write each time.
+     */
+    private fun claimAttachments(savedNoteId: Int) {
+        if (savedNoteId == 0 || !claimedNoteIds.add(savedNoteId)) return
+        val ids = AttachmentSyntax.idsIn(noteDescription.value.text)
+        if (ids.isEmpty()) return
+        viewModelScope.launch { noteUseCase.assignAttachments(savedNoteId, ids.toList()) }
+    }
+
+    /**
+     * A note opened from a share starts out holding what was shared. Pictures become attachment
+     * rows under the placeholder id 0 - claimed by the note on its first save, exactly like a
+     * picture picked from the toolbar - so the body only ever stores `attachment://` links.
+     *
+     * Runs in `init` because the payload has to be in place before the first frame: consuming it
+     * anywhere later would paint an empty editor and then replace the text under the caret.
+     */
+    init {
+        ShareIntake.consume()?.let { payload ->
+            val blocks = buildList {
+                payload.text.takeIf { it.isNotBlank() }?.let(::add)
+                payload.imagePaths.forEach { path ->
+                    val attachment = Attachment(
+                        id = AttachmentSyntax.newId(),
+                        noteId = 0,
+                        type = Attachment.TYPE_IMAGE,
+                        path = path,
+                        createdAt = System.currentTimeMillis()
+                    )
+                    pendingAttachments[attachment.id] = attachment
+                    AttachmentRegistry.put(attachment)
+                    add(AttachmentSyntax.image(attachment.id))
+                }
+            }
+            if (blocks.isNotEmpty()) {
+                _noteDescription.value = TextFieldValue(
+                    text = blocks.joinToString("\n\n"),
+                    selection = TextRange(0)
+                )
+            }
+        }
     }
 }

@@ -5,10 +5,13 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.glance.appwidget.updateAll
+import com.ezpnix.writeon.core.attachment.AttachmentFiles
 import com.ezpnix.writeon.data.repository.NoteRepositoryImpl
+import com.ezpnix.writeon.domain.model.Attachment
 import com.ezpnix.writeon.domain.model.Note
 import com.ezpnix.writeon.presentation.components.DecryptionResult
 import com.ezpnix.writeon.presentation.components.EncryptionHelper
+import com.ezpnix.writeon.presentation.components.markdown.AttachmentRegistry
 import com.ezpnix.writeon.widget.NotesWidget
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CoroutineScope
@@ -40,6 +43,44 @@ class NoteUseCase @Inject constructor(
     fun observe() {
         observeNotes()
         observeTags()
+        coroutineScope.launch { refreshAttachments() }
+    }
+
+    /**
+     * Fills [AttachmentRegistry] with every id -> path pair.
+     *
+     * Note bodies only store ids, so without this a freshly started process renders every image and
+     * recording as "unavailable" until that note happens to load its own rows. The registry is a
+     * Compose state map, so screens already on screen pick the values up on the next frame.
+     */
+    suspend fun refreshAttachments() {
+        val attachments = withContext(Dispatchers.IO) { noteRepository.getAllAttachments() }
+        AttachmentRegistry.put(attachments)
+    }
+
+    suspend fun saveAttachments(items: List<Attachment>) {
+        if (items.isEmpty()) return
+        withContext(Dispatchers.IO) { noteRepository.upsertAttachments(items) }
+        AttachmentRegistry.put(items)
+    }
+
+    suspend fun attachmentsForNote(noteId: Int): List<Attachment> =
+        withContext(Dispatchers.IO) { noteRepository.getAttachmentsForNote(noteId) }
+
+    /**
+     * Hands rows written under the placeholder note id 0 to the note Room has just created.
+     *
+     * The DAO only rewrites unclaimed rows, so replaying this for a note that already owns its
+     * attachments cannot take them away from another note.
+     */
+    suspend fun assignAttachments(noteId: Int, ids: List<String>) {
+        if (noteId == 0 || ids.isEmpty()) return
+        withContext(Dispatchers.IO) { noteRepository.assignAttachmentsToNote(noteId, ids) }
+    }
+
+    suspend fun deleteAttachments(ids: List<String>) {
+        if (ids.isEmpty()) return
+        withContext(Dispatchers.IO) { noteRepository.deleteAttachments(ids) }
     }
 
     /**
@@ -149,6 +190,18 @@ class NoteUseCase @Inject constructor(
         return noteRepository.getNotesByTag(tag.trim().lowercase())
     }
 
+    /**
+     * Writes [note] back exactly as it was stored.
+     *
+     * [addNote] is the ordinary write path: it seals a vault note again and stamps nothing, but it is
+     * still the wrong tool for an undo, because the row being restored is already in the form the
+     * database must keep. Going through the repository writes those bytes untouched, which is what
+     * makes a vault note, a plain note with tags, and a trashed flag all come back unchanged.
+     */
+    suspend fun restoreNote(note: Note) {
+        noteRepository.updateNote(note)
+    }
+
     suspend fun addNote(note: Note) {
         val noteToSave = if (note.encrypted) {
             encryptNote(note.copy(tags = note.tags.map { it.trim().lowercase() }.distinct()))
@@ -217,7 +270,7 @@ class NoteUseCase @Inject constructor(
     fun deleteNoteById(id: Int) {
         coroutineScope.launch(NonCancellable + Dispatchers.IO) {
             val noteToDelete = noteRepository.getNoteById(id).firstOrNull() ?: return@launch
-            deleteAssociatedAudios(noteToDelete)
+            deleteAssociatedFiles(noteToDelete)
             noteRepository.deleteNote(noteToDelete)
         }
     }
@@ -262,17 +315,32 @@ class NoteUseCase @Inject constructor(
     fun permanentlyDeleteNoteById(id: Int) {
         coroutineScope.launch(NonCancellable + Dispatchers.IO) {
             val noteToDelete = noteRepository.getNoteById(id).firstOrNull() ?: return@launch
-            deleteAssociatedAudios(noteToDelete)
+            deleteAssociatedFiles(noteToDelete)
             noteRepository.deleteNote(noteToDelete)
         }
     }
 
-    private fun deleteAssociatedAudios(note: Note) {
+    /**
+     * Removes everything a deleted note owned: attachment rows, the files they point at, and - for
+     * bodies that still carry 1.x syntax - the recordings the old regex can find.
+     *
+     * Attachment rows are authoritative now, but the regex fallback stays because a vault note is
+     * only rewritten when it is opened, so a password-protected note deleted from the trash can
+     * still hold `?audio(...)` paths in its decrypted description.
+     */
+    private suspend fun deleteAssociatedFiles(note: Note) {
         try {
+            val attachments = noteRepository.getAttachmentsForNote(note.id)
+            if (attachments.isNotEmpty()) {
+                AttachmentFiles.deleteAll(context, attachments)
+                noteRepository.deleteAttachments(attachments.map { it.id })
+                AttachmentRegistry.remove(attachments.map { it.id })
+            }
+
             val text = "${note.name} ${note.description}"
-            val paths = com.ezpnix.writeon.presentation.screens.edit.components.AudioRecorderManager.extractAudioPaths(text)
-            if (paths.isNotEmpty()) {
-                com.ezpnix.writeon.presentation.screens.edit.components.AudioRecorderManager.deleteAudioFiles(paths, context)
+            val legacyPaths = com.ezpnix.writeon.presentation.screens.edit.components.AudioRecorderManager.extractAudioPaths(text)
+            if (legacyPaths.isNotEmpty()) {
+                com.ezpnix.writeon.presentation.screens.edit.components.AudioRecorderManager.deleteAudioFiles(legacyPaths, context)
             }
         } catch (_: Throwable) {}
     }

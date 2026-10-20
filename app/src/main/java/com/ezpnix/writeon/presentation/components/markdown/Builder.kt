@@ -144,7 +144,8 @@ private fun buildStyledRunString(input: String, defaultFontWeight: FontWeight): 
         ItalicSegment(),
         HighlightSegment(),
         Strikethrough(),
-        Underline()
+        Underline(),
+        InlineCode()
     )
 
     val covered = Array(segments.size) { BooleanArray(input.length) }

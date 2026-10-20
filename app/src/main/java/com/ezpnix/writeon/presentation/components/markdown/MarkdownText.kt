@@ -125,6 +125,21 @@ fun MarkdownCheck(content: @Composable () -> Unit, checked: Boolean, onCheckedCh
 }
 
 @Composable
+private fun MissingAttachment(radius: Int, modifier: Modifier = Modifier) {
+    Surface(
+        modifier = modifier.clip(RoundedCornerShape(radius.dp)),
+        color = MaterialTheme.colorScheme.surfaceContainerHighest
+    ) {
+        Text(
+            text = stringResource(R.string.attachment_missing),
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+    }
+}
+
+@Composable
 fun MarkdownText(
     radius: Int,
     markdown: String,
@@ -159,16 +174,7 @@ fun MarkdownText(
     val content = remember(lines) {
         MarkdownBuilder(
             lines = lines,
-            lineProcessors = listOf(
-                HeadingProcessor(),
-                HorizontalRuleProcessor(),
-                ListItemProcessor(),
-                CodeBlockProcessor(),
-                QuoteProcessor(),
-                ImageInsertionProcessor(),
-                AudioInsertionProcessor(),
-                CheckboxProcessor()
-            )
+            lineProcessors = defaultMarkdownLineProcessors()
         ).apply { parse() }.content
     }
 
@@ -374,35 +380,64 @@ fun RenderMarkdownElement(
                 // Read the context outside `remember`: LocalContext.current is a @Composable read
                 // and cannot be called from inside the remember's calculation lambda.
                 val imageContext = LocalContext.current
-                val imageRequest = remember(imageContext, element.photoUri) {
-                    ImageRequest.Builder(imageContext)
-                        .data(element.photoUri)
-                        .size(IMAGE_DECODE_MAX_WIDTH_PX, IMAGE_DECODE_MAX_HEIGHT_PX)
-                        .build()
-                }
+                // Bodies store an id, not a path; the registry maps it to the file on this device.
+                // A null result means the row has not been loaded yet (or the file is gone), which
+                // is shown as a placeholder instead of a silently empty gap.
+                val resolvedPath = AttachmentRegistry.resolve(element.photoUri)
 
-                AsyncImage(
-                    model = imageRequest,
-                    contentDescription = stringResource(R.string.cd_note_image),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .heightIn(max = 400.dp)
-                        .clip(RoundedCornerShape(radius.dp)),
-                    contentScale = ContentScale.Fit,
-                    alignment = Alignment.Center,
-                    onError = {
-                        android.util.Log.e("MarkdownText", "Failed to load image: ${element.photoUri}")
+                if (resolvedPath == null) {
+                    MissingAttachment(
+                        radius = radius,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 4.dp)
+                    )
+                } else {
+                    val imageRequest = remember(imageContext, resolvedPath) {
+                        ImageRequest.Builder(imageContext)
+                            .data(resolvedPath)
+                            .size(IMAGE_DECODE_MAX_WIDTH_PX, IMAGE_DECODE_MAX_HEIGHT_PX)
+                            .build()
                     }
-                )
+
+                    AsyncImage(
+                        model = imageRequest,
+                        contentDescription = stringResource(R.string.cd_note_image),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(max = 400.dp)
+                            .clip(RoundedCornerShape(radius.dp)),
+                        contentScale = ContentScale.Fit,
+                        alignment = Alignment.Center,
+                        onError = {
+                            android.util.Log.e("MarkdownText", "Failed to load image: $resolvedPath")
+                        }
+                    )
+                }
             }
             is AudioInsertion -> {
-                AudioPlayerCard(
-                    audioUri = element.audioUri,
-                    radius = radius,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(vertical = 4.dp)
-                )
+                val resolvedPath = AttachmentRegistry.resolve(element.audioUri)
+                if (resolvedPath == null) {
+                    MissingAttachment(
+                        radius = radius,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 4.dp)
+                    )
+                } else {
+                    val caption = element.audioUri.let { target ->
+                        com.ezpnix.writeon.core.attachment.AttachmentSyntax.idOf(target)
+                            ?.let { AttachmentRegistry.attachment(it)?.caption }
+                    }
+                    AudioPlayerCard(
+                        audioUri = resolvedPath,
+                        radius = radius,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 4.dp),
+                        caption = caption
+                    )
+                }
             }
             is CodeBlock -> {
                 MarkdownCodeBlock(

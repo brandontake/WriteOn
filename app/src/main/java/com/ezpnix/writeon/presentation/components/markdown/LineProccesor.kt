@@ -1,9 +1,68 @@
 package com.ezpnix.writeon.presentation.components.markdown
 
+import com.ezpnix.writeon.core.attachment.AttachmentSyntax
+
 interface MarkdownLineProcessor {
     fun canProcessLine(line: String): Boolean
     fun processLine(line: String, builder: MarkdownBuilder)
 }
+
+/**
+ * `![](attachment://a1b2c3d4)` - a picture stored under an id instead of a device path.
+ *
+ * Images and recordings share the `ImageInsertion` / `AudioInsertion` elements with the 1.x
+ * processors below; only the target changes. That keeps the renderers (Compose, Glance widget,
+ * bitmap export) unaware of which syntax produced the element - they all go through
+ * [AttachmentRegistry.resolve].
+ */
+class AttachmentImageProcessor : MarkdownLineProcessor {
+    override fun canProcessLine(line: String): Boolean =
+        AttachmentSyntax.IMAGE_LINE.matches(line.trim())
+
+    override fun processLine(line: String, builder: MarkdownBuilder) {
+        val id = AttachmentSyntax.IMAGE_LINE.matchEntire(line.trim())
+            ?.groupValues?.getOrNull(1) ?: return
+        builder.add(ImageInsertion(AttachmentSyntax.SCHEME + id))
+    }
+}
+
+/** `[录音 20261018-2245](attachment://e5f6a7b8)` - a recording with a human caption. */
+class AttachmentAudioProcessor : MarkdownLineProcessor {
+    override fun canProcessLine(line: String): Boolean =
+        AttachmentSyntax.AUDIO_LINE.matches(line.trim())
+
+    override fun processLine(line: String, builder: MarkdownBuilder) {
+        val id = AttachmentSyntax.AUDIO_LINE.matchEntire(line.trim())
+            ?.groupValues?.getOrNull(2) ?: return
+        builder.add(AudioInsertion(AttachmentSyntax.SCHEME + id))
+    }
+}
+
+/**
+ * The single processor pipeline used by every renderer - note cards, the editor, the Glance widget
+ * and the image exporter.
+ *
+ * It used to be copy-pasted in `MarkdownText.kt` and `WidgetText.kt`, which is how the widget ended
+ * up unable to show anything the note list could. When the two lists disagree the widget and the
+ * note disagree, so there is now exactly one list.
+ *
+ * The legacy processors stay in the pipeline: a body that the 7 -> 8 migration could not rewrite
+ * (password-protected vault notes, text restored from an old backup, anything a user pastes by
+ * hand) must keep rendering until it is opened and saved once.
+ */
+fun defaultMarkdownLineProcessors(): List<MarkdownLineProcessor> = listOf(
+    AttachmentImageProcessor(),
+    AttachmentAudioProcessor(),
+    HeadingProcessor(),
+    HorizontalRuleProcessor(),
+    ListItemProcessor(),
+    CodeBlockProcessor(),
+    QuoteProcessor(),
+    ImageInsertionProcessor(),
+    AudioInsertionProcessor(),
+    CheckboxProcessor()
+)
+
 
 class CodeBlockProcessor : MarkdownLineProcessor {
     override fun canProcessLine(line: String): Boolean {

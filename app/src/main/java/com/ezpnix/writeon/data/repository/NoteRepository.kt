@@ -1,5 +1,6 @@
 package com.ezpnix.writeon.data.repository
 import com.ezpnix.writeon.data.local.database.NoteDatabaseProvider
+import com.ezpnix.writeon.domain.model.Attachment
 import com.ezpnix.writeon.domain.model.Note
 import com.ezpnix.writeon.domain.repository.NoteRepository
 import kotlinx.coroutines.flow.Flow
@@ -41,5 +42,22 @@ class NoteRepositoryImpl @Inject constructor(
 
     override suspend fun batchUpdateNotes(notes: List<Note>) {
         provider.noteDao().batchUpdateNotes(notes)
+    }
+
+    override suspend fun getAllAttachments() = provider.attachmentDao().getAll()
+
+    override suspend fun getAttachmentsForNote(noteId: Int) =
+        provider.attachmentDao().getByNoteId(noteId)
+
+    override suspend fun upsertAttachments(attachments: List<Attachment>) {
+        if (attachments.isNotEmpty()) provider.attachmentDao().upsert(attachments)
+    }
+
+    override suspend fun assignAttachmentsToNote(noteId: Int, ids: List<String>) {
+        if (ids.isNotEmpty()) provider.attachmentDao().assignNote(noteId, ids)
+    }
+
+    override suspend fun deleteAttachments(ids: List<String>) {
+        if (ids.isNotEmpty()) provider.attachmentDao().deleteByIds(ids)
     }
 }
