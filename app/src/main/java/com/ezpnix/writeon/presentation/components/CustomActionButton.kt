@@ -111,9 +111,11 @@ fun EditButton(pagerState: PagerState, coroutineScope: CoroutineScope) {
 fun PreviewButton(
     pagerState: PagerState,
     coroutineScope: CoroutineScope,
+    modifier: Modifier = Modifier,
     onClick: () -> Unit
 ) {
     IconButton(
+        modifier = modifier.size(56.dp),
         onClick = {
             onClick()
             coroutineScope.launch {

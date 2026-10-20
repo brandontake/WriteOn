@@ -37,6 +37,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.dp
@@ -225,12 +226,25 @@ fun NotesGrid(
         handleDeleteAnimation(selectedNotes, note, isAnimationVisible, animationFinished)
     }
 
+    // A tablet offers room for more columns than a phone setting would pick, so the phone value is
+    // kept as the floor and the window width raises it. The ceiling stops a very wide window from
+    // shrinking every card into a sliver.
+    val screenWidthDp = LocalConfiguration.current.screenWidthDp
+    val minColumnsForWidth = when {
+        screenWidthDp >= 1000 -> 4
+        screenWidthDp >= 700 -> 3
+        screenWidthDp >= 500 -> 2
+        else -> 1
+    }
+    val gridColumns = if (viewMode) {
+        maxOf(settingsViewModel.settings.value.columnsCount, minColumnsForWidth).coerceAtMost(6)
+    } else {
+        1
+    }
+
     LazyVerticalStaggeredGrid(
         state = gridState,
-        columns = when(viewMode) {
-            true  -> StaggeredGridCells.Fixed(settingsViewModel.settings.value.columnsCount)
-            false -> StaggeredGridCells.Fixed(1)
-        },
+        columns = StaggeredGridCells.Fixed(gridColumns),
         horizontalArrangement = Arrangement.spacedBy(12.dp),
         content = {
             if (pinnedNotes.isNotEmpty()) {

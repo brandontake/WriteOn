@@ -211,6 +211,15 @@ class EditViewModel @Inject constructor(
                 savePoint = SavePoint(noteId = id, previous = base, saved = note)
                 noteUseCase.addNote(note)
                 persistAttachments(description, note.id)
+                // Clearing every character and saving now means the note is gone rather than an
+                // empty row left on the home screen: the version just written is the one that lands
+                // in the trash, so it can still be restored.
+                if (!hasContent) {
+                    val trashedId = if (note.id != 0) note.id else id
+                    noteUseCase.moveToTrash(
+                        if (note.id != 0) note else note.copy(id = trashedId)
+                    )
+                }
                 _undoToken.intValue++
             }
 
@@ -362,13 +371,16 @@ class EditViewModel @Inject constructor(
         _noteDescription.value = undoRedoState.input
     }
 
-    private fun isSelectorAtStartOfNonEmptyLine(): Boolean {
-        val text = _noteDescription.value.text
-        val selectionStart = _noteDescription.value.selection.start
-        if (selectionStart == 0) {
-            return true
-        }
-        return text[selectionStart - 1] == '\n'
+    private fun lineStartIndex(text: String, position: Int): Int {
+        var index = position.coerceIn(0, text.length)
+        while (index > 0 && text[index - 1] != '\n') index--
+        return index
+    }
+
+    private fun lineEndIndex(text: String, position: Int): Int {
+        var index = position.coerceIn(0, text.length)
+        while (index < text.length && text[index] != '\n') index++
+        return index
     }
 
     private fun getIntRangeForCurrentLine(): IntRange {
@@ -437,29 +449,43 @@ class EditViewModel @Inject constructor(
     }
 
     fun insertText(insertText: String, offset: Int = 1, newLine: Boolean = true) {
-        val currentText = _noteDescription.value.text
-        val resultSelectionIndex: Int
-        val rangeOfCurrentLine = getIntRangeForCurrentLine()
-        val updatedText = if (!rangeOfCurrentLine.isEmpty()) {
-            val currentLineContents = currentText.substring(rangeOfCurrentLine)
-            @Suppress("NAME_SHADOWING") val newLine = if (isSelectorAtStartOfNonEmptyLine()) {
-                insertText + currentLineContents
-            } else {
-                if (newLine) {
-                    currentLineContents + "\n" + insertText
-                } else {
-                    currentLineContents + insertText
-                }
+        val value = _noteDescription.value
+        val text = value.text
+        val start = value.selection.min.coerceIn(0, text.length)
+        val end = value.selection.max.coerceIn(0, text.length)
+
+        // Two insertion models, because the toolbar produces two different kinds of text. A line
+        // marker ("# ", "- ", "1.") qualifies the whole line it sits on, so it is placed in front of
+        // that line; an inline token ("[](url)", a timestamp) belongs exactly where the caret is.
+        // The previous implementation rebuilt the current line and appended the marker at its end,
+        // which is why every button dropped its markers at the end of the note instead of at the
+        // caret.
+        val updatedText: String
+        val caret: Int
+        when {
+            newLine && !insertText.contains('\n') -> {
+                val lineStart = lineStartIndex(text, start)
+                val lineEnd = lineEndIndex(text, end)
+                val updatedLine = insertText + text.substring(lineStart, lineEnd)
+                updatedText = text.replaceRange(lineStart, lineEnd, updatedLine)
+                caret = start + insertText.length
             }
-            resultSelectionIndex = rangeOfCurrentLine.first + newLine.length - 1
-            currentText.replaceRange(rangeOfCurrentLine, newLine)
-        } else {
-            resultSelectionIndex = (currentText + insertText).length
-            currentText + insertText
+            insertText.contains('\n') -> {
+                // A block (fence, divider, checkbox pair) keeps to itself instead of being spliced
+                // into the middle of a sentence, so it gets a line break in front when needed.
+                val needsLeadingBreak = start > 0 && text[start - 1] != '\n'
+                val lead = if (needsLeadingBreak) "\n" else ""
+                updatedText = text.replaceRange(start, end, lead + insertText)
+                caret = start + lead.length + insertText.length + (offset - 1)
+            }
+            else -> {
+                updatedText = text.replaceRange(start, end, insertText)
+                caret = start + insertText.length + (offset - 1)
+            }
         }
         _noteDescription.value = TextFieldValue(
             text = updatedText,
-            selection = TextRange(resultSelectionIndex + offset)
+            selection = TextRange(caret.coerceIn(0, updatedText.length))
         )
     }
 

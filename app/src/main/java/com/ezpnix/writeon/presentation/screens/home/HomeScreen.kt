@@ -234,6 +234,11 @@ fun HomeView(
         // rows so the active filter gets the MD3 selection highlight.
         drawerContent = {
             val drawerCornerRadius = settingsModel.settings.value.cornerRadius
+            // Counts deliberately ignore the trash: a deleted note should not keep inflating the
+            // numbers the user relies on to find their way around.
+            val activeNotes = viewModel.noteUseCase.notes
+            val trashedNotes by viewModel.noteUseCase.getTrashedNotesFlow()
+                .collectAsStateWithLifecycle(initialValue = emptyList())
             ModalDrawerSheet(
                 modifier = Modifier.width(320.dp),
                 drawerShape = RoundedCornerShape(
@@ -279,7 +284,8 @@ fun HomeView(
                         text = context.getString(R.string.nav_all_notes),
                         icon = Icons.Default.NoteAlt,
                         selected = viewModel.currentFilter.value == "all",
-                        cornerRadius = drawerCornerRadius
+                        cornerRadius = drawerCornerRadius,
+                        count = activeNotes.size
                     ) {
                         viewModel.currentFilter.value = "all"
                         scope.launch { drawerState.close() }
@@ -288,7 +294,8 @@ fun HomeView(
                         text = context.getString(R.string.nav_pinned_notes),
                         icon = Icons.Rounded.PushPin,
                         selected = viewModel.currentFilter.value == "pinned",
-                        cornerRadius = drawerCornerRadius
+                        cornerRadius = drawerCornerRadius,
+                        count = activeNotes.count { it.pinned }
                     ) {
                         viewModel.currentFilter.value = "pinned"
                         scope.launch { drawerState.close() }
@@ -297,7 +304,8 @@ fun HomeView(
                         text = context.getString(R.string.nav_trash),
                         icon = Icons.Default.Delete,
                         selected = false,
-                        cornerRadius = drawerCornerRadius
+                        cornerRadius = drawerCornerRadius,
+                        count = trashedNotes.size
                     ) {
                         navController.navigate(NavRoutes.Trash.route)
                         scope.launch { drawerState.close() }
@@ -323,6 +331,7 @@ fun HomeView(
                                 text = tag,
                                 selected = viewModel.currentFilter.value == tag,
                                 cornerRadius = drawerCornerRadius,
+                                count = activeNotes.count { tag in it.tags },
                                 onClick = {
                                     viewModel.currentFilter.value = tag
                                     scope.launch { drawerState.close() }
@@ -556,18 +565,29 @@ fun HomeView(
     )
 }
 
+/**
+ * Trailing note count for a drawer row.
+ *
+ * It is spelled out in parentheses instead of using the drawer's badge slot, because that slot is
+ * already taken by the delete button on tag rows and a badge there would push the row's label out
+ * of view on a narrow drawer.
+ */
+private fun drawerLabelWithCount(text: String, count: Int?): String =
+    if (count == null) text else "$text ($count)"
+
 @Composable
 fun DeletableDrawerItem(
     text: String,
     selected: Boolean,
     cornerRadius: Int,
+    count: Int? = null,
     onClick: () -> Unit,
     onDeleteClick: () -> Unit
 ) {
     NavigationDrawerItem(
         label = {
             Text(
-                text = text.replaceFirstChar { it.uppercase() },
+                text = drawerLabelWithCount(text.replaceFirstChar { it.uppercase() }, count),
                 style = MaterialTheme.typography.labelLarge,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
@@ -618,10 +638,11 @@ fun DrawerItem(
     icon: ImageVector,
     selected: Boolean,
     cornerRadius: Int,
+    count: Int? = null,
     onClick: () -> Unit
 ) {
     NavigationDrawerItem(
-        label = { Text(text = text, style = MaterialTheme.typography.labelLarge, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+        label = { Text(text = drawerLabelWithCount(text, count), style = MaterialTheme.typography.labelLarge, maxLines = 1, overflow = TextOverflow.Ellipsis) },
         selected = selected,
         onClick = onClick,
         icon = { Icon(icon, contentDescription = null) },

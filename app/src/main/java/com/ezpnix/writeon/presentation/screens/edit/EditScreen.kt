@@ -29,6 +29,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -37,6 +38,7 @@ import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.PagerState
@@ -536,159 +538,98 @@ fun EditScreen(
     pagerState: PagerState,
     onClickBack: () -> Unit
 ) {
-    val context = LocalContext.current
-    val showButtons = rememberSaveable { mutableStateOf(false) }
-    val imeVisible = WindowInsets.ime.getBottom(LocalDensity.current) > 0
-    val hideOnKeyboard = settingsViewModel.settings.value.hideVisibilityButtonWhenKeyboard
-    var fabVisible by rememberSaveable { mutableStateOf(true) }
-
-    LaunchedEffect(imeVisible, hideOnKeyboard) {
-        fabVisible = if (hideOnKeyboard) !imeVisible else true
-    }
-
-    // The options panel is a full-screen overlay; back should dismiss it, not leave the editor.
-    BackHandler(enabled = showButtons.value) { showButtons.value = false }
+    val settings = settingsViewModel.settings.value
+    // The formatting bar follows the keyboard: it only matters while the body has focus, and on a
+    // phone the lines it costs are worth reclaiming the rest of the time.
+    val showFormattingBar = viewModel.isDescriptionInFocus.value && settings.isMarkdownEnabled
 
     Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .imePadding()
-            .pointerInput(Unit) {
-                detectTapGestures {
-                    if (!imeVisible) fabVisible = true
-                }
-            }
+        modifier = Modifier.fillMaxSize(),
+        contentAlignment = Alignment.TopCenter
     ) {
         Column(
             modifier = Modifier
-                .fillMaxSize()
+                // A tablet should not stretch a paragraph across the whole window: the readable
+                // line length stays put and the editor is centred instead.
+                .widthIn(max = 840.dp)
+                .fillMaxWidth()
+                .fillMaxHeight()
                 .padding(16.dp)
         ) {
-            if (viewModel.isDescriptionInFocus.value && settingsViewModel.settings.value.isMarkdownEnabled) {
-                TextFormattingToolbar(viewModel)
-            }
+        // The five quick actions used to hide behind a floating "Options" button that covered the
+        // bottom of the note. They now sit on one always-visible row above the note - the place the
+        // formatting toolbar used to occupy - and the formatting toolbar moved down to the bottom,
+        // where the options button used to be.
+        QuickActionRow(viewModel, coroutineScope, pagerState)
 
-            MarkdownBox(
-                isExtremeAmoled = settingsViewModel.settings.value.extremeAmoledMode,
-                shape = shapeManager(
-                    radius = settingsViewModel.settings.value.cornerRadius,
-                    isFirst = true
-                ),
-                modifier = Modifier
-                    .weight(1f)
-                    .onFocusChanged { viewModel.toggleIsDescriptionInFocus(it.isFocused) }
-                    .padding(bottom = 8.dp),
-                content = {
-                    CustomTextField(
-                        value = viewModel.noteDescription.value,
-                        onValueChange = { viewModel.updateNoteDescription(it) },
-                        modifier = Modifier.fillMaxSize(),
-                        placeholder = stringResource(R.string.empty_description),
-                        textStyle = TextStyle(
-                            fontSize = settingsViewModel.settings.value.fontSize.sp,
-                            fontFamily = LocalNoteFontFamily.current
-                        )
+        MarkdownBox(
+            isExtremeAmoled = settingsViewModel.settings.value.extremeAmoledMode,
+            shape = shapeManager(
+                radius = settingsViewModel.settings.value.cornerRadius,
+                isFirst = true
+            ),
+            modifier = Modifier
+                .weight(1f)
+                .onFocusChanged { viewModel.toggleIsDescriptionInFocus(it.isFocused) }
+                .padding(bottom = 8.dp),
+            content = {
+                CustomTextField(
+                    value = viewModel.noteDescription.value,
+                    onValueChange = { viewModel.updateNoteDescription(it) },
+                    modifier = Modifier.fillMaxSize(),
+                    placeholder = stringResource(R.string.empty_description),
+                    textStyle = TextStyle(
+                        fontSize = settingsViewModel.settings.value.fontSize.sp,
+                        fontFamily = LocalNoteFontFamily.current
                     )
-                }
-            )
-        }
-
-        if (showButtons.value) {
-            val overlayColor = if (isSystemInDarkTheme()) {
-                Color.Black.copy(alpha = 0.5f)
-            } else {
-                Color.Black.copy(alpha = 0.3f)
+                )
             }
-
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(overlayColor)
-                    .pointerInput(Unit) {
-                        detectTapGestures {
-                            showButtons.value = false
-                        }
-                    }
-            )
-        }
+        )
 
         AnimatedVisibility(
-            visible = fabVisible && !showButtons.value,
+            visible = showFormattingBar,
             enter = fadeIn(),
-            exit = fadeOut(),
-            modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .padding(32.dp)
+            exit = fadeOut()
         ) {
-            Column(
-                horizontalAlignment = Alignment.CenterHorizontally,
+            Surface(
+                shape = appCornerShape(CornerFraction.MEDIUM),
+                color = MaterialTheme.colorScheme.surfaceContainerLow,
+                tonalElevation = 1.dp,
                 modifier = Modifier
-                    .clip(appCornerShape(CornerFraction.MEDIUM))
-                    .background(MaterialTheme.colorScheme.surface)
-                    .clickable(role = Role.Button) { showButtons.value = !showButtons.value }
-                    .padding(horizontal = 24.dp, vertical = 12.dp)
+                    .fillMaxWidth()
+                    .padding(bottom = 4.dp)
             ) {
-                Icon(
-                    imageVector = Icons.Rounded.Description,
-                    contentDescription = stringResource(R.string.cd_show_options),
-                    tint = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.size(30.dp)
-                )
-                Spacer(modifier = Modifier.height(2.dp))
-                Text(
-                    text = stringResource(R.string.cd_options),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.primary
+                TextFormattingToolbar(
+                    viewModel = viewModel,
+                    modifier = Modifier.padding(vertical = 2.dp)
                 )
             }
         }
-
-        AnimatedVisibility(
-            visible = showButtons.value,
-            enter = fadeIn(),
-            exit = fadeOut(),
-            modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .padding(bottom = 125.dp)
-        ) {
-            Card(
-                shape = appCornerShape(),
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.surfaceContainerLow
-                ),
-                elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
-                modifier = Modifier
-                    .wrapContentHeight()
-                    .fillMaxWidth(0.95f)
-            ) {
-                Row(
-                    modifier = Modifier
-                        .padding(16.dp)
-                        .fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceEvenly,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    CopyButton(viewModel) {
-                        copyToClipboard(context, viewModel.noteDescription.value.text)
-                        showButtons.value = false
-                    }
-                    CalButton()
-                    PreviewButton(pagerState, coroutineScope) {
-                        showButtons.value = false
-                    }
-                    CalculatorButton()
-                    TxtButton(currentText = viewModel.noteDescription.value.text)
-//                    BrowserButton()
-//                    TranslateButton(viewModel) {
-//                        copyToClipboard(context, viewModel.noteDescription.value.text)
-//                        openTranslateApp(context, viewModel.noteDescription.value.text)
-//                        showButtons.value = false
-                }
-            }
         }
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun QuickActionRow(
+    viewModel: EditViewModel,
+    coroutineScope: CoroutineScope,
+    pagerState: PagerState
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(bottom = 8.dp),
+        horizontalArrangement = Arrangement.SpaceEvenly,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        CopyButton(viewModel) {}
+        CalButton()
+        PreviewButton(pagerState, coroutineScope) {}
+        CalculatorButton()
+        TxtButton(currentText = viewModel.noteDescription.value.text)
+    }
+}
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable

@@ -34,8 +34,8 @@ foreground services, and only the permissions the features actually need.
 ## 👋 Features
 
 **Writing**
-- Markdown editing with an expanded 5-item-per-page formatting toolbar (headings `##`, hyperlinks `[](url)`, horizontal dividers `---`, quotes `>`, code blocks, checkboxes, bullet/ordered lists, bold / italic / underline / strikethrough, highlights, images, mic recording and timestamps)
-- Note attachments, audio recording & in-app playback with a draggable seek bar, 0.5×–2× speed control, per-recording renaming and save-to-folder export, plus audio auto-cleanup on deletion
+- Markdown editing with an expanded 5-item-per-page formatting toolbar (headings `##`, hyperlinks `[](url)`, horizontal dividers `---`, quotes `>`, code blocks, checkboxes, bullet/ordered lists, bold / italic / strikethrough / highlight / inline code, images, mic recording and timestamps). A style wraps the selected text, or lands at the caret when nothing is selected, and the toolbar docks under the note so it never covers what you are writing
+- Note attachments stored as ordinary Markdown links (`![](attachment://…)` for images, `[Recording name](attachment://…)` for audio), audio recording & in-app playback with a draggable seek bar, 0.5×–2× speed control, per-recording renaming and save-to-folder export, plus automatic cleanup of a note's attachments when it is deleted
 - Dynamic theming support across notes and flashcards, customizable font size and persistent custom local font import (.ttf/.otf), grid or column layout, minimalistic mode, adjustable corner radius
 - Diverse sorting dimensions (Creation Time, Last Modified Time, Title) with dedicated Ascending/Descending controls
 - Note details dialog with Last Modified Time tracking and Word/Character stats
@@ -50,7 +50,10 @@ foreground services, and only the permissions the features actually need.
 
 **Extras**
 - Adaptive Material 3 & HyperOS home-screen widgets (free-form resizing with 24dp rounded corners, vertically centred note text, quick add + note preview), built-in calendar, calculator, scratchpad and dynamic-themed flashcards
-- Save a note as an image, export to TXT/Markdown, and local backup / restore (with an optional password)
+- Share text or images into the app from any other app's share sheet; each share opens a new note, and shared images are copied in as attachments
+- Save a note as an image — a note taller than one bitmap is split into numbered pages instead of being cut off — export to TXT/Markdown, and local backup / restore (with an optional password)
+- Trash search, a note count beside every drawer item and tag, ten-second undo after a save, and a note you empty is moved to the trash instead of lingering as a blank row
+- Layout that scales from phone to tablet: the home grid adds columns with the available width and the editor caps its text column at a readable width
 
 ---
 
@@ -161,20 +164,19 @@ Play deadlines: new apps and updates must target API 36 since 2026-08-31 (extens
 
 ### How the build is verified
 
-Both variants were built on **2026-10-18** with `:app:assembleDebug` and `:app:assembleRelease` (offline,
-JDK 21.0.12.1, Gradle 8.9). The figures below are from the **latest** release build, incorporating the
-extended Markdown toolbars and dynamic theme flashcards:
+Both variants were built on **2026-10-20** with `:app:assembleDebug` and `:app:assembleRelease` (offline,
+JDK 21.0.12.1, Gradle 8.9). The figures below are from the **latest** release build, which carries the
+2.0 body format, the reworked editing screen and the phone-to-tablet layout:
 
 | Variant | Size | applicationId | Notes |
 | --- | --- | --- | --- |
-| Release | **3.68 MB** (3,862,886 bytes) | `com.ezpnix.writeon` | full R8 optimisation + obfuscation; ships two baseline profiles (API 28–30, 31+); signed with the project's upload key (`CN=Brandontake, OU=WriteOn, O=WriteOn, C=US`) |
+| Release | **3.75 MB** (3,930,191 bytes) | `com.ezpnix.writeon` | full R8 optimisation + obfuscation; ships two baseline profiles (API 28–30, 31+); signed with the project's upload key (`CN=Brandontake, OU=WriteOn, O=WriteOn, C=US`) |
 
-SHA-256 (Release): `CEC2B4631A55289D4591EC62CD2533F79828A327A65DC1F635859CBC6ADEF4D0`.
+SHA-256 (Release): `3BB0D5F7A3BBC48E317F2506A4287CA08FA3F2EDC22CABAB469BB76DF60AEE60`.
 
-Both report `versionCode 11` / `versionName 1.10`, `minSdk 26`, `targetSdk 36`, only the `zh` + default
-locales, and four ABIs.
-and caught and fixed six real compiler errors; it also produced `app/schemas/…/6.json` from the Room
-schema export.
+Both report `versionCode 12` / `versionName 2.0`, `minSdk 26`, `targetSdk 36`, the default + `ja` + `zh`
+locales, and four ABIs. The release run also wrote `app/schemas/com.ezpnix.writeon.data.local.database.NoteDatabase/8.json`,
+which is what makes the 7 -> 8 migration checkable offline instead of only on a device.
 
 Beyond the build: `aapt2 dump badging` on both APKs, `apksigner verify` on both, `aapt2 dump resources`
 to confirm the new strings actually landed in the packaged resources, and the R8 mapping files in
@@ -183,8 +185,7 @@ to confirm the new strings actually landed in the packaged resources, and the R8
 `lintVitalRelease` ran and reported **No issues found.** (report:
 `app/build/intermediates/lint_vital_intermediate_text_report/release/lintVitalReportRelease/lint-results-release.txt`).
 
-**Published:** [Release v1.10](https://github.com/brandontake/WriteOn/releases/tag/v1.10) carries exactly
-this release APK (SHA-256 verified and signed).
+**Release v2.0** (tag `v2.0`) carries exactly this release APK (SHA-256 verified and signed).
 
 ---
 

@@ -70,7 +70,7 @@ data class ToolbarItem(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun TextFormattingToolbar(viewModel: EditViewModel) {
+fun TextFormattingToolbar(viewModel: EditViewModel, modifier: Modifier = Modifier) {
     val colorArrow = MaterialTheme.colorScheme.outlineVariant
     val colorIcon = MaterialTheme.colorScheme.inverseSurface
     var currentIndex by remember { mutableIntStateOf(0) }
@@ -188,7 +188,7 @@ fun TextFormattingToolbar(viewModel: EditViewModel) {
     }
     Row(
         horizontalArrangement = Arrangement.SpaceBetween,
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
             .padding(horizontal = 6.dp)
     ) {
