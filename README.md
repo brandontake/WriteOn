@@ -173,7 +173,7 @@ JDK 21.0.12.1, Gradle 8.9). The figures below are from the **latest** release bu
 | --- | --- | --- | --- |
 | Release | **3.75 MB** (3,931,907 bytes) | `com.ezpnix.writeon` | full R8 optimisation + obfuscation; ships two baseline profiles (API 28–30, 31+); signed with the project's upload key (`CN=Brandontake, OU=WriteOn, O=WriteOn, C=US`) |
 
-SHA-256 (Release): `D7B39672AAE90025E95E6373F7E91B4E697B7E29A0254159D0FA2BF88F411EB9`.
+SHA-256 (Release): `C6AD7CC690934CABFACB98626D37A4D8C6AFDD3991E34E1C7ABD171B4E01C557`.
 
 Both report `versionCode 12` / `versionName 2.0`, `minSdk 26`, `targetSdk 36`, the default + `ja` + `zh`
 locales, and four ABIs. The release run also wrote `app/schemas/com.ezpnix.writeon.data.local.database.NoteDatabase/8.json`,

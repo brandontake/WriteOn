@@ -41,6 +41,8 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -112,7 +114,9 @@ fun CloudScreen(navController: NavController, settingsViewModel: SettingsViewMod
     var hasBackupPassphrase by remember { mutableStateOf(false) }
 
     // Where the last backup had to park this device's archive because the remote had changed, if it
-    // had to at all. The worker writes it in the background, so it is read when the screen opens.
+    // had to at all. The worker writes it in the background, so it is read when the screen opens and
+    // again whenever the app comes back to the foreground: the upload usually finishes while the
+    // user is in another app, and a one-shot read would miss the copy it just kept.
     var conflictBackupUrl by remember { mutableStateOf(WebDavBackupState.conflictUrl(context)) }
 
     LaunchedEffect(Unit) {
@@ -124,6 +128,10 @@ fun CloudScreen(navController: NavController, settingsViewModel: SettingsViewMod
             } ?: ""
             hasBackupPassphrase = !prefs[backupPassphraseKey].isNullOrBlank()
         }
+        conflictBackupUrl = WebDavBackupState.conflictUrl(context)
+    }
+
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
         conflictBackupUrl = WebDavBackupState.conflictUrl(context)
     }
 
