@@ -82,6 +82,7 @@ import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
@@ -645,9 +646,14 @@ fun PreviewScreen(
     focusManager.clearFocus()
     val coroutineScope = rememberCoroutineScope()
 
+    // Same readable line length as the editor: on a wide screen the preview keeps a capped column
+    // instead of stretching a short note across the whole tablet.
+    val screenWidthDp = LocalConfiguration.current.screenWidthDp
+    val horizontalPadding = if (screenWidthDp > 880) ((screenWidthDp - 840) / 2).dp else 16.dp
+
     Column(
         modifier = Modifier
-            .padding(16.dp)
+            .padding(horizontal = horizontalPadding, vertical = 16.dp)
             .fillMaxSize(),
         verticalArrangement = Arrangement.SpaceBetween
     ) {
