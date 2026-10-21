@@ -49,6 +49,7 @@ import androidx.compose.ui.graphics.layer.CompositingStrategy
 import androidx.compose.ui.graphics.layer.drawLayer
 import androidx.compose.ui.graphics.rememberGraphicsLayer
 import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.graphics.toPixelMap
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
@@ -58,6 +59,13 @@ import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
+import coil.imageLoader
+import coil.request.ImageRequest
+import com.ezpnix.writeon.core.attachment.AttachmentSyntax
+import com.ezpnix.writeon.presentation.components.markdown.AttachmentRegistry
+import com.ezpnix.writeon.presentation.components.markdown.IMAGE_DECODE_MAX_HEIGHT_PX
+import com.ezpnix.writeon.presentation.components.markdown.IMAGE_DECODE_MAX_WIDTH_PX
+import kotlin.math.abs
 import androidx.compose.ui.unit.sp
 import com.ezpnix.writeon.R
 import com.ezpnix.writeon.presentation.components.markdown.MarkdownText
@@ -79,6 +87,29 @@ private val EXPORT_PADDING = 20.dp
 
 /** Frames to let pass so the captured layer is guaranteed to have recorded its content. */
 private const val CAPTURE_FRAMES = 3
+
+/**
+ * How many times an empty first page is retried before the export gives up. A blank first page is
+ * never legitimate - it always carries the title - so it is worth waiting a few more frames for the
+ * capture layer and any decoding image to catch up.
+ */
+private const val CAPTURE_ATTEMPTS = 3
+
+/** Grid used to spot a blank capture without copying the whole page. */
+private const val BLANK_SAMPLE_COLUMNS = 9
+private const val BLANK_SAMPLE_ROWS = 15
+
+/**
+ * Samples that must differ from the background before a page counts as drawn.
+ *
+ * One is enough: an empty page is a uniform fill, so a single differing pixel already proves the
+ * layer recorded something. Keeping it at one avoids ever declaring a real page blank - a wrong
+ * "empty" verdict would be worse than the bug this guards against.
+ */
+private const val BLANK_MIN_VISIBLE_SAMPLES = 1
+
+/** Channel tolerance when comparing a sampled pixel with the container colour. */
+private const val COLOR_TOLERANCE = 0.02f
 
 /** Far enough off screen that the capture is never visible, while still being drawn. */
 private const val OFF_SCREEN_X = -200_000
@@ -121,6 +152,8 @@ fun NoteImageCapture(
     onMeasuredHeight: (Int) -> Unit = {},
     /** False for the measuring pass, which must not record a bitmap of the whole note. */
     captureEnabled: Boolean = true,
+    /** Called instead of [onCaptured] when the page came out empty after every retry. */
+    onBlank: () -> Unit = {},
     onCaptured: (ImageBitmap) -> Unit,
     onFailed: (Throwable) -> Unit = {},
     modifier: Modifier = Modifier
@@ -140,6 +173,10 @@ fun NoteImageCapture(
     LaunchedEffect(contentHeightPx) {
         if (contentHeightPx > 0) onMeasuredHeight(contentHeightPx)
     }
+    // Size of the window that is actually on screen. Recording before it has been laid out at the
+    // page height is what produced an empty first bitmap: the capture effect fired in the frame where
+    // the layout switched from the unbounded measuring shape to the paged one.
+    var windowHeightPx by remember { mutableIntStateOf(0) }
 
     Box(
         modifier = modifier
@@ -153,6 +190,7 @@ fun NoteImageCapture(
             .clipToBounds()
             .clip(RoundedCornerShape(cornerRadius))
             .background(containerColor)
+            .onSizeChanged { windowHeightPx = it.height }
             .drawWithContent {
                 // Capture the content into a layer whose pixels live in regular memory. The default
                 // strategy renders through a RenderNode, and reading a RenderNode back gives a
@@ -229,20 +267,107 @@ fun NoteImageCapture(
         }
     }
 
-    LaunchedEffect(noteTitle, noteBody, pageIndex, contentHeightPx, pageHeightPx, captureEnabled) {
+    LaunchedEffect(
+        noteTitle,
+        noteBody,
+        pageIndex,
+        contentHeightPx,
+        pageHeightPx,
+        windowHeightPx,
+        captureEnabled
+    ) {
         // Nothing to record until the column has a height, and a page starting past the end of the
         // note is empty; capturing it would write a blank page for a count computed from a stale
         // height.
         if (!captureEnabled) return@LaunchedEffect
         if (contentHeightPx == 0) return@LaunchedEffect
+        // Wait until the window itself has the page height. Rounding through dp can be off by a
+        // pixel, hence the tolerance.
+        if (pageHeightPx > 0 && abs(windowHeightPx - pageHeightPx) > 2) return@LaunchedEffect
         if (pageHeightPx > 0 && pageIndex * pageHeightPx >= contentHeightPx) return@LaunchedEffect
-        repeat(CAPTURE_FRAMES) { withFrameNanos { } }
-        // Previously the failure was swallowed here: getOrNull() returned null, onCaptured never
-        // ran, and the save host sat in its "saving" state forever with no message. Report it so the
-        // host can tell the user what actually went wrong.
-        runCatching { graphicsLayer.toImageBitmap() }
-            .onSuccess { onCaptured(it) }
-            .onFailure { onFailed(it) }
+
+        // The first page always carries the title, so an empty bitmap there is a failure rather than
+        // a legitimate sliver: retry a few frames first, then report it instead of saving a blank
+        // file. Later pages are accepted as they are.
+        val background = containerColor.toArgb()
+        var attempt = 0
+        while (true) {
+            repeat(CAPTURE_FRAMES) { withFrameNanos { } }
+            // Previously the failure was swallowed here: getOrNull() returned null, onCaptured never
+            // ran, and the save host sat in its "saving" state forever with no message. Report it so
+            // the host can tell the user what actually went wrong.
+            val captured = runCatching { graphicsLayer.toImageBitmap() }.getOrElse { error ->
+                onFailed(error)
+                return@LaunchedEffect
+            }
+            attempt++
+            val blank = pageIndex == 0 && captured.looksBlank(background)
+            if (!blank) {
+                onCaptured(captured)
+                return@LaunchedEffect
+            }
+            if (attempt >= CAPTURE_ATTEMPTS) {
+                onBlank()
+                return@LaunchedEffect
+            }
+        }
+    }
+}
+
+/**
+ * Whether a captured page holds nothing but the container colour.
+ *
+ * Sampling a grid of single pixels is deliberately cheap: a page can be 8 MP, and copying it just to
+ * count colours would double the memory an export needs. A hardware backed bitmap refuses pixel
+ * access; that is treated as "not blank" so an unreadable layer is still saved rather than dropped.
+ */
+private fun ImageBitmap.looksBlank(backgroundColor: Int): Boolean {
+    if (width <= 0 || height <= 0) return true
+    val backgroundRed = ((backgroundColor shr 16) and 0xFF) / 255f
+    val backgroundGreen = ((backgroundColor shr 8) and 0xFF) / 255f
+    val backgroundBlue = (backgroundColor and 0xFF) / 255f
+    return try {
+        var visible = 0
+        for (row in 0 until BLANK_SAMPLE_ROWS) {
+            val y = (((row + 0.5f) / BLANK_SAMPLE_ROWS) * height).toInt().coerceIn(0, height - 1)
+            for (column in 0 until BLANK_SAMPLE_COLUMNS) {
+                val x = (((column + 0.5f) / BLANK_SAMPLE_COLUMNS) * width).toInt()
+                    .coerceIn(0, width - 1)
+                val pixel = toPixelMap(x, y, 1, 1)[0, 0]
+                if (abs(pixel.red - backgroundRed) > COLOR_TOLERANCE ||
+                    abs(pixel.green - backgroundGreen) > COLOR_TOLERANCE ||
+                    abs(pixel.blue - backgroundBlue) > COLOR_TOLERANCE
+                ) {
+                    visible++
+                    if (visible >= BLANK_MIN_VISIBLE_SAMPLES) return false
+                }
+            }
+        }
+        true
+    } catch (_: Throwable) {
+        false
+    }
+}
+
+/**
+ * Decodes every image the note refers to before the capture starts.
+ *
+ * `AsyncImage` loads asynchronously, so a capture taken a few frames after composition recorded the
+ * nothing-yet state, which is how photos went missing from exported pages. The requests use the same
+ * size the renderer asks for, so by the time `MarkdownText` draws them they are a memory cache hit.
+ */
+private suspend fun preloadNoteImages(context: Context, body: String) {
+    val loader = context.imageLoader
+    AttachmentSyntax.idsIn(body).forEach { id ->
+        val path = AttachmentRegistry.path(id) ?: return@forEach
+        runCatching {
+            loader.execute(
+                ImageRequest.Builder(context)
+                    .data(path)
+                    .size(IMAGE_DECODE_MAX_WIDTH_PX, IMAGE_DECODE_MAX_HEIGHT_PX)
+                    .build()
+            )
+        }
     }
 }
 
@@ -276,6 +401,14 @@ fun NoteImageSaveHost(
     }
 
     var measured by remember { mutableStateOf(false) }
+    // Images are decoded before the first capture. The capture only waits a few frames, and an
+    // AsyncImage that is still decoding draws nothing, which is how a note whose first page holds a
+    // photo used to export with an empty frame where the photo should be.
+    var preloaded by remember(noteBody) { mutableStateOf(false) }
+    LaunchedEffect(noteBody) {
+        preloadNoteImages(context, noteBody)
+        preloaded = true
+    }
     var pageCount by remember { mutableIntStateOf(1) }
     var pageIndex by remember { mutableIntStateOf(0) }
     var finished by remember { mutableStateOf(false) }
@@ -331,7 +464,7 @@ fun NoteImageSaveHost(
             cornerRadius = cornerRadius,
             // The first pass only measures: it renders nothing, and its height decides whether the
             // note fits on one page or has to be cut into several.
-            captureEnabled = measured,
+            captureEnabled = measured && preloaded,
             pageHeightPx = if (pageCount > 1) pageHeightPx else 0,
             pageIndex = pageIndex,
             onMeasuredHeight = { height ->
@@ -379,6 +512,16 @@ fun NoteImageSaveHost(
                             }
                         }
                     }
+                }
+            },
+            onBlank = {
+                // An empty first page means the capture never caught up; say so instead of writing a
+                // blank picture. A later page can legitimately be an empty sliver, so if anything was
+                // already saved, report that as the outcome.
+                if (savedLocations.isEmpty()) {
+                    finish(context.getString(R.string.msg_image_export_blank))
+                } else {
+                    reportSuccess()
                 }
             },
             onFailed = { error ->

@@ -453,5 +453,6 @@
     <string name="cloud_conflict_desc">远端备份在这台设备上次上传后已被改动，因此你的备份没有覆盖它，而是以另一个文件名保留在旁边。需要合并时可以把这一份下载回来。</string>
     <string name="cloud_conflict_copy">复制链接</string>
     <string name="cloud_conflict_dismiss">知道了</string>
+    <string name="msg_image_export_blank">导出结果是空白，没有保存任何图片。请重试，或先把便签导出为文本。</string>
     <string name="msg_image_saved_pages">已保存 %1$d 张图片，第一张：%2$s</string>
 </resources>

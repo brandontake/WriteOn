@@ -492,5 +492,6 @@
     <string name="cloud_conflict_desc">The remote backup had changed since this device last uploaded, so this device\'s version was saved beside it instead of replacing it. Download it if you want to merge both.</string>
     <string name="cloud_conflict_copy">Copy link</string>
     <string name="cloud_conflict_dismiss">Got it</string>
+    <string name="msg_image_export_blank">The export came out empty, so nothing was saved. Try again, or export the note as text.</string>
     <string name="msg_image_saved_pages">Saved %1$d pages. First one: %2$s</string>
 </resources>

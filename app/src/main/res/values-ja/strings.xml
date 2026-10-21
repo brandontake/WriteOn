@@ -496,5 +496,6 @@
     <string name="cloud_conflict_desc">前回のアップロード後にリモートのバックアップが変更されたため、上書きせず別名で保存しました。統合する場合はダウンロードしてください。</string>
     <string name="cloud_conflict_copy">リンクをコピー</string>
     <string name="cloud_conflict_dismiss">OK</string>
+    <string name="msg_image_export_blank">書き出した画像が空だったため、保存していません。もう一度お試しいただくか、テキストで書き出してください。</string>
     <string name="msg_image_saved_pages">%1$d ページを保存しました。1 枚目: %2$s</string>
 </resources>

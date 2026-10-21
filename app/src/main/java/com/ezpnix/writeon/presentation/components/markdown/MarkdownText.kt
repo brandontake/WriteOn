@@ -1,4 +1,4 @@
-package com.ezpnix.writeon.presentation.components.markdown
+﻿package com.ezpnix.writeon.presentation.components.markdown
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.isSystemInDarkTheme
@@ -51,8 +51,8 @@ import com.ezpnix.writeon.presentation.theme.LocalNoteFontFamily
  * without changing what the reader sees. 1440 covers a high-density screen at that height with room
  * to spare, and still keeps a 12-megapixel photo from allocating its full size.
  */
-private const val IMAGE_DECODE_MAX_WIDTH_PX = 1440
-private const val IMAGE_DECODE_MAX_HEIGHT_PX = 1440
+internal const val IMAGE_DECODE_MAX_WIDTH_PX = 1440
+internal const val IMAGE_DECODE_MAX_HEIGHT_PX = 1440
 
 @Composable
 fun MarkdownCodeBlock(
@@ -356,7 +356,7 @@ fun RenderMarkdownElement(
             }
             is ListItem -> {
                 Text(
-                    text = buildString("• ${element.text}", weight),
+                    text = buildString("鈥?${element.text}", weight),
                     fontSize = fontSize,
                     fontWeight = weight,
                     fontFamily = customFont,
