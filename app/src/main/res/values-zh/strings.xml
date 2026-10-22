@@ -395,7 +395,9 @@
     <string name="tag_add">添加标签</string>
     <string name="tag_added_count">标签“%1$s”已添加到 %2$d 条笔记</string>
     <string name="tag_already_exists">标签“%1$s”已存在于所有选中的笔记中</string>
-    <string name="tag_delete">删除标签</string>
+    <string name="tag_delete_confirm_title">删除标签？</string>
+<string name="tag_delete_confirm_message">将从所有笔记中移除标签“%1$s”，笔记本身不会被删除。</string>
+<string name="tag_delete">删除标签</string>
     <string name="tag_deleted">已删除标签“%1$s”</string>
     <string name="tag_name_empty">标签名称不能为空</string>
     <string name="tag_name_hint">标签名称</string>

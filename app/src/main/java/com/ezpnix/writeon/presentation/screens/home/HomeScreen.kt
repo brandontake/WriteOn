@@ -165,6 +165,9 @@ fun HomeView(
     val context = LocalContext.current
     var showDimBackground by rememberSaveable { mutableStateOf(false) }
     var fabExpanded by rememberSaveable { mutableStateOf(false) }
+    // Tag deletion from the drawer asks for confirmation first: the dialog outlives recomposition
+    // (and a rotation) so a configuration change cannot drop the user's pending choice.
+    var tagPendingDelete by rememberSaveable { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     // While notes are selected, the system back gesture should only exit the
@@ -337,7 +340,7 @@ fun HomeView(
                                     scope.launch { drawerState.close() }
                                 },
                                 onDeleteClick = {
-                                    viewModel.deleteTag(tag)
+                                    tagPendingDelete = tag
                                 }
                             )
                         }
@@ -446,6 +449,41 @@ fun HomeView(
                     onExpandedChange = { fabExpanded = it },
                     onDimToggle = { showDimBackground = it },
                     settingsModel = settingsModel
+                )
+            }
+            // Material 3 confirmation for the drawer's tag delete button. The action strips the tag
+            // from every note, so the dialog names the tag, keeps the destructive choice in the
+            // error colour, and uses the standard MD3 dialog motion and container styling.
+            tagPendingDelete?.let { tag ->
+                AlertDialog(
+                    onDismissRequest = { tagPendingDelete = null },
+                    icon = {
+                        Icon(
+                            imageVector = Icons.Default.Delete,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.error
+                        )
+                    },
+                    title = { Text(stringResource(R.string.tag_delete_confirm_title)) },
+                    text = { Text(stringResource(R.string.tag_delete_confirm_message, tag)) },
+                    confirmButton = {
+                        TextButton(
+                            onClick = {
+                                viewModel.deleteTag(tag)
+                                tagPendingDelete = null
+                            }
+                        ) {
+                            Text(
+                                text = stringResource(R.string.delete),
+                                color = MaterialTheme.colorScheme.error
+                            )
+                        }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = { tagPendingDelete = null }) {
+                            Text(stringResource(R.string.action_cancel))
+                        }
+                    }
                 )
             }
             if (viewModel.showTagDialog.value) {

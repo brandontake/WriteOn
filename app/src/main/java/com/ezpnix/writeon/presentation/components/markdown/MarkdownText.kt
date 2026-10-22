@@ -150,7 +150,8 @@ fun ImageAttachmentBlock(
     target: String,
     radius: Int,
     modifier: Modifier = Modifier,
-    onClick: (() -> Unit)? = null
+    onClick: (() -> Unit)? = null,
+    onImageLoaded: () -> Unit = {}
 ) {
     val imageContext = LocalContext.current
     val resolvedPath = AttachmentRegistry.resolve(target)
@@ -193,8 +194,10 @@ fun ImageAttachmentBlock(
             ),
         contentScale = ContentScale.Fit,
         alignment = Alignment.Center,
+        onSuccess = { onImageLoaded() },
         onError = {
             android.util.Log.e("MarkdownText", "Failed to load image: $resolvedPath")
+            onImageLoaded()
         }
     )
 }
@@ -293,7 +296,8 @@ fun MarkdownText(
     onContentChange: (String) -> Unit = {},
     maxLines: Int = Int.MAX_VALUE,
     overflow: TextOverflow = TextOverflow.Clip,
-    useLazyColumn: Boolean = true
+    useLazyColumn: Boolean = true,
+    onImageLoaded: (String) -> Unit = {}
 ) {
     if (!isEnabled) {
         StaticMarkdownText(
@@ -331,7 +335,8 @@ fun MarkdownText(
         onContentChange = onContentChange,
         maxLines = maxLines,
         overflow = overflow,
-        useLazyColumn = useLazyColumn
+        useLazyColumn = useLazyColumn,
+        onImageLoaded = onImageLoaded
     )
 }
 
@@ -370,7 +375,8 @@ fun MarkdownContent(
     onContentChange: (String) -> Unit,
     maxLines: Int,
     overflow: TextOverflow,
-    useLazyColumn: Boolean
+    useLazyColumn: Boolean,
+    onImageLoaded: (String) -> Unit = {}
 ) {
     if (isPreview) {
         Column(modifier = modifier) {
@@ -386,7 +392,8 @@ fun MarkdownContent(
                     isPreview = true,
                     onContentChange = onContentChange,
                     maxLines = maxLines,
-                    overflow = overflow
+                    overflow = overflow,
+                    onImageLoaded = onImageLoaded
                 )
                 Spacer(modifier = Modifier.height(spacing))
             }
@@ -408,7 +415,8 @@ fun MarkdownContent(
                             isPreview = isPreview,
                             onContentChange = onContentChange,
                             maxLines = maxLines,
-                            overflow = overflow
+                            overflow = overflow,
+                            onImageLoaded = onImageLoaded
                         )
                     }
                 }
@@ -431,7 +439,8 @@ fun MarkdownContent(
                             isPreview = isPreview,
                             onContentChange = onContentChange,
                             maxLines = maxLines,
-                            overflow = overflow
+                            overflow = overflow,
+                            onImageLoaded = onImageLoaded
                         )
                     }
                 }
@@ -452,7 +461,8 @@ fun RenderMarkdownElement(
     isPreview: Boolean,
     onContentChange: (String) -> Unit,
     maxLines: Int,
-    overflow: TextOverflow
+    overflow: TextOverflow,
+    onImageLoaded: (String) -> Unit = {}
 ) {
     val element = content[index]
     val customFont = LocalNoteFontFamily.current
@@ -514,7 +524,13 @@ fun RenderMarkdownElement(
             is ImageInsertion -> {
                 ImageAttachmentBlock(
                     target = element.photoUri,
-                    radius = radius
+                    radius = radius,
+                    onImageLoaded = {
+                        onImageLoaded(
+                            com.ezpnix.writeon.core.attachment.AttachmentSyntax.idOf(element.photoUri)
+                                ?: element.photoUri
+                        )
+                    }
                 )
             }
             is AudioInsertion -> {

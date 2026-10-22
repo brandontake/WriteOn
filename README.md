@@ -109,7 +109,7 @@ The project produces **APK files only** — there is no App Bundle task in the r
 Release signing is optional for local builds: create `keystore.properties` in the repository root with
 `storeFile`, `storePassword`, `keyAlias` and `keyPassword`, and the release build type picks it up.
 Without that file the release APK is signed with the debug keystore so that local builds stay
-installable — that fallback is still there, but **v2.0.1 is signed with the project's upload key**
+installable — that fallback is still there, but **v2.0.2 is signed with the project's upload key**
 (`CN=Brandontake, OU=WriteOn, O=WriteOn`).
 
 Two things to get right when you create that file:
@@ -169,16 +169,17 @@ Play deadlines: new apps and updates must target API 36 since 2026-08-31 (extens
 
 Both variants were built on **2026-10-22** with `:app:assembleDebug` and `:app:assembleRelease` (offline,
 JDK 21.0.12.1, Gradle 8.9). The figures below are from the **latest** release build, which carries the
-2.0.1 live attachment preview (experimental, off by default), the keyboard/caret and preview-selection
-fixes, split preview, and the image-export page fix on top of the 2.0 body format:
+2.0.2 drawer tag-delete confirmation and the paged-export first-page fix on top of the 2.0.1 live
+attachment preview (experimental, off by default), the keyboard/caret and preview-selection fixes,
+split preview, and the 2.0 body format:
 
 | Variant | Size | applicationId | Notes |
 | --- | --- | --- | --- |
-| Release | **3.78 MB** (3,966,935 bytes) | `com.ezpnix.writeon` | full R8 optimisation + obfuscation; ships two baseline profiles (API 28–30, 31+); signed with the project's upload key (`CN=Brandontake, OU=WriteOn, O=WriteOn, C=US`) |
+| Release | **3.78 MB** (3,967,487 bytes) | `com.ezpnix.writeon` | full R8 optimisation + obfuscation; ships two baseline profiles (API 28–30, 31+); signed with the project's upload key (`CN=Brandontake, OU=WriteOn, O=WriteOn, C=US`) |
 
-SHA-256 (Release): `B0861F4D7C98F92A183B47763B238251205BC0540E95362DFF11CC46CB49007B`.
+SHA-256 (Release): `E3977E2EC2674BBCCCCDDD72644D79F3E6314F60FDB8C234B956C49D7F03B1E4`.
 
-Both report `versionCode 13` / `versionName 2.0.1`, `minSdk 26`, `targetSdk 36`, the default + `ja` + `zh`
+Both report `versionCode 14` / `versionName 2.0.2`, `minSdk 26`, `targetSdk 36`, the default + `ja` + `zh`
 locales, and four ABIs. The release run also wrote `app/schemas/com.ezpnix.writeon.data.local.database.NoteDatabase/8.json`,
 which is what makes the 7 -> 8 migration checkable offline instead of only on a device.
 
@@ -189,7 +190,7 @@ to confirm the new strings actually landed in the packaged resources, and the R8
 `lintVitalRelease` ran and reported **No issues found.** (report:
 `app/build/intermediates/lint_vital_intermediate_text_report/release/lintVitalReportRelease/lint-results-release.txt`).
 
-**Release v2.0.1** (tag `v2.0.1`) carries exactly this release APK (SHA-256 verified and signed).
+**Release v2.0.2** (tag `v2.0.2`) carries exactly this release APK (SHA-256 verified and signed).
 
 ---
 
@@ -209,6 +210,7 @@ See GitHub Releases for historical changes and release assets.
 
 ## 📢 Announcements
 
+- *2026-10-22:* v2.0.2 is out — tag deletion from the drawer asks for confirmation, and paged image exports no longer lose the first page's content.
 - *2026-10-22:* v2.0.1 is out — experimental live attachment blocks in the editor, a keyboard/caret fix, and a preview selection crash fix.
 - *2025-09-04:* Sophomore year is right around the corner for me, decided to give out an update before it starts.
 - *2025-06-01:* Thankfully, I had time to continue the v1.6 update, had fun with this version, thank you!

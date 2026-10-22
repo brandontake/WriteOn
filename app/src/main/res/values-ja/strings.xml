@@ -438,7 +438,9 @@
     <string name="tag_add">タグを追加</string>
     <string name="tag_added_count">タグ「%1$s」を %2$d 件のノートに追加しました</string>
     <string name="tag_already_exists">タグ「%1$s」は選択したすべてのノートに既にあります</string>
-    <string name="tag_delete">タグを削除</string>
+    <string name="tag_delete_confirm_title">タグを削除しますか？</string>
+<string name="tag_delete_confirm_message">タグ「%1$s」をすべてのノートから外します。ノート自体は削除されません。</string>
+<string name="tag_delete">タグを削除</string>
     <string name="tag_deleted">タグ「%1$s」を削除しました</string>
     <string name="tag_name_empty">タグ名を空にすることはできません</string>
     <string name="tag_name_hint">タグ名</string>

@@ -62,6 +62,7 @@ import androidx.compose.ui.unit.dp
 import coil.imageLoader
 import coil.request.ImageRequest
 import com.ezpnix.writeon.core.attachment.AttachmentSyntax
+import com.ezpnix.writeon.domain.model.Attachment
 import com.ezpnix.writeon.presentation.components.markdown.AttachmentRegistry
 import com.ezpnix.writeon.presentation.components.markdown.IMAGE_DECODE_MAX_HEIGHT_PX
 import com.ezpnix.writeon.presentation.components.markdown.IMAGE_DECODE_MAX_WIDTH_PX
@@ -71,6 +72,7 @@ import com.ezpnix.writeon.R
 import com.ezpnix.writeon.presentation.components.markdown.MarkdownText
 import com.ezpnix.writeon.presentation.theme.LocalNoteFontFamily
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -126,6 +128,14 @@ private const val OFF_SCREEN_X = -200_000
 private const val MAX_EXPORT_PIXELS = 8_000_000L
 
 /**
+ * How long the export waits for the note's images to report loaded before it starts capturing.
+ * Waiting keeps the first page from being recorded while a photo is still decoding; the timeout
+ * keeps a broken attachment from stalling the export forever, at the cost of one slightly early
+ * frame.
+ */
+private const val IMAGE_LOAD_TIMEOUT_MS = 5_000L
+
+/**
  * Renders a note exactly the way the preview shows it and records it into an [ImageBitmap].
  *
  * The content is laid out at its natural height (the caller positions it off screen), so the
@@ -155,6 +165,7 @@ fun NoteImageCapture(
     /** Called instead of [onCaptured] when the page came out empty after every retry. */
     onBlank: () -> Unit = {},
     onCaptured: (ImageBitmap) -> Unit,
+    onImageLoaded: (String) -> Unit = {},
     onFailed: (Throwable) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
@@ -234,7 +245,8 @@ fun NoteImageCapture(
                 containerColor = containerColor,
                 modifier = Modifier.fillMaxWidth(),
                 fontSize = fontSize.sp,
-                useLazyColumn = false
+                useLazyColumn = false,
+                onImageLoaded = onImageLoaded
             )
 
             Spacer(Modifier.height(16.dp))
@@ -409,9 +421,34 @@ fun NoteImageSaveHost(
         preloadNoteImages(context, noteBody)
         preloaded = true
     }
+    // Decoding into Coil's cache is not the same as the note's AsyncImage having drawn: the first
+    // page used to be recorded while a photo was still one frame away, and the blank guard never
+    // noticed because the title and footer were already there. Wait until every image in this note
+    // reports loaded (or the timeout expires) before the capture is allowed to start.
+    val imageIds = remember(noteBody, isMarkdownEnabled) {
+        if (!isMarkdownEnabled) {
+            emptySet()
+        } else {
+            AttachmentSyntax.idsIn(noteBody).filterTo(mutableSetOf()) { id ->
+                val attachment = AttachmentRegistry.attachment(id)
+                attachment?.type == Attachment.TYPE_IMAGE && attachment.path.isNotBlank()
+            }
+        }
+    }
+    var pendingImageIds by remember(imageIds) { mutableStateOf(imageIds) }
+    var imagesReady by remember(imageIds) { mutableStateOf(imageIds.isEmpty()) }
+    var imagesTimedOut by remember(imageIds) { mutableStateOf(false) }
+    LaunchedEffect(imageIds) {
+        if (!imagesReady) {
+            delay(IMAGE_LOAD_TIMEOUT_MS)
+            imagesTimedOut = true
+        }
+    }
     var pageCount by remember { mutableIntStateOf(1) }
     var pageIndex by remember { mutableIntStateOf(0) }
     var finished by remember { mutableStateOf(false) }
+    // Set on the first capture; after that the page count and the offsets must not move anymore.
+    var pagesLocked by remember(noteBody) { mutableStateOf(false) }
     val savedLocations = remember { mutableStateListOf<String>() }
 
     // Report the outcome exactly once and always leave the saving state, whether the capture
@@ -464,18 +501,24 @@ fun NoteImageSaveHost(
             cornerRadius = cornerRadius,
             // The first pass only measures: it renders nothing, and its height decides whether the
             // note fits on one page or has to be cut into several.
-            captureEnabled = measured && preloaded,
+            captureEnabled = measured && preloaded && (imagesReady || imagesTimedOut),
             pageHeightPx = if (pageCount > 1) pageHeightPx else 0,
             pageIndex = pageIndex,
             onMeasuredHeight = { height ->
-                if (!measured) {
+                if (!pagesLocked) {
+                    // Recompute for every measurement until the first capture: the height grows as
+                    // images finish decoding, and a page count locked in before that would leave
+                    // the tail of the note on no page at all.
                     val pages = ((height + pageHeightPx - 1) / pageHeightPx).coerceAtLeast(1)
-                    pageCount = pages
+                    if (pages != pageCount) pageCount = pages
                     measured = true
                 }
             },
             onCaptured = { bitmap ->
                 if (!finished) {
+                    // From the first capture on, every page must use the offsets the first page was
+                    // laid out with, so the page count is no longer allowed to change.
+                    pagesLocked = true
                     val base = NoteImageSaver.fileBaseName(noteTitle)
                     val fileName = if (pageCount > 1) {
                         base + "_" + (pageIndex + 1) + "of" + pageCount
@@ -512,6 +555,12 @@ fun NoteImageSaveHost(
                             }
                         }
                     }
+                }
+            },
+            onImageLoaded = { id ->
+                if (!imagesReady) {
+                    pendingImageIds = pendingImageIds - id
+                    if (pendingImageIds.isEmpty()) imagesReady = true
                 }
             },
             onBlank = {

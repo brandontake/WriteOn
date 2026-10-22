@@ -106,6 +106,12 @@
 - [x] **Split preview on a tablet in landscape.** The note and its rendering sit side by side instead of on separate pages; the right half runs the same pass the preview page and the image export use, sampled with a short debounce so a keystroke does not reparse a long note. Geometry decides the layout and the Markdown preference still gates it: with Markdown off the screen keeps one column, because a half-width copy of plain text would just be the same text twice.
 - [x] **Release verification.** 13/13 `NoteSegmentsTest` tests pass; `assembleDebug`, `assembleRelease` and `lintVitalRelease` pass offline. Release APK: 3,966,935 bytes, SHA-256 `B0861F4D7C98F92A183B47763B238251205BC0540E95362DFF11CC46CB49007B`, signed with the upload key (`CN=Brandontake, OU=WriteOn, O=WriteOn, C=US`).
 
+## Done in v2.0.2
+- [x] **Bump version to v2.0.2** (`versionCode 14`, `versionName "2.0.2"`).
+- [x] **Paged image export keeps the first page.** The capture used to start as soon as Coil had decoded the images, which is not the same as the note's `AsyncImage` having drawn: a photo could still be one frame away, and the blank-first-page guard passed because the title and footer were already on the page. `MarkdownText` now reports every image as settled through an optional `onImageLoaded` callback (`ImageAttachmentBlock` fires it on success and on error); the exporter waits for all of them before the first capture, with a five-second timeout so a broken attachment cannot stall the export. The page count is also recomputed from every measurement until the first capture, so a count locked in while the photos were still decoding can no longer leave content off the pages.
+- [x] **Deleting a tag asks for confirmation (drawer).** The × on a tag row used to delete immediately. It now opens a Material 3 `AlertDialog` — delete icon in the error colour, the destructive action in the error colour, the tag named in the body — and the pending tag is kept in `rememberSaveable`, so a rotation does not drop it. New strings `tag_delete_confirm_title` / `tag_delete_confirm_message` are localised in `values`, `values-zh` and `values-ja`.
+- [x] **Release verification.** 13/13 `NoteSegmentsTest` tests pass; `assembleDebug`, `assembleRelease` and `lintVitalRelease` pass offline.
+
 ## Open / Future
 - [ ] Unit tests for the vault KDF, the atomic restore and the DAO transaction
 - [ ] detekt / ktlint / CI gating

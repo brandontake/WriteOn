@@ -32,8 +32,8 @@ android {
         minSdk = 26
         // Google Play requires new submissions to target API 36 from 2026-08-31.
         targetSdk = 36
-        versionCode = 13
-        versionName = "2.0.1"
+        versionCode = 14
+        versionName = "2.0.2"
         // The segmented editor (attachment lines rendered as blocks) is still experimental. The
         // user-facing switch in Settings > Behaviour must be on as well; this flag is the
         // compile-time kill switch that lets a build ship without the code path at all.

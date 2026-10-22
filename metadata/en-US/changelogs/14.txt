@@ -1,0 +1,3 @@
+v2.0.2 - Tag delete confirmation and image export fix:
+- Deleting a tag from the drawer now asks for confirmation first.
+- Multi-page image export waits for every image to load, so the first page keeps its content.

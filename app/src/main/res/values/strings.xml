@@ -434,7 +434,9 @@
     <string name="tag_add">Add Tag</string>
     <string name="tag_added_count">Tag \'%1$s\' added to %2$d note(s)</string>
     <string name="tag_already_exists">Tag \'%1$s\' already exists on all selected notes</string>
-    <string name="tag_delete">Delete Tag</string>
+    <string name="tag_delete_confirm_title">Delete tag?</string>
+<string name="tag_delete_confirm_message">The tag \'%1$s\' will be removed from all notes. The notes themselves are not deleted.</string>
+<string name="tag_delete">Delete Tag</string>
     <string name="tag_deleted">Tag \'%1$s\' deleted</string>
     <string name="tag_name_empty">Tag name cannot be empty</string>
     <string name="tag_name_hint">Tag name</string>
