@@ -240,6 +240,21 @@ class HomeViewModel @Inject constructor(
         }
     }
 
+    /** Puts one trashed attachment back into its note and refreshes the id -> path registry. */
+    fun restoreAttachment(id: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            noteUseCase.restoreAttachment(id)
+            launch(Dispatchers.Main) { noteUseCase.refreshAttachments() }
+        }
+    }
+
+    /** Empties one attachment from the recycle bin: row and file both go. */
+    fun permanentlyDeleteAttachment(id: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            noteUseCase.permanentlyDeleteAttachment(id)
+        }
+    }
+
     fun restoreSelectedNotes() {
         updateSelectedNotes { it.copy(trashed = false) }
     }

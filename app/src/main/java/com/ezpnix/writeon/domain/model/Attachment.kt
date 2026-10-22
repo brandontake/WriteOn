@@ -46,7 +46,18 @@ data class Attachment(
     val caption: String = "",
 
     @ColumnInfo(name = "created_at")
-    val createdAt: Long = 0L
+    val createdAt: Long = 0L,
+
+    /**
+     * Non-null while the attachment sits in the recycle bin.
+     *
+     * Deleting an attachment from the library, from a rendering or from the segmented editor only
+     * removes its line from the body and stamps this field; the row and the file are kept so the
+     * trash can restore or permanently delete them. The editor's save-time prune skips trashed rows
+     * for the same reason.
+     */
+    @ColumnInfo(name = "trashed_at")
+    val trashedAt: Long? = null
 ) {
 
     companion object {

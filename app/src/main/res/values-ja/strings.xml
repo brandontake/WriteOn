@@ -494,8 +494,18 @@
     <string name="attachment_edit_source">Markdown を編集</string>
     <string name="attachment_edit_source_title">添付の Markdown</string>
     <string name="attachment_delete">添付を削除</string>
-    <string name="attachment_delete_message">この添付を削除しますか？ノートを保存するとファイルも削除されます。</string>
+    <string name="attachment_delete_message">この添付を削除しますか？ノートから取り除かれ、ゴミ箱に移動します。</string>
     <string name="attachment_open_image">画像を開く</string>
+    <!-- 2.0.2 ライブラリと添付のゴミ箱 -->
+    <string name="nav_library">ライブラリ</string>
+    <string name="library_images">画像</string>
+    <string name="library_audio">音声</string>
+    <string name="library_empty_images">画像はまだありません</string>
+    <string name="library_empty_audio">録音はまだありません</string>
+    <string name="attachment_saved_to_folder">添付を保存しました</string>
+    <string name="attachment_save_failed">添付を保存できませんでした</string>
+    <string name="trash_tab_notes">ノート</string>
+    <string name="attachment_delete_forever_message">この添付を完全に削除しますか？ファイルは端末から削除されます。</string>
     <string name="search_no_results">検索に一致するノートはありません</string>
     <string name="fmt_inline_code">インラインコード</string>
     <string name="fmt_table">表</string>

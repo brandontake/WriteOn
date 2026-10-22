@@ -1,13 +1,19 @@
 ﻿package com.ezpnix.writeon.presentation.components.markdown
 
+import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
@@ -17,13 +23,22 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Checkbox
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -40,10 +55,16 @@ import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import com.ezpnix.writeon.R
 import com.ezpnix.writeon.presentation.theme.appCornerShape
 import com.ezpnix.writeon.presentation.theme.CornerFraction
 import com.ezpnix.writeon.presentation.theme.LocalNoteFontFamily
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.io.File
 
 /**
  * Upper bound on the bitmap coil is allowed to decode for a note image.
@@ -144,17 +165,53 @@ fun MissingAttachment(radius: Int, modifier: Modifier = Modifier) {
  * One picture attachment, shared by the reader, the split preview, the image exporter and the new
  * segmented editor. [target] is the element target (`attachment://<id>`), not a file path; the
  * registry resolves it, and an id whose row has not loaded yet becomes the standard placeholder.
+ *
+ * [onDelete] is only wired up by screens that can edit the note. When it is present a long press
+ * opens the two operations a rendered picture needs - save a copy to a folder the user picks, or
+ * move the attachment to the recycle bin - and a tap opens the picture full-screen. Without it the
+ * block stays a plain image, which is what the note cards want.
  */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun ImageAttachmentBlock(
     target: String,
     radius: Int,
     modifier: Modifier = Modifier,
     onClick: (() -> Unit)? = null,
-    onImageLoaded: () -> Unit = {}
+    onImageLoaded: () -> Unit = {},
+    onDelete: (() -> Unit)? = null
 ) {
     val imageContext = LocalContext.current
     val resolvedPath = AttachmentRegistry.resolve(target)
+    val scope = rememberCoroutineScope()
+    var showMenu by remember(target) { mutableStateOf(false) }
+    var showFullScreen by remember(target) { mutableStateOf(false) }
+    var showDeleteConfirm by remember(target) { mutableStateOf(false) }
+
+    // The name the system picker starts from. A missing path cannot be saved, so the fallback only
+    // keeps the launcher's proposal valid.
+    val exportName = remember(resolvedPath) {
+        File(resolvedPath ?: "image.jpg").name.ifBlank { "image.jpg" }
+    }
+    val saveLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("image/*")
+    ) { uri ->
+        if (uri == null || resolvedPath == null) return@rememberLauncherForActivityResult
+        scope.launch {
+            val saved = withContext(Dispatchers.IO) {
+                runCatching {
+                    imageContext.contentResolver.openOutputStream(uri)?.use { output ->
+                        File(resolvedPath).inputStream().use { input -> input.copyTo(output) }
+                    } ?: error("No output stream for $uri")
+                }.isSuccess
+            }
+            Toast.makeText(
+                imageContext,
+                if (saved) R.string.attachment_saved_to_folder else R.string.attachment_save_failed,
+                Toast.LENGTH_SHORT
+            ).show()
+        }
+    }
 
     if (resolvedPath == null) {
         MissingAttachment(
@@ -178,28 +235,114 @@ fun ImageAttachmentBlock(
             .build()
     }
 
-    AsyncImage(
-        model = imageRequest,
-        contentDescription = stringResource(R.string.cd_note_image),
-        modifier = modifier
-            .fillMaxWidth()
-            .heightIn(max = 400.dp)
-            .clip(RoundedCornerShape(radius.dp))
-            .then(
-                if (onClick != null) {
-                    Modifier.clickable(onClick = onClick)
-                } else {
-                    Modifier
+    Box(modifier = modifier.fillMaxWidth()) {
+        AsyncImage(
+            model = imageRequest,
+            contentDescription = stringResource(R.string.cd_note_image),
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(max = 400.dp)
+                .clip(RoundedCornerShape(radius.dp))
+                .then(
+                    when {
+                        onDelete != null -> Modifier.combinedClickable(
+                            onClick = { onClick?.invoke() ?: run { showFullScreen = true } },
+                            onLongClick = { showMenu = true }
+                        )
+                        onClick != null -> Modifier.clickable(onClick = onClick)
+                        else -> Modifier
+                    }
+                ),
+            contentScale = ContentScale.Fit,
+            alignment = Alignment.Center,
+            onSuccess = { onImageLoaded() },
+            onError = {
+                android.util.Log.e("MarkdownText", "Failed to load image: $resolvedPath")
+                onImageLoaded()
+            }
+        )
+
+        DropdownMenu(
+            expanded = showMenu,
+            onDismissRequest = { showMenu = false }
+        ) {
+            DropdownMenuItem(
+                text = { Text(stringResource(R.string.audio_save_to_folder)) },
+                onClick = {
+                    showMenu = false
+                    saveLauncher.launch(exportName)
                 }
-            ),
-        contentScale = ContentScale.Fit,
-        alignment = Alignment.Center,
-        onSuccess = { onImageLoaded() },
-        onError = {
-            android.util.Log.e("MarkdownText", "Failed to load image: $resolvedPath")
-            onImageLoaded()
+            )
+            DropdownMenuItem(
+                text = {
+                    Text(
+                        stringResource(R.string.delete),
+                        color = MaterialTheme.colorScheme.error
+                    )
+                },
+                onClick = {
+                    showMenu = false
+                    showDeleteConfirm = true
+                }
+            )
         }
-    )
+    }
+
+    if (showFullScreen) {
+        Dialog(
+            onDismissRequest = { showFullScreen = false },
+            properties = DialogProperties(usePlatformDefaultWidth = false)
+        ) {
+            Surface(
+                modifier = Modifier.fillMaxSize(),
+                color = Color.Black
+            ) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(Color.Black)
+                        .combinedClickable(
+                            onClick = { showFullScreen = false },
+                            onLongClick = {}
+                        ),
+                    contentAlignment = Alignment.Center
+                ) {
+                    AsyncImage(
+                        model = resolvedPath,
+                        contentDescription = stringResource(R.string.attachment_open_image),
+                        modifier = Modifier.fillMaxSize(),
+                        contentScale = ContentScale.Fit
+                    )
+                }
+            }
+        }
+    }
+
+    if (showDeleteConfirm) {
+        AlertDialog(
+            onDismissRequest = { showDeleteConfirm = false },
+            title = { Text(stringResource(R.string.attachment_delete)) },
+            text = { Text(stringResource(R.string.attachment_delete_message)) },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        showDeleteConfirm = false
+                        onDelete?.invoke()
+                    },
+                    colors = ButtonDefaults.textButtonColors(
+                        contentColor = MaterialTheme.colorScheme.error
+                    )
+                ) {
+                    Text(stringResource(R.string.delete))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDeleteConfirm = false }) {
+                    Text(stringResource(R.string.cancel))
+                }
+            }
+        )
+    }
 }
 
 /** One recording attachment, with the same caption fallback the note list uses. */
@@ -209,7 +352,8 @@ fun AudioAttachmentBlock(
     radius: Int,
     modifier: Modifier = Modifier,
     caption: String? = null,
-    onRename: ((String) -> Unit)? = null
+    onRename: ((String) -> Unit)? = null,
+    onDelete: (() -> Unit)? = null
 ) {
     val resolvedPath = AttachmentRegistry.resolve(target)
     if (resolvedPath == null) {
@@ -228,7 +372,8 @@ fun AudioAttachmentBlock(
             .fillMaxWidth()
             .padding(vertical = 4.dp),
         caption = caption,
-        onRename = onRename
+        onRename = onRename,
+        onDelete = onDelete
     )
 }
 
@@ -297,7 +442,13 @@ fun MarkdownText(
     maxLines: Int = Int.MAX_VALUE,
     overflow: TextOverflow = TextOverflow.Clip,
     useLazyColumn: Boolean = true,
-    onImageLoaded: (String) -> Unit = {}
+    onImageLoaded: (String) -> Unit = {},
+    /**
+     * When set, rendered pictures and recordings offer a delete action that calls this with the
+     * `attachment://` id. Screens that can edit the note pass their handler; note cards leave it
+     * null so a feed of notes can never delete anything.
+     */
+    onAttachmentDelete: ((String) -> Unit)? = null
 ) {
     if (!isEnabled) {
         StaticMarkdownText(
@@ -336,7 +487,8 @@ fun MarkdownText(
         maxLines = maxLines,
         overflow = overflow,
         useLazyColumn = useLazyColumn,
-        onImageLoaded = onImageLoaded
+        onImageLoaded = onImageLoaded,
+        onAttachmentDelete = onAttachmentDelete
     )
 }
 
@@ -376,7 +528,8 @@ fun MarkdownContent(
     maxLines: Int,
     overflow: TextOverflow,
     useLazyColumn: Boolean,
-    onImageLoaded: (String) -> Unit = {}
+    onImageLoaded: (String) -> Unit = {},
+    onAttachmentDelete: ((String) -> Unit)? = null
 ) {
     if (isPreview) {
         Column(modifier = modifier) {
@@ -393,7 +546,8 @@ fun MarkdownContent(
                     onContentChange = onContentChange,
                     maxLines = maxLines,
                     overflow = overflow,
-                    onImageLoaded = onImageLoaded
+                    onImageLoaded = onImageLoaded,
+                    onAttachmentDelete = onAttachmentDelete
                 )
                 Spacer(modifier = Modifier.height(spacing))
             }
@@ -416,7 +570,8 @@ fun MarkdownContent(
                             onContentChange = onContentChange,
                             maxLines = maxLines,
                             overflow = overflow,
-                            onImageLoaded = onImageLoaded
+                            onImageLoaded = onImageLoaded,
+                            onAttachmentDelete = onAttachmentDelete
                         )
                     }
                 }
@@ -440,7 +595,8 @@ fun MarkdownContent(
                             onContentChange = onContentChange,
                             maxLines = maxLines,
                             overflow = overflow,
-                            onImageLoaded = onImageLoaded
+                            onImageLoaded = onImageLoaded,
+                            onAttachmentDelete = onAttachmentDelete
                         )
                     }
                 }
@@ -462,7 +618,8 @@ fun RenderMarkdownElement(
     onContentChange: (String) -> Unit,
     maxLines: Int,
     overflow: TextOverflow,
-    onImageLoaded: (String) -> Unit = {}
+    onImageLoaded: (String) -> Unit = {},
+    onAttachmentDelete: ((String) -> Unit)? = null
 ) {
     val element = content[index]
     val customFont = LocalNoteFontFamily.current
@@ -530,6 +687,13 @@ fun RenderMarkdownElement(
                             com.ezpnix.writeon.core.attachment.AttachmentSyntax.idOf(element.photoUri)
                                 ?: element.photoUri
                         )
+                    },
+                    onDelete = onAttachmentDelete?.let { delete ->
+                        {
+                            com.ezpnix.writeon.core.attachment.AttachmentSyntax
+                                .idOf(element.photoUri)
+                                ?.let(delete)
+                        }
                     }
                 )
             }
@@ -541,7 +705,14 @@ fun RenderMarkdownElement(
                 AudioAttachmentBlock(
                     target = element.audioUri,
                     radius = radius,
-                    caption = caption
+                    caption = caption,
+                    onDelete = onAttachmentDelete?.let { delete ->
+                        {
+                            com.ezpnix.writeon.core.attachment.AttachmentSyntax
+                                .idOf(element.audioUri)
+                                ?.let(delete)
+                        }
+                    }
                 )
             }
             is CodeBlock -> {

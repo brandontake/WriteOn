@@ -1,3 +1,7 @@
-v2.0.2 - Tag delete confirmation and image export fix:
+v2.0.2 - Tag delete confirmation, image export fix, library and attachment recycle bin:
 - Deleting a tag from the drawer now asks for confirmation first.
 - Multi-page image export waits for every image to load, so the first page keeps its content.
+- A new Library drawer section lists every image and recording across the notes.
+- Deleting an attachment moves it to the trash, which now has Notes, Images and Audio tabs.
+- Rendered images and audio cards offer delete and save actions.
+- Live attachment blocks are enabled by default.

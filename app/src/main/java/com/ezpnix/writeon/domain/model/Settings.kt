@@ -9,7 +9,9 @@ data class Settings(
     var minimalisticMode: Boolean = false,
     var extremeAmoledMode: Boolean = false,
     var isMarkdownEnabled: Boolean = true,
-    var liveAttachmentPreview: Boolean = false,
+    // On by default since 2.0.2: the experimental gate is now the BuildConfig kill switch only.
+    // Users who explicitly turned it off keep their stored value.
+    var liveAttachmentPreview: Boolean = true,
     var screenProtection: Boolean = false,
     var encryptBackup: Boolean = false,
     var sortDescending: Boolean = true,

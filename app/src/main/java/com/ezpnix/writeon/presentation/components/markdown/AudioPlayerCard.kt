@@ -21,6 +21,7 @@ import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilledIconButton
@@ -88,7 +89,12 @@ fun AudioPlayerCard(
      * rewrite `[caption](attachment://id)` in the body; readers pass null and the label stays in
      * [AudioLabelStore] only.
      */
-    onRename: ((String) -> Unit)? = null
+    onRename: ((String) -> Unit)? = null,
+    /**
+     * Called when the user confirms the delete entry in the card menu. Screens that can edit the
+     * note move the attachment to the recycle bin; readers pass null and no entry is offered.
+     */
+    onDelete: (() -> Unit)? = null
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -113,6 +119,7 @@ fun AudioPlayerCard(
     var dragValue by remember { mutableFloatStateOf(0f) }
     var showMenu by remember { mutableStateOf(false) }
     var showRename by remember { mutableStateOf(false) }
+    var showDeleteConfirm by remember { mutableStateOf(false) }
 
     // The name suggested to the system file picker follows the user's own label, so a renamed memo
     // is saved under the name they chose rather than the opaque recording timestamp. An unlabelled
@@ -291,6 +298,20 @@ fun AudioPlayerCard(
                                     showRename = true
                                 }
                             )
+                            if (onDelete != null) {
+                                DropdownMenuItem(
+                                    text = {
+                                        Text(
+                                            stringResource(R.string.delete),
+                                            color = MaterialTheme.colorScheme.error
+                                        )
+                                    },
+                                    onClick = {
+                                        showMenu = false
+                                        showDeleteConfirm = true
+                                    }
+                                )
+                            }
                         }
                     }
                 }
@@ -324,6 +345,32 @@ fun AudioPlayerCard(
             },
             dismissButton = {
                 TextButton(onClick = { showRename = false }) {
+                    Text(stringResource(R.string.cancel))
+                }
+            }
+        )
+    }
+
+    if (showDeleteConfirm) {
+        AlertDialog(
+            onDismissRequest = { showDeleteConfirm = false },
+            title = { Text(stringResource(R.string.attachment_delete)) },
+            text = { Text(stringResource(R.string.attachment_delete_message)) },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        showDeleteConfirm = false
+                        onDelete?.invoke()
+                    },
+                    colors = ButtonDefaults.textButtonColors(
+                        contentColor = MaterialTheme.colorScheme.error
+                    )
+                ) {
+                    Text(stringResource(R.string.delete))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDeleteConfirm = false }) {
                     Text(stringResource(R.string.cancel))
                 }
             }

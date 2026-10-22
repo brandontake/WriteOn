@@ -597,8 +597,9 @@ fun EditScreen(
         // where the options button used to be.
         QuickActionRow(viewModel, coroutineScope, pagerState)
 
-        // The roadmap's two gates: the code has to be compiled in and the user has to opt in. Off
-        // by default, so upgrading never changes the editor under anyone's fingers.
+        // The roadmap's two gates: the code has to be compiled in and the user has to opt in. The
+        // preference now defaults to on (2.0.2): attachments render as blocks unless the user
+        // turned the toggle off, and the BuildConfig flag stays as the kill switch.
         val useSegmentedEditor = BuildConfig.FEATURE_ATTACHMENT_LIVE_RENDER &&
             settings.liveAttachmentPreview
         val bodyModifier = Modifier
@@ -762,6 +763,7 @@ private fun LivePreviewPane(viewModel: EditViewModel, settingsViewModel: Setting
                             .verticalScroll(previewScrollState),
                         fontSize = settings.fontSize.sp,
                         onContentChange = { viewModel.updateNoteDescription(TextFieldValue(text = it)) },
+                        onAttachmentDelete = { viewModel.trashAttachmentById(it) },
                         useLazyColumn = false
                     )
                 }
@@ -832,6 +834,7 @@ fun PreviewScreen(
                             .verticalScroll(previewScrollState),
                         fontSize = settingsViewModel.settings.value.fontSize.sp,
                         onContentChange = { viewModel.updateNoteDescription(TextFieldValue(text = it)) },
+                        onAttachmentDelete = { viewModel.trashAttachmentById(it) },
                         useLazyColumn = false
                     )
                 }

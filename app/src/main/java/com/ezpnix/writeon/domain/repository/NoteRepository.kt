@@ -21,4 +21,11 @@ interface NoteRepository {
     suspend fun upsertAttachments(attachments: List<Attachment>)
     suspend fun assignAttachmentsToNote(noteId: Int, ids: List<String>)
     suspend fun deleteAttachments(ids: List<String>)
+    suspend fun getAttachmentById(id: String): Attachment?
+
+    // 2.0.2 recycle bin: a trashed attachment keeps its row and file until it is restored or
+    // permanently deleted.
+    fun observeAttachmentsByType(type: String): Flow<List<Attachment>>
+    fun observeTrashedAttachments(): Flow<List<Attachment>>
+    suspend fun setAttachmentTrashed(ids: List<String>, trashedAt: Long?)
 }

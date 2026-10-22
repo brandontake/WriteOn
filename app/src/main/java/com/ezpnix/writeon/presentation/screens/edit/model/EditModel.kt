@@ -529,6 +529,29 @@ class EditViewModel @Inject constructor(
         val caret = start.coerceIn(0, updated.length)
         commitDescription(updated, TextRange(caret))
         requestFocusInText(caret)
+        // The row itself leaves through the recycle bin, so the operation stays reversible until
+        // the trash is emptied. Rows that never reached the database (picked in this session) have
+        // nothing to trash and are still pruned as abandoned by [persistAttachments].
+        viewModelScope.launch { noteUseCase.trashAttachment(segment.attachmentId, rewriteBody = false) }
+    }
+
+    /**
+     * Deletes an attachment from a rendered preview: the line leaves the body at once and the row
+     * moves to the recycle bin. [commitDescription] keeps the change undoable; if the note is saved
+     * while the line is back, [persistAttachments] un-trashes the row it finds referenced again.
+     */
+    fun trashAttachmentById(id: String) {
+        val value = _noteDescription.value
+        val text = value.text
+        if (id !in AttachmentSyntax.idsIn(text)) return
+        val updated = AttachmentSyntax.removeId(text, id)
+        val caret = value.selection.min.coerceIn(0, updated.length)
+        commitDescription(updated, TextRange(caret))
+        // Vault bodies are only rewritten by the save path, so the row is pruned there instead of
+        // kept as a recycle-bin entry the manager could never show.
+        if (!_isEncrypted.value) {
+            viewModelScope.launch { noteUseCase.trashAttachment(id, rewriteBody = false) }
+        }
     }
 
     /** Replaces an attachment's line with edited Markdown (one line; newlines are flattened). */
@@ -874,10 +897,12 @@ class EditViewModel @Inject constructor(
     /**
      * Writes the attachment rows the saved body references and removes the ones it stopped using.
      *
-     * Three groups exist after an edit:
+     * Four groups exist after an edit:
      *  - pending rows (picked or recorded in this session) that survived in the text -> upsert;
      *  - rows the note already owned but the text no longer references -> delete row + file;
-     *  - pending rows the user deleted again before the note was ever saved -> delete file.
+     *  - pending rows the user deleted again before the note was ever saved -> delete file;
+     *  - trashed rows (deleted to the recycle bin since 2.0.2) -> untouched, and any of them the
+     *    text references again (an undo before this save) are un-trashed first.
      *
      * A brand-new note has no id yet, so its rows are written with note-id 0 and claimed by
      * [claimAttachments] once Room has assigned the real id.
@@ -893,7 +918,16 @@ class EditViewModel @Inject constructor(
         }
 
         if (savedNoteId != 0) {
-            val removed = noteUseCase.attachmentsForNote(savedNoteId).filter { it.id !in idsInBody }
+            val ownedRows = noteUseCase.attachmentsForNote(savedNoteId)
+            // Undoing a delete before the next save puts the line back, and the row that moved to
+            // the recycle bin has to come back with it.
+            val revived = ownedRows.filter { it.id in idsInBody && it.trashedAt != null }
+            if (revived.isNotEmpty()) {
+                noteUseCase.setAttachmentsTrashed(revived.map { it.id }, null)
+            }
+            // Trashed rows are deliberately not part of the prune: the file and the row have to
+            // survive for the recycle bin, which is what this whole column exists for.
+            val removed = ownedRows.filter { it.id !in idsInBody && it.trashedAt == null }
             if (removed.isNotEmpty()) {
                 AttachmentFiles.deleteAll(appContext, removed)
                 noteUseCase.deleteAttachments(removed.map { it.id })

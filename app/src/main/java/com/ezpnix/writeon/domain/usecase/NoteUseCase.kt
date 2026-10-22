@@ -6,6 +6,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.glance.appwidget.updateAll
 import com.ezpnix.writeon.core.attachment.AttachmentFiles
+import com.ezpnix.writeon.core.attachment.AttachmentSyntax
 import com.ezpnix.writeon.data.repository.NoteRepositoryImpl
 import com.ezpnix.writeon.domain.model.Attachment
 import com.ezpnix.writeon.domain.model.Note
@@ -20,8 +21,10 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.firstOrNull
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import javax.inject.Inject
@@ -346,4 +349,101 @@ class NoteUseCase @Inject constructor(
     }
 
     fun getTrashedNotesFlow(): Flow<List<Note>> = noteRepository.getTrashedNotes()
+
+    // ---------------------------------------------------------------------------------------------
+    // 2.0.2 attachment management: the library lists every live attachment of a type across the
+    // notes, and deleting one moves the row to the recycle bin instead of removing it on the spot.
+    // ---------------------------------------------------------------------------------------------
+
+    /** Live attachments of [type], newest first, minus the notes the manager must keep private. */
+    fun getLibraryAttachmentsFlow(type: String): Flow<List<Attachment>> =
+        combine(
+            noteRepository.observeAttachmentsByType(type),
+            libraryNoteIds(includeTrashedNotes = false)
+        ) { attachments, noteIds -> attachments.filter { it.noteId in noteIds } }
+
+    /** Attachments in the recycle bin, most recently deleted first. */
+    fun getTrashedAttachmentsFlow(): Flow<List<Attachment>> =
+        combine(
+            noteRepository.observeTrashedAttachments(),
+            libraryNoteIds(includeTrashedNotes = true)
+        ) { attachments, noteIds -> attachments.filter { it.noteId in noteIds } }
+
+    /**
+     * Ids of the notes whose attachments a management screen may show.
+     *
+     * Vault rows are sealed with the user's password, so this process can neither rewrite their
+     * bodies nor safely show their files; they stay out of the library and its trash. The library
+     * additionally skips notes that already sit in the recycle bin - their attachments travel with
+     * the note.
+     */
+    private fun libraryNoteIds(includeTrashedNotes: Boolean): Flow<Set<Int>> =
+        noteRepository.getAllNotes().map { notes ->
+            notes.filter { !it.encrypted && (includeTrashedNotes || !it.trashed) }
+                .map { it.id }
+                .toSet()
+        }
+
+    /**
+     * Moves one attachment to the recycle bin.
+     *
+     * The row is stamped and, for a plain note, its line leaves the body in the same pass, so the
+     * note keeps rendering cleanly even if it is never opened again. The editor passes
+     * `rewriteBody = false` because it already edited its own copy of the text and saves that body
+     * itself. A vault note is left untouched: only the editor's save path may rewrite its body.
+     */
+    suspend fun trashAttachment(id: String, rewriteBody: Boolean = true) {
+        withContext(Dispatchers.IO) {
+            val attachment = noteRepository.getAttachmentById(id) ?: return@withContext
+            if (attachment.trashedAt != null) return@withContext
+            val note = noteRepository.getNoteById(attachment.noteId).firstOrNull()
+            if (note?.encrypted == true) return@withContext
+            noteRepository.setAttachmentTrashed(listOf(id), System.currentTimeMillis())
+            if (rewriteBody && note != null) {
+                val updated = AttachmentSyntax.removeId(note.description, id)
+                if (updated != note.description) {
+                    noteRepository.updateNote(note.copy(description = updated))
+                }
+            }
+        }
+    }
+
+    /** Used by the editor's save path to revive a row whose line came back through undo. */
+    suspend fun setAttachmentsTrashed(ids: List<String>, trashedAt: Long?) {
+        if (ids.isEmpty()) return
+        withContext(Dispatchers.IO) { noteRepository.setAttachmentTrashed(ids, trashedAt) }
+    }
+
+    /**
+     * Puts a trashed attachment back into its note.
+     *
+     * The line is appended at the end of the body: the position it originally occupied was never
+     * stored, and appending is the one placement that can never split an existing line.
+     */
+    suspend fun restoreAttachment(id: String) {
+        withContext(Dispatchers.IO) {
+            val attachment = noteRepository.getAttachmentById(id) ?: return@withContext
+            if (attachment.trashedAt == null) return@withContext
+            val note = noteRepository.getNoteById(attachment.noteId).firstOrNull()
+            if (note?.encrypted == true) return@withContext
+            noteRepository.setAttachmentTrashed(listOf(id), null)
+            if (note == null) return@withContext
+            if (id in AttachmentSyntax.idsIn(note.description)) return@withContext
+            val line = AttachmentSyntax.lineFor(attachment.id, attachment.type, attachment.caption)
+            val separator = if (note.description.isEmpty() || note.description.endsWith("\n")) "" else "\n"
+            noteRepository.updateNote(
+                note.copy(description = note.description + separator + line)
+            )
+        }
+    }
+
+    /** Empties one attachment from the recycle bin: row, file and registry entry all go. */
+    suspend fun permanentlyDeleteAttachment(id: String) {
+        withContext(Dispatchers.IO) {
+            val attachment = noteRepository.getAttachmentById(id) ?: return@withContext
+            AttachmentFiles.delete(context, attachment)
+            noteRepository.deleteAttachments(listOf(id))
+            AttachmentRegistry.remove(listOf(id))
+        }
+    }
 }

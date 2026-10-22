@@ -66,6 +66,8 @@ import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.NoteAlt
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.rounded.GraphicEq
+import androidx.compose.material.icons.rounded.Image
 import androidx.compose.material.icons.rounded.PushPin
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -124,6 +126,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavController
 import com.ezpnix.writeon.R
+import com.ezpnix.writeon.domain.model.Attachment
 import com.ezpnix.writeon.domain.model.Note
 import com.ezpnix.writeon.presentation.components.CalculatorUI
 import com.ezpnix.writeon.presentation.components.CloseButton
@@ -344,6 +347,33 @@ fun HomeView(
                                 }
                             )
                         }
+                    }
+                    HorizontalDivider(
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                        thickness = DividerDefaults.Thickness,
+                        color = MaterialTheme.colorScheme.outlineVariant
+                    )
+
+                    // The library is a top-level section like the homepage and the tags: two rows,
+                    // one per attachment kind, both leading to the same management screen.
+                    DrawerSectionHeader(context.getString(R.string.nav_library))
+                    DrawerItem(
+                        text = context.getString(R.string.library_images),
+                        icon = Icons.Rounded.Image,
+                        selected = false,
+                        cornerRadius = drawerCornerRadius
+                    ) {
+                        navController.navigate(NavRoutes.Library.createRoute(Attachment.TYPE_IMAGE))
+                        scope.launch { drawerState.close() }
+                    }
+                    DrawerItem(
+                        text = context.getString(R.string.library_audio),
+                        icon = Icons.Rounded.GraphicEq,
+                        selected = false,
+                        cornerRadius = drawerCornerRadius
+                    ) {
+                        navController.navigate(NavRoutes.Library.createRoute(Attachment.TYPE_AUDIO))
+                        scope.launch { drawerState.close() }
                     }
                     Spacer(modifier = Modifier.height(24.dp))
                 }

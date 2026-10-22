@@ -4,8 +4,10 @@ import androidx.compose.runtime.Composable
 import androidx.navigation.NavHostController
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.rememberNavController
+import com.ezpnix.writeon.domain.model.Attachment
 import com.ezpnix.writeon.presentation.screens.edit.EditNoteView
 import com.ezpnix.writeon.presentation.screens.home.HomeView
+import com.ezpnix.writeon.presentation.screens.library.LibraryScreen
 import com.ezpnix.writeon.presentation.screens.settings.model.SettingsViewModel
 import com.ezpnix.writeon.presentation.screens.terms.TermsScreen
 
@@ -49,6 +51,15 @@ fun AppNavHost(
                     }
                 }
             }
+        }
+
+        animatedComposable(NavRoutes.Library.route) { backStackEntry ->
+            LibraryScreen(
+                settingsViewModel = settingsViewModel,
+                navController = navController,
+                type = backStackEntry.arguments?.getString(NavRoutes.Library.ARG_TYPE)
+                    ?: Attachment.TYPE_IMAGE
+            )
         }
 
         settingScreens.forEach { (route, screen) ->

@@ -451,8 +451,18 @@
     <string name="attachment_edit_source">编辑 Markdown</string>
     <string name="attachment_edit_source_title">附件 Markdown</string>
     <string name="attachment_delete">删除附件</string>
-    <string name="attachment_delete_message">删除这个附件？保存便签时会一并删除文件。</string>
+    <string name="attachment_delete_message">删除这个附件？它会从便签中移除，并进入回收站。</string>
     <string name="attachment_open_image">查看图片</string>
+    <!-- 2.0.2 资料库与附件回收站 -->
+    <string name="nav_library">资料库</string>
+    <string name="library_images">图片</string>
+    <string name="library_audio">音频</string>
+    <string name="library_empty_images">还没有图片</string>
+    <string name="library_empty_audio">还没有音频</string>
+    <string name="attachment_saved_to_folder">附件已保存</string>
+    <string name="attachment_save_failed">无法保存附件</string>
+    <string name="trash_tab_notes">便签</string>
+    <string name="attachment_delete_forever_message">永久删除这个附件？文件会从设备中移除。</string>
     <string name="search_no_results">没有匹配的便签</string>
     <string name="fmt_inline_code">行内代码</string>
     <string name="fmt_table">表格</string>

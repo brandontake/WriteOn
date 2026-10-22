@@ -1,5 +1,6 @@
 package com.ezpnix.writeon.core.attachment
 
+import com.ezpnix.writeon.domain.model.Attachment
 import java.util.UUID
 
 /**
@@ -42,6 +43,29 @@ object AttachmentSyntax {
     /** Every attachment id the body still references; used to prune stale rows. */
     fun idsIn(body: String): Set<String> =
         ID_IN_BODY.findAll(body).map { it.groupValues[1] }.toSet()
+
+    /**
+     * The body with every reference to [id] removed.
+     *
+     * A line that is nothing but the attachment (the shape every insert produces) disappears whole,
+     * so deleting from the library or a rendering leaves no blank half-line behind. A reference
+     * that was pasted into the middle of a sentence loses just the Markdown token.
+     */
+    fun removeId(body: String, id: String): String {
+        if (id !in idsIn(body)) return body
+        val kept = body.split('\n').filterNot { line ->
+            val trimmed = line.trim()
+            IMAGE_LINE.matchEntire(trimmed)?.groupValues?.getOrNull(1) == id ||
+                AUDIO_LINE.matchEntire(trimmed)?.groupValues?.getOrNull(2) == id
+        }
+        return kept.joinToString("\n")
+            .replace(Regex("""!\[[^\]]*]\($SCHEME${Regex.escape(id)}\)"""), "")
+            .replace(Regex("""\[[^\]]*]\($SCHEME${Regex.escape(id)}\)"""), "")
+    }
+
+    /** The body line that points at an attachment again; used when restoring from the trash. */
+    fun lineFor(id: String, type: String, caption: String): String =
+        if (type == Attachment.TYPE_AUDIO) audio(id, caption) else image(id)
 
     /**
      * Brackets and newlines would break the `[caption](...)` shape, so a caption is flattened

@@ -60,4 +60,17 @@ class NoteRepositoryImpl @Inject constructor(
     override suspend fun deleteAttachments(ids: List<String>) {
         if (ids.isNotEmpty()) provider.attachmentDao().deleteByIds(ids)
     }
+
+    override suspend fun getAttachmentById(id: String): Attachment? =
+        provider.attachmentDao().getById(id)
+
+    override fun observeAttachmentsByType(type: String): Flow<List<Attachment>> =
+        provider.attachmentDao().observeActiveByType(type)
+
+    override fun observeTrashedAttachments(): Flow<List<Attachment>> =
+        provider.attachmentDao().observeTrashed()
+
+    override suspend fun setAttachmentTrashed(ids: List<String>, trashedAt: Long?) {
+        if (ids.isNotEmpty()) provider.attachmentDao().setTrashedAt(ids, trashedAt)
+    }
 }

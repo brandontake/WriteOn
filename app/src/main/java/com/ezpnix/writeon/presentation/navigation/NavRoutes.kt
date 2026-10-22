@@ -38,6 +38,10 @@ sealed class NavRoutes(val route: String) {
     data object Android: NavRoutes("android")
     data object Cloud: NavRoutes("cloud")
     data object Trash: NavRoutes("trash")
+    data object Library : NavRoutes("library/{type}") {
+        const val ARG_TYPE = "type"
+        fun createRoute(type: String) = "library/$type"
+    }
 }
 
 val settingScreens = mapOf<String, @Composable (settingsViewModel: SettingsViewModel, navController : NavController) -> Unit>(

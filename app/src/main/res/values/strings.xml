@@ -490,8 +490,18 @@
     <string name="attachment_edit_source">Edit Markdown</string>
     <string name="attachment_edit_source_title">Attachment Markdown</string>
     <string name="attachment_delete">Delete attachment</string>
-    <string name="attachment_delete_message">Delete this attachment? The file is removed when the note is saved.</string>
+    <string name="attachment_delete_message">Delete this attachment? It is removed from the note and moved to the recycle bin.</string>
     <string name="attachment_open_image">Open image</string>
+    <!-- 2.0.2 Library and attachment recycle bin -->
+    <string name="nav_library">Library</string>
+    <string name="library_images">Images</string>
+    <string name="library_audio">Audio</string>
+    <string name="library_empty_images">No images yet</string>
+    <string name="library_empty_audio">No recordings yet</string>
+    <string name="attachment_saved_to_folder">Attachment saved</string>
+    <string name="attachment_save_failed">Could not save the attachment</string>
+    <string name="trash_tab_notes">Notes</string>
+    <string name="attachment_delete_forever_message">Permanently delete this attachment? The file is removed from the device.</string>
     <string name="search_no_results">No notes match your search</string>
     <string name="fmt_inline_code">Inline code</string>
     <string name="fmt_table">Table</string>
