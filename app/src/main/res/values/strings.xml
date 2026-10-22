@@ -482,6 +482,14 @@
     <string name="return_to_home">Return to Home</string>
     <string name="stay_here">Stay Here</string>
     <string name="attachment_missing">Attached file unavailable</string>
+    <string name="live_attachment_preview">Live attachment preview (experimental)</string>
+    <string name="live_attachment_preview_description">Show pictures and recordings as blocks while editing. The note is still stored as plain Markdown.</string>
+    <string name="attachment_actions">Attachment actions</string>
+    <string name="attachment_edit_source">Edit Markdown</string>
+    <string name="attachment_edit_source_title">Attachment Markdown</string>
+    <string name="attachment_delete">Delete attachment</string>
+    <string name="attachment_delete_message">Delete this attachment? The file is removed when the note is saved.</string>
+    <string name="attachment_open_image">Open image</string>
     <string name="search_no_results">No notes match your search</string>
     <string name="fmt_inline_code">Inline code</string>
     <string name="fmt_table">Table</string>

@@ -82,7 +82,13 @@ fun AudioPlayerCard(
      * Caption stored with the 2.0 attachment row. Shown when the user has not renamed the memo,
      * so a migrated recording reads "20261018-2245" instead of the generic "Voice Memo".
      */
-    caption: String? = null
+    caption: String? = null,
+    /**
+     * Called when the user renames the memo from the card menu. The segmented editor uses it to
+     * rewrite `[caption](attachment://id)` in the body; readers pass null and the label stays in
+     * [AudioLabelStore] only.
+     */
+    onRename: ((String) -> Unit)? = null
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -309,6 +315,7 @@ fun AudioPlayerCard(
                 TextButton(
                     onClick = {
                         AudioLabelStore.rename(context, audioUri, draft)
+                        onRename?.invoke(draft)
                         showRename = false
                     }
                 ) {

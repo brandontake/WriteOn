@@ -37,6 +37,8 @@ foreground services, and only the permissions the features actually need.
 - Markdown editing with an expanded 5-item-per-page formatting toolbar (headings `##`, hyperlinks `[](url)`, horizontal dividers `---`, quotes `>`, code blocks, checkboxes, bullet/ordered lists, bold / italic / underline / strikethrough / highlight / inline code, tables, indentation, escaping of Markdown characters, images, mic recording and timestamps). A style wraps the selected text, or lands at the caret when nothing is selected, and the toolbar docks under the note so it never covers what you are writing
 - Underline `_text_`, real tables (`| a | b |`, with a header row), four-space indentation and `\`-escaping for the characters that would otherwise become markup; `##` renders a small heading while `#` and `###` render larger, so one note can carry a title above its sections
 - Note attachments stored as ordinary Markdown links (`![](attachment://…)` for images, `[Recording name](attachment://…)` for audio), audio recording & in-app playback with a draggable seek bar, 0.5×–2× speed control, per-recording renaming and save-to-folder export, plus automatic cleanup of a note's attachments when it is deleted
+- **Live attachment preview (experimental, opt-in).** A line that is only an image or recording link can render as the same block the reader draws while the body stays plain Markdown; edit the source line, delete a block, rename a recording, or open an image full screen. Turn it on in Settings → Behaviour; the classic editor stays one switch away
+- Keyboard-aware editor scrolling keeps the caret visible when the keyboard opens, and preview text can be selected and scrolled without losing its selection handles
 - Dynamic theming support across notes and flashcards, customizable font size and persistent custom local font import (.ttf/.otf), grid or column layout, minimalistic mode, adjustable corner radius
 - Diverse sorting dimensions (Creation Time, Last Modified Time, Title) with dedicated Ascending/Descending controls
 - Note details dialog with Last Modified Time tracking and Word/Character stats
@@ -107,7 +109,7 @@ The project produces **APK files only** — there is no App Bundle task in the r
 Release signing is optional for local builds: create `keystore.properties` in the repository root with
 `storeFile`, `storePassword`, `keyAlias` and `keyPassword`, and the release build type picks it up.
 Without that file the release APK is signed with the debug keystore so that local builds stay
-installable — that fallback is still there, but **v1.10 was signed with a real key**
+installable — that fallback is still there, but **v2.0.1 is signed with the project's upload key**
 (`CN=Brandontake, OU=WriteOn, O=WriteOn`).
 
 Two things to get right when you create that file:
@@ -165,17 +167,18 @@ Play deadlines: new apps and updates must target API 36 since 2026-08-31 (extens
 
 ### How the build is verified
 
-Both variants were built on **2026-10-21** with `:app:assembleDebug` and `:app:assembleRelease` (offline,
+Both variants were built on **2026-10-22** with `:app:assembleDebug` and `:app:assembleRelease` (offline,
 JDK 21.0.12.1, Gradle 8.9). The figures below are from the **latest** release build, which carries the
-2.0 body format, the reworked editing screen, tables/underline/escaping and the phone-to-tablet layout:
+2.0.1 live attachment preview (experimental, off by default), the keyboard/caret and preview-selection
+fixes, split preview, and the image-export page fix on top of the 2.0 body format:
 
 | Variant | Size | applicationId | Notes |
 | --- | --- | --- | --- |
-| Release | **3.77 MB** (3,948,743 bytes) | `com.ezpnix.writeon` | full R8 optimisation + obfuscation; ships two baseline profiles (API 28–30, 31+); signed with the project's upload key (`CN=Brandontake, OU=WriteOn, O=WriteOn, C=US`) |
+| Release | **3.78 MB** (3,966,935 bytes) | `com.ezpnix.writeon` | full R8 optimisation + obfuscation; ships two baseline profiles (API 28–30, 31+); signed with the project's upload key (`CN=Brandontake, OU=WriteOn, O=WriteOn, C=US`) |
 
-SHA-256 (Release): `86AEF2BF5F9077856FB3F929A1980F8A118515D1C4B1F9FB7D07B944FF0B859E`.
+SHA-256 (Release): `B0861F4D7C98F92A183B47763B238251205BC0540E95362DFF11CC46CB49007B`.
 
-Both report `versionCode 12` / `versionName 2.0`, `minSdk 26`, `targetSdk 36`, the default + `ja` + `zh`
+Both report `versionCode 13` / `versionName 2.0.1`, `minSdk 26`, `targetSdk 36`, the default + `ja` + `zh`
 locales, and four ABIs. The release run also wrote `app/schemas/com.ezpnix.writeon.data.local.database.NoteDatabase/8.json`,
 which is what makes the 7 -> 8 migration checkable offline instead of only on a device.
 
@@ -186,7 +189,7 @@ to confirm the new strings actually landed in the packaged resources, and the R8
 `lintVitalRelease` ran and reported **No issues found.** (report:
 `app/build/intermediates/lint_vital_intermediate_text_report/release/lintVitalReportRelease/lint-results-release.txt`).
 
-**Release v2.0** (tag `v2.0`) carries exactly this release APK (SHA-256 verified and signed).
+**Release v2.0.1** (tag `v2.0.1`) carries exactly this release APK (SHA-256 verified and signed).
 
 ---
 
@@ -206,6 +209,7 @@ See GitHub Releases for historical changes and release assets.
 
 ## 📢 Announcements
 
+- *2026-10-22:* v2.0.1 is out — experimental live attachment blocks in the editor, a keyboard/caret fix, and a preview selection crash fix.
 - *2025-09-04:* Sophomore year is right around the corner for me, decided to give out an update before it starts.
 - *2025-06-01:* Thankfully, I had time to continue the v1.6 update, had fun with this version, thank you!
 - *2025-05-09:* Small v1.5 update released — life’s hectic with job & university, so expect some slow updates.

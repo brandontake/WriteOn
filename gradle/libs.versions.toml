@@ -31,8 +31,11 @@ androidxSecurity = "1.1.0"
 okhttp = "4.12.0"
 processPhoenix = "2.1.2"
 tink = "1.8.0"
+junit = "4.13.2"
 
 [libraries]
+junit = { module = "junit:junit", version.ref = "junit" }
+
 # Room
 androidx-datastore-preferences = { module = "androidx.datastore:datastore-preferences", version.ref = "datastorePreferences" }
 androidx-glance = { module = "androidx.glance:glance", version.ref = "glance" }

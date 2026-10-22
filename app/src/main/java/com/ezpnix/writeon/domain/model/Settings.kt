@@ -9,6 +9,7 @@ data class Settings(
     var minimalisticMode: Boolean = false,
     var extremeAmoledMode: Boolean = false,
     var isMarkdownEnabled: Boolean = true,
+    var liveAttachmentPreview: Boolean = false,
     var screenProtection: Boolean = false,
     var encryptBackup: Boolean = false,
     var sortDescending: Boolean = true,

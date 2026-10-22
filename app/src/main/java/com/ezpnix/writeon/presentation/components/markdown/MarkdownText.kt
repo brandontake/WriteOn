@@ -1,6 +1,7 @@
 ﻿package com.ezpnix.writeon.presentation.components.markdown
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -125,7 +126,7 @@ fun MarkdownCheck(content: @Composable () -> Unit, checked: Boolean, onCheckedCh
 }
 
 @Composable
-private fun MissingAttachment(radius: Int, modifier: Modifier = Modifier) {
+fun MissingAttachment(radius: Int, modifier: Modifier = Modifier) {
     Surface(
         modifier = modifier.clip(RoundedCornerShape(radius.dp)),
         color = MaterialTheme.colorScheme.surfaceContainerHighest
@@ -136,6 +137,145 @@ private fun MissingAttachment(radius: Int, modifier: Modifier = Modifier) {
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
+    }
+}
+
+/**
+ * One picture attachment, shared by the reader, the split preview, the image exporter and the new
+ * segmented editor. [target] is the element target (`attachment://<id>`), not a file path; the
+ * registry resolves it, and an id whose row has not loaded yet becomes the standard placeholder.
+ */
+@Composable
+fun ImageAttachmentBlock(
+    target: String,
+    radius: Int,
+    modifier: Modifier = Modifier,
+    onClick: (() -> Unit)? = null
+) {
+    val imageContext = LocalContext.current
+    val resolvedPath = AttachmentRegistry.resolve(target)
+
+    if (resolvedPath == null) {
+        MissingAttachment(
+            radius = radius,
+            modifier = modifier
+                .fillMaxWidth()
+                .padding(vertical = 4.dp)
+        )
+        return
+    }
+
+    // Coil decodes at the image's full resolution unless the request says otherwise, and
+    // `.heightIn(max = 400.dp)` on the modifier only constrains how the bitmap is drawn, not how
+    // much memory it took to produce it. A note with a few photos could allocate hundreds of
+    // megabytes of bitmaps and get the process OOM-killed. Capping the decode keeps the on-screen
+    // result the same at this size for a fraction of the cost.
+    val imageRequest = remember(imageContext, resolvedPath) {
+        ImageRequest.Builder(imageContext)
+            .data(resolvedPath)
+            .size(IMAGE_DECODE_MAX_WIDTH_PX, IMAGE_DECODE_MAX_HEIGHT_PX)
+            .build()
+    }
+
+    AsyncImage(
+        model = imageRequest,
+        contentDescription = stringResource(R.string.cd_note_image),
+        modifier = modifier
+            .fillMaxWidth()
+            .heightIn(max = 400.dp)
+            .clip(RoundedCornerShape(radius.dp))
+            .then(
+                if (onClick != null) {
+                    Modifier.clickable(onClick = onClick)
+                } else {
+                    Modifier
+                }
+            ),
+        contentScale = ContentScale.Fit,
+        alignment = Alignment.Center,
+        onError = {
+            android.util.Log.e("MarkdownText", "Failed to load image: $resolvedPath")
+        }
+    )
+}
+
+/** One recording attachment, with the same caption fallback the note list uses. */
+@Composable
+fun AudioAttachmentBlock(
+    target: String,
+    radius: Int,
+    modifier: Modifier = Modifier,
+    caption: String? = null,
+    onRename: ((String) -> Unit)? = null
+) {
+    val resolvedPath = AttachmentRegistry.resolve(target)
+    if (resolvedPath == null) {
+        MissingAttachment(
+            radius = radius,
+            modifier = modifier
+                .fillMaxWidth()
+                .padding(vertical = 4.dp)
+        )
+        return
+    }
+    AudioPlayerCard(
+        audioUri = resolvedPath,
+        radius = radius,
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp),
+        caption = caption,
+        onRename = onRename
+    )
+}
+
+/** The read-only grid used by every renderer; the editor only changes how it is reached. */
+@Composable
+fun TableBlock(
+    rows: List<List<String>>,
+    fontSize: TextUnit,
+    weight: FontWeight,
+    maxLines: Int,
+    overflow: TextOverflow,
+    modifier: Modifier = Modifier
+) {
+    val customFont = LocalNoteFontFamily.current
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(vertical = 8.dp)
+    ) {
+        rows.forEachIndexed { rowIndex, row ->
+            if (rowIndex > 0) {
+                HorizontalDivider(
+                    thickness = 1.dp,
+                    color = MaterialTheme.colorScheme.outlineVariant
+                )
+            }
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 6.dp)
+            ) {
+                row.forEachIndexed { cellIndex, cell ->
+                    if (cellIndex > 0) Spacer(Modifier.width(12.dp))
+                    Text(
+                        // Cells share the row's width evenly; the header row is the only one set
+                        // in a heavier weight. Use the inline builder again so bold, italics and
+                        // escapes inside a cell render exactly as they did before the extraction.
+                        text = buildString(
+                            cell,
+                            if (rowIndex == 0) FontWeight.SemiBold else weight
+                        ),
+                        fontSize = fontSize,
+                        fontFamily = customFont,
+                        modifier = Modifier.weight(1f),
+                        maxLines = maxLines,
+                        overflow = overflow
+                    )
+                }
+            }
+        }
     }
 }
 
@@ -372,72 +512,21 @@ fun RenderMarkdownElement(
                 )
             }
             is ImageInsertion -> {
-                // Coil decodes at the image's full resolution unless the request says otherwise, and
-                // `.heightIn(max = 400.dp)` on the modifier only constrains how the bitmap is drawn,
-                // not how much memory it took to produce it. A note with a few photos could allocate
-                // hundreds of megabytes of bitmaps and get the process OOM-killed. Capping the
-                // decode keeps the on-screen result the same at this size for a fraction of the cost.
-                // Read the context outside `remember`: LocalContext.current is a @Composable read
-                // and cannot be called from inside the remember's calculation lambda.
-                val imageContext = LocalContext.current
-                // Bodies store an id, not a path; the registry maps it to the file on this device.
-                // A null result means the row has not been loaded yet (or the file is gone), which
-                // is shown as a placeholder instead of a silently empty gap.
-                val resolvedPath = AttachmentRegistry.resolve(element.photoUri)
-
-                if (resolvedPath == null) {
-                    MissingAttachment(
-                        radius = radius,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(vertical = 4.dp)
-                    )
-                } else {
-                    val imageRequest = remember(imageContext, resolvedPath) {
-                        ImageRequest.Builder(imageContext)
-                            .data(resolvedPath)
-                            .size(IMAGE_DECODE_MAX_WIDTH_PX, IMAGE_DECODE_MAX_HEIGHT_PX)
-                            .build()
-                    }
-
-                    AsyncImage(
-                        model = imageRequest,
-                        contentDescription = stringResource(R.string.cd_note_image),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .heightIn(max = 400.dp)
-                            .clip(RoundedCornerShape(radius.dp)),
-                        contentScale = ContentScale.Fit,
-                        alignment = Alignment.Center,
-                        onError = {
-                            android.util.Log.e("MarkdownText", "Failed to load image: $resolvedPath")
-                        }
-                    )
-                }
+                ImageAttachmentBlock(
+                    target = element.photoUri,
+                    radius = radius
+                )
             }
             is AudioInsertion -> {
-                val resolvedPath = AttachmentRegistry.resolve(element.audioUri)
-                if (resolvedPath == null) {
-                    MissingAttachment(
-                        radius = radius,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(vertical = 4.dp)
-                    )
-                } else {
-                    val caption = element.audioUri.let { target ->
-                        com.ezpnix.writeon.core.attachment.AttachmentSyntax.idOf(target)
-                            ?.let { AttachmentRegistry.attachment(it)?.caption }
-                    }
-                    AudioPlayerCard(
-                        audioUri = resolvedPath,
-                        radius = radius,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(vertical = 4.dp),
-                        caption = caption
-                    )
+                val caption = element.audioUri.let { target ->
+                    com.ezpnix.writeon.core.attachment.AttachmentSyntax.idOf(target)
+                        ?.let { AttachmentRegistry.attachment(it)?.caption }
                 }
+                AudioAttachmentBlock(
+                    target = element.audioUri,
+                    radius = radius,
+                    caption = caption
+                )
             }
             is CodeBlock -> {
                 MarkdownCodeBlock(
@@ -459,43 +548,13 @@ fun RenderMarkdownElement(
                 )
             }
             is TableElement -> {
-                // Cells share the row's width evenly; the header row is the only one set in a
-                // heavier weight, and rows are separated by the same hairline the divider element
-                // uses so a table reads as one block instead of a stack of paragraphs.
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(vertical = 8.dp)
-                ) {
-                    element.rows.forEachIndexed { rowIndex, row ->
-                        if (rowIndex > 0) {
-                            HorizontalDivider(
-                                thickness = 1.dp,
-                                color = MaterialTheme.colorScheme.outlineVariant
-                            )
-                        }
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(vertical = 6.dp)
-                        ) {
-                            row.forEachIndexed { cellIndex, cell ->
-                                if (cellIndex > 0) Spacer(Modifier.width(12.dp))
-                                Text(
-                                    text = buildString(
-                                        cell,
-                                        if (rowIndex == 0) FontWeight.SemiBold else weight
-                                    ),
-                                    fontSize = fontSize,
-                                    fontFamily = customFont,
-                                    modifier = Modifier.weight(1f),
-                                    maxLines = maxLines,
-                                    overflow = overflow
-                                )
-                            }
-                        }
-                    }
-                }
+                TableBlock(
+                    rows = element.rows,
+                    fontSize = fontSize,
+                    weight = weight,
+                    maxLines = maxLines,
+                    overflow = overflow
+                )
             }
             is HorizontalRule -> {
                 HorizontalDivider(

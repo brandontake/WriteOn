@@ -20,6 +20,9 @@ import com.ezpnix.writeon.presentation.components.DecryptionResult
 import com.ezpnix.writeon.presentation.components.EncryptionHelper
 import com.ezpnix.writeon.presentation.components.markdown.AttachmentRegistry
 import com.ezpnix.writeon.presentation.screens.edit.components.UndoRedoState
+import com.ezpnix.writeon.presentation.screens.edit.segments.AttachmentSegment
+import com.ezpnix.writeon.presentation.screens.edit.segments.TextSegment
+import com.ezpnix.writeon.presentation.screens.edit.segments.segmentize
 import com.ezpnix.writeon.presentation.share.ShareIntake
 import dagger.hilt.android.lifecycle.HiltViewModel
 import java.io.File
@@ -46,6 +49,17 @@ class EditViewModel @Inject constructor(
 
     private val _noteDescription = mutableStateOf(TextFieldValue())
     val noteDescription: State<TextFieldValue> get() = _noteDescription
+
+    /**
+     * Where the segmented editor should put the caret after an operation that recreates fields
+     * (inserting or deleting an attachment line). Null means "no pending request"; the field that
+     * contains the offset consumes it after taking focus.
+     */
+    private val _focusRequestOffset = mutableStateOf<Int?>(null)
+    val focusRequestOffset: State<Int?> get() = _focusRequestOffset
+
+    /** True while the experimental segmented editor is on screen, so insertion can use its rules. */
+    private var segmentedEditing = false
 
     private val _noteId = mutableIntStateOf(0)
     val noteId: State<Int> get() = _noteId
@@ -123,7 +137,8 @@ class EditViewModel @Inject constructor(
             createdAt = System.currentTimeMillis()
         )
         registerPendingAttachment(attachment)
-        insertBlock(AttachmentSyntax.image(attachment.id))
+        val line = AttachmentSyntax.image(attachment.id)
+        if (segmentedEditing) insertAttachmentAtCaret(line) else insertBlock(line)
     }
 
     fun insertAudioAttachment(path: String, caption: String) {
@@ -139,7 +154,8 @@ class EditViewModel @Inject constructor(
             createdAt = System.currentTimeMillis()
         )
         registerPendingAttachment(attachment)
-        insertBlock(AttachmentSyntax.audio(attachment.id, resolvedCaption))
+        val line = AttachmentSyntax.audio(attachment.id, resolvedCaption)
+        if (segmentedEditing) insertAttachmentAtCaret(line) else insertBlock(line)
     }
 
     private fun registerPendingAttachment(attachment: Attachment) {
@@ -346,6 +362,258 @@ class EditViewModel @Inject constructor(
         undoRedoState.onInput(newDescription)
     }
 
+    /** Told by the segmented editor so attachment insertion can follow its caret rules. */
+    fun setSegmentedEditing(value: Boolean) {
+        segmentedEditing = value
+        if (!value) _focusRequestOffset.value = null
+    }
+
+    /** A field calls this after taking focus for a pending insertion/deletion. */
+    fun consumeFocusRequest(offset: Int) {
+        if (_focusRequestOffset.value == offset) {
+            _focusRequestOffset.value = null
+        }
+    }
+
+    /**
+     * True when the segment ends on the CR of a CRLF line whose LF is the separator that
+     * [assemble] inserts before the next attachment. That CR is part of the stored body but not
+     * part of what the line looks like: the reader strips it with `lines()`, and a Compose text
+     * field would show it as an extra line break or a control character. A CR at the end of the
+     * whole body is real content, so it is not hidden.
+     */
+    private fun hasHiddenBoundaryCr(
+        segment: TextSegment,
+        text: String,
+        start: Int,
+        end: Int
+    ): Boolean =
+        !segment.synthetic &&
+            end > start &&
+            end < text.length &&
+            text[end - 1] == '\r' &&
+            text[end] == '\n'
+
+    /**
+     * The value for one text segment: the substring plus the part of the full selection and IME
+     * composition that falls inside it. Passing the composition through is what keeps a Chinese or
+     * Japanese IME's composing region alive while the field's text is a substring of the body.
+     */
+    fun segmentValue(segment: TextSegment): TextFieldValue {
+        val full = _noteDescription.value
+        val text = full.text
+        val start = segment.startOffset.coerceIn(0, text.length)
+        val end = segment.endOffset.coerceIn(start, text.length)
+        val local = text.substring(start, end)
+        val hidesBoundaryCr = hasHiddenBoundaryCr(segment, text, start, end)
+        val display = if (hidesBoundaryCr) local.dropLast(1) else local
+
+        fun map(offset: Int): Int = (offset - start).coerceIn(0, display.length)
+
+        val composition = full.composition?.takeIf {
+            it.start >= start && it.end <= end && it.start <= it.end
+        }?.let {
+            TextRange(map(it.start), map(it.end))
+        }
+        return TextFieldValue(
+            text = display,
+            selection = TextRange(map(full.selection.start), map(full.selection.end)),
+            composition = composition
+        )
+    }
+
+    /**
+     * Applies one text field's edit back to the single Markdown string.
+     *
+     * A field can report more than one edit before recomposition (fast typing, an IME composing
+     * region, a paste), so the segment captured by its last composition is stale by the second
+     * call. Look the segment up by its stable key in the body as it is now: the first edit has
+     * already been written there, and replacing the new range with the field's newer value keeps
+     * the two in step. If the key is gone (an attachment operation removed that text), fall back
+     * to the captured offsets, clamped so the result is still a valid string.
+     */
+    fun onSegmentChange(segment: TextSegment, newValue: TextFieldValue) {
+        val full = _noteDescription.value
+        val text = full.text
+        val current = segmentize(text)
+            .filterIsInstance<TextSegment>()
+            .firstOrNull { it.key == segment.key }
+            ?: segment
+        val start = current.startOffset.coerceIn(0, text.length)
+        val end = current.endOffset.coerceIn(start, text.length)
+
+        // The synthetic field after a final attachment has no newline of its own. Typing into it
+        // must open a line first, otherwise the attachment token and the new text would share a
+        // line and the block would disappear.
+        val needsLineBreak = current.synthetic &&
+            newValue.text.isNotEmpty() &&
+            start == end &&
+            start > 0 &&
+            text[start - 1] != '\n'
+        // A bare CR at the end is half of a CRLF whose LF was deleted; complete it instead of
+        // appending another CRLF (which would leave the attachment line ending in "\r\r\n").
+        val prefix = when {
+            !needsLineBreak -> ""
+            text[start - 1] == '\r' -> "\n"
+            else -> lineBreakFor(text)
+        }
+        // The field never sees the CR that closes a CRLF line at a segment boundary (see
+        // segmentValue). Keep it in place instead of replacing the whole segment range, or every
+        // edit to a line above an attachment would silently turn that line's CRLF into LF.
+        val contentEnd = if (hasHiddenBoundaryCr(current, text, start, end)) end - 1 else end
+        val updated = text.replaceRange(start, contentEnd, prefix + newValue.text)
+        val shift = prefix.length
+        val selection = TextRange(
+            (start + shift + newValue.selection.start).coerceIn(0, updated.length),
+            (start + shift + newValue.selection.end).coerceIn(0, updated.length)
+        )
+        val composition = newValue.composition?.let {
+            TextRange(
+                (start + shift + it.start).coerceIn(0, updated.length),
+                (start + shift + it.end).coerceIn(0, updated.length)
+            )
+        }
+        commitDescription(updated, selection, composition)
+    }
+
+    /**
+     * Inserts an attachment at the caret rather than at the end of the current line. On a blank
+     * line the block replaces the blank line; inside a paragraph it splits the paragraph into two
+     * text segments with the block between them, and always leaves a text segment after it.
+     */
+    private fun insertAttachmentAtCaret(rawLine: String) {
+        val value = _noteDescription.value
+        val text = value.text
+        val start = value.selection.min.coerceIn(0, text.length)
+        val end = value.selection.max.coerceIn(start, text.length)
+        val lineBreak = lineBreakFor(text)
+        val before = text.substring(0, start)
+        val after = text.substring(end)
+
+        // Do not treat a bare CR as a finished line break: it is the first half of a CRLF whose
+        // LF was deleted, so append only the missing LF.
+        val lead = when {
+            before.isEmpty() || before.endsWith("\n") -> ""
+            before.endsWith("\r") -> "\n"
+            else -> lineBreak
+        }
+        val afterStartsAtLine = after.isEmpty() ||
+            after.startsWith("\n") ||
+            after.startsWith("\r\n")
+        val trail = if (afterStartsAtLine && after.isNotEmpty()) "" else lineBreak
+
+        val updated = before + lead + rawLine + trail + after
+        val afterRaw = start + lead.length + rawLine.length
+        val caret = when {
+            after.startsWith("\r\n") -> afterRaw + 2
+            after.startsWith("\n") -> afterRaw + 1
+            else -> afterRaw + trail.length
+        }.coerceIn(0, updated.length)
+
+        commitDescription(updated, TextRange(caret))
+        requestFocusInText(caret)
+    }
+
+    /** Removes an attachment's whole line, including one adjacent line break. */
+    fun deleteAttachment(segment: AttachmentSegment) {
+        val text = _noteDescription.value.text
+        var start = segment.startOffset.coerceIn(0, text.length)
+        var end = segment.endOffset.coerceIn(start, text.length)
+        if (end < text.length && text[end] == '\n') {
+            end++
+        } else if (start > 0 && text[start - 1] == '\n') {
+            start--
+            if (start > 0 && text[start - 1] == '\r') start--
+        }
+        val updated = text.removeRange(start, end)
+        val caret = start.coerceIn(0, updated.length)
+        commitDescription(updated, TextRange(caret))
+        requestFocusInText(caret)
+    }
+
+    /** Replaces an attachment's line with edited Markdown (one line; newlines are flattened). */
+    fun replaceAttachmentRaw(segment: AttachmentSegment, raw: String) {
+        replaceAttachmentLine(segment, raw, focus = true)
+    }
+
+    fun renameAudioAttachment(segment: AttachmentSegment, caption: String) {
+        replaceAttachmentLine(
+            segment,
+            AttachmentSyntax.audio(segment.attachmentId, caption),
+            focus = false
+        )
+    }
+
+    private fun replaceAttachmentLine(
+        segment: AttachmentSegment,
+        raw: String,
+        focus: Boolean
+    ) {
+        val line = raw
+            .replace('\r', ' ')
+            .replace('\n', ' ')
+            .trim()
+        if (line.isEmpty()) {
+            deleteAttachment(segment)
+            return
+        }
+        val text = _noteDescription.value.text
+        val start = segment.startOffset.coerceIn(0, text.length)
+        val end = segment.endOffset.coerceIn(start, text.length)
+        // segment.raw includes the CR of a CRLF line. Replacing the whole range would silently
+        // turn that one line into LF, so keep the original line ending.
+        val carriageReturn = if (segment.raw.endsWith('\r')) "\r" else ""
+        val updated = text.replaceRange(start, end, line + carriageReturn)
+        val caret = (start + line.length + carriageReturn.length)
+            .coerceIn(0, updated.length)
+        commitDescription(updated, TextRange(caret))
+        // If the edited line is still an attachment it is drawn as a block, and there is no text
+        // field at the caret. Keeping a request there would leave it pending until some later edit
+        // happened to move a text field over that offset.
+        val stillAttachment = AttachmentSyntax.IMAGE_LINE.matchEntire(line) != null ||
+            AttachmentSyntax.AUDIO_LINE.matchEntire(line) != null
+        if (focus && !stillAttachment) requestFocusInText(caret)
+    }
+
+    private fun commitDescription(
+        text: String,
+        selection: TextRange,
+        composition: TextRange? = null
+    ) {
+        _noteDescription.value = TextFieldValue(text, selection, composition)
+        // Undo snapshots do not need the IME composition, and keeping a stale one there lets undo
+        // hand TextFieldValue a composition range that no longer exists in the restored text.
+        undoRedoState.onInput(TextFieldValue(text, selection))
+    }
+
+    private fun lineBreakFor(text: String): String =
+        if (text.contains("\r\n")) "\r\n" else "\n"
+
+    /**
+     * Only text segments own a field. A structural edit can leave the caret at the start of an
+     * attachment line (inserting a block just above it, or deleting a block between two blocks),
+     * where no field would consume a focus request. Snap to the nearest text segment, preferring
+     * the one before the caret, so the keyboard opens next to the edit instead of staying closed
+     * with an unconsumed request.
+     */
+    private fun requestFocusInText(offset: Int) {
+        val text = _noteDescription.value.text
+        val clamped = offset.coerceIn(0, text.length)
+        val textSegments = segmentize(text).filterIsInstance<TextSegment>()
+        if (textSegments.isEmpty()) {
+            _focusRequestOffset.value = null
+            return
+        }
+        if (textSegments.any { clamped in it.startOffset..it.endOffset }) {
+            _focusRequestOffset.value = clamped
+            return
+        }
+        val target = textSegments.lastOrNull { it.endOffset <= clamped }
+            ?: textSegments.firstOrNull { it.startOffset >= clamped }
+            ?: textSegments.first()
+        _focusRequestOffset.value = clamped.coerceIn(target.startOffset, target.endOffset)
+    }
+
     private fun updateNoteCreatedTime(newTime: Long) {
         _noteCreatedTime.longValue = newTime
     }
@@ -365,11 +633,17 @@ class EditViewModel @Inject constructor(
     fun undo() {
         undoRedoState.undo()
         _noteDescription.value = undoRedoState.input
+        if (segmentedEditing) {
+            requestFocusInText(_noteDescription.value.selection.end)
+        }
     }
 
     fun redo() {
         undoRedoState.redo()
         _noteDescription.value = undoRedoState.input
+        if (segmentedEditing) {
+            requestFocusInText(_noteDescription.value.selection.end)
+        }
     }
 
     private fun lineStartIndex(text: String, position: Int): Int {

@@ -32,8 +32,12 @@ android {
         minSdk = 26
         // Google Play requires new submissions to target API 36 from 2026-08-31.
         targetSdk = 36
-        versionCode = 12
-        versionName = "2.0"
+        versionCode = 13
+        versionName = "2.0.1"
+        // The segmented editor (attachment lines rendered as blocks) is still experimental. The
+        // user-facing switch in Settings > Behaviour must be on as well; this flag is the
+        // compile-time kill switch that lets a build ship without the code path at all.
+        buildConfigField("boolean", "FEATURE_ATTACHMENT_LIVE_RENDER", "true")
         vectorDrawables {
             useSupportLibrary = true
         }
@@ -182,4 +186,5 @@ dependencies {
     implementation(libs.okhttp)
     implementation(libs.process.phoenix)
     implementation(libs.tink)
+    testImplementation(libs.junit)
 }

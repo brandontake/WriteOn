@@ -1,0 +1,5 @@
+v2.0.1 - Live attachment preview (experimental), keyboard & preview fixes:
+- Optional live attachment blocks in the editor; the body stays plain Markdown. Enable in Settings > Behaviour.
+- Keyboard-aware scrolling keeps the caret in view; a caret already visible does not jump.
+- Preview text selection no longer loses its handles after scrolling.
+- Split preview on tablets in landscape and more reliable paged image export.

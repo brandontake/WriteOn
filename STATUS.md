@@ -1,5 +1,5 @@
 # Write On: Simple Notepad ✅
-- Last Updated: 10/20/2026
+- Last Updated: 10/22/2026
 
 ## In Progress:
 - [x] More markdown formats
@@ -97,8 +97,14 @@
 - [x] **Trash search field follows Material 3.** The bare outlined field became a filled, fully rounded search bar with a tonal surface and no indicator line, matching the drawer and settings screens.
 - [x] **The conflict backup is reachable from Settings.** When an upload keeps a separate copy, the cloud screen shows its URL with a copy-link action and a dismiss button instead of leaving the only trace in SharedPreferences.
 
-## After the v2.0 release
+## Done in v2.0.1
+- [x] **Bump version to v2.0.1** (`versionCode 13`, `versionName "2.0.1"`).
+- [x] **Image exports wait for the page window and pre-decode attachments.** The capture waits until the paged window has its final height, retries a blank first page instead of saving it, and preloads every referenced image so a photo is not recorded while Coil is still decoding.
+- [x] **Attachment lines render live in the editor (experimental).** A line that is only an image or audio attachment link becomes the same block the reader draws, while the text around it stays in ordinary fields backed by one Markdown string. `NoteSegments.kt` is the projection and its exact round trip is covered by `NoteSegmentsTest`; each field's edit is mapped back through its stable segment key, so fast typing and IME composition do not reuse stale offsets, CRLF is preserved, and the overflow menu can edit the source line, delete the block, or rename an audio memo; tapping an image opens it full screen. It ships off by default: enable it in Settings > Behaviour, and `BuildConfig.FEATURE_ATTACHMENT_LIVE_RENDER` is the compile-time kill switch.
+- [x] **Keyboard follows the caret.** The body field scrolls inside the note card, so opening the keyboard with the caret near the bottom brings that line into view, while a caret already visible in the upper part leaves the scroll position alone. The formatting bar appearing or disappearing no longer jumps the text.
+- [x] **Dragging a selection handle in the preview no longer exits.** Preview and split preview render the note in a non-lazy column inside one `SelectionContainer` (the same path image export uses), so after scrolling down every text layout the handle can reach is still composed. Very long notes cost more to compose on the preview page; the editor and home cards keep the lazy path.
 - [x] **Split preview on a tablet in landscape.** The note and its rendering sit side by side instead of on separate pages; the right half runs the same pass the preview page and the image export use, sampled with a short debounce so a keystroke does not reparse a long note. Geometry decides the layout and the Markdown preference still gates it: with Markdown off the screen keeps one column, because a half-width copy of plain text would just be the same text twice.
+- [x] **Release verification.** 13/13 `NoteSegmentsTest` tests pass; `assembleDebug`, `assembleRelease` and `lintVitalRelease` pass offline. Release APK: 3,966,935 bytes, SHA-256 `B0861F4D7C98F92A183B47763B238251205BC0540E95362DFF11CC46CB49007B`, signed with the upload key (`CN=Brandontake, OU=WriteOn, O=WriteOn, C=US`).
 
 ## Open / Future
 - [ ] Unit tests for the vault KDF, the atomic restore and the DAO transaction

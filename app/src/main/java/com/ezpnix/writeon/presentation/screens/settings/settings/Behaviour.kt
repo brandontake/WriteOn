@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Edit
+import androidx.compose.material.icons.rounded.Image
 import androidx.compose.material.icons.rounded.Style
 import androidx.compose.material.icons.rounded.Title
 import androidx.compose.runtime.Composable
@@ -12,6 +13,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavController
+import com.ezpnix.writeon.BuildConfig
 import com.ezpnix.writeon.R
 import com.ezpnix.writeon.presentation.screens.settings.SettingsScaffold
 import com.ezpnix.writeon.presentation.screens.settings.model.SettingsViewModel
@@ -37,6 +39,24 @@ fun MarkdownScreen(navController: NavController, settingsViewModel: SettingsView
                     switchEnabled = { settingsViewModel.update(settingsViewModel.settings.value.copy(isMarkdownEnabled = it))}
                 )
                 Spacer(modifier = Modifier.height(18.dp))
+            }
+            if (BuildConfig.FEATURE_ATTACHMENT_LIVE_RENDER) {
+                item {
+                    SettingsBox(
+                        title = stringResource(id = R.string.live_attachment_preview),
+                        description = stringResource(id = R.string.live_attachment_preview_description),
+                        icon = Icons.Rounded.Image,
+                        actionType = ActionType.SWITCH,
+                        radius = shapeManager(isBoth = true, radius = settingsViewModel.settings.value.cornerRadius),
+                        variable = settingsViewModel.settings.value.liveAttachmentPreview,
+                        switchEnabled = {
+                            settingsViewModel.update(
+                                settingsViewModel.settings.value.copy(liveAttachmentPreview = it)
+                            )
+                        }
+                    )
+                    Spacer(modifier = Modifier.height(18.dp))
+                }
             }
             item {
                 SettingsBox(

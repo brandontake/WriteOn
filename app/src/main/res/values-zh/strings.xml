@@ -443,6 +443,14 @@
     <string name="return_to_home">返回主页</string>
     <string name="stay_here">留在此页</string>
     <string name="attachment_missing">附件暂时无法打开</string>
+    <string name="live_attachment_preview">附件即时渲染（实验）</string>
+    <string name="live_attachment_preview_description">编辑时把图片和录音显示成真正的块，正文底层仍然是普通 Markdown。</string>
+    <string name="attachment_actions">附件操作</string>
+    <string name="attachment_edit_source">编辑 Markdown</string>
+    <string name="attachment_edit_source_title">附件 Markdown</string>
+    <string name="attachment_delete">删除附件</string>
+    <string name="attachment_delete_message">删除这个附件？保存便签时会一并删除文件。</string>
+    <string name="attachment_open_image">查看图片</string>
     <string name="search_no_results">没有匹配的便签</string>
     <string name="fmt_inline_code">行内代码</string>
     <string name="fmt_table">表格</string>

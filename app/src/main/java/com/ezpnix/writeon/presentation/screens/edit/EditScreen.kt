@@ -43,6 +43,8 @@ import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.PagerState
 import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.PushPin
@@ -101,6 +103,7 @@ import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
+import com.ezpnix.writeon.BuildConfig
 import com.ezpnix.writeon.R
 import com.ezpnix.writeon.presentation.components.CalButton
 import com.ezpnix.writeon.presentation.components.CalculatorButton
@@ -117,6 +120,8 @@ import com.ezpnix.writeon.presentation.components.markdown.MarkdownText
 import com.ezpnix.writeon.presentation.screens.edit.components.CustomIconButton
 import com.ezpnix.writeon.presentation.screens.edit.components.CustomTextField
 import com.ezpnix.writeon.presentation.screens.edit.components.NoteImageSaveHost
+import com.ezpnix.writeon.presentation.screens.edit.components.ScrollableNoteField
+import com.ezpnix.writeon.presentation.screens.edit.components.SegmentedEditor
 import com.ezpnix.writeon.presentation.screens.edit.components.TextFormattingToolbar
 import com.ezpnix.writeon.presentation.screens.edit.model.EditViewModel
 import com.ezpnix.writeon.presentation.screens.settings.model.SettingsViewModel
@@ -592,27 +597,44 @@ fun EditScreen(
         // where the options button used to be.
         QuickActionRow(viewModel, coroutineScope, pagerState)
 
+        // The roadmap's two gates: the code has to be compiled in and the user has to opt in. Off
+        // by default, so upgrading never changes the editor under anyone's fingers.
+        val useSegmentedEditor = BuildConfig.FEATURE_ATTACHMENT_LIVE_RENDER &&
+            settings.liveAttachmentPreview
+        val bodyModifier = Modifier
+            .weight(1f)
+            .padding(bottom = 8.dp)
+
         MarkdownBox(
             isExtremeAmoled = settingsViewModel.settings.value.extremeAmoledMode,
             shape = shapeManager(
                 radius = settingsViewModel.settings.value.cornerRadius,
                 isFirst = true
             ),
-            modifier = Modifier
-                .weight(1f)
-                .onFocusChanged { viewModel.toggleIsDescriptionInFocus(it.isFocused) }
-                .padding(bottom = 8.dp),
+            modifier = bodyModifier,
             content = {
-                CustomTextField(
-                    value = viewModel.noteDescription.value,
-                    onValueChange = { viewModel.updateNoteDescription(it) },
-                    modifier = Modifier.fillMaxSize(),
-                    placeholder = stringResource(R.string.empty_description),
-                    textStyle = TextStyle(
-                        fontSize = settingsViewModel.settings.value.fontSize.sp,
-                        fontFamily = LocalNoteFontFamily.current
+                if (useSegmentedEditor) {
+                    SegmentedEditor(
+                        viewModel = viewModel,
+                        fontSize = settings.fontSize.sp,
+                        fontFamily = LocalNoteFontFamily.current,
+                        radius = settings.cornerRadius,
+                        placeholder = stringResource(R.string.empty_description),
+                        modifier = Modifier.fillMaxSize()
                     )
-                )
+                } else {
+                    ScrollableNoteField(
+                        value = viewModel.noteDescription.value,
+                        onValueChange = { viewModel.updateNoteDescription(it) },
+                        placeholder = stringResource(R.string.empty_description),
+                        textStyle = TextStyle(
+                            fontSize = settings.fontSize.sp,
+                            fontFamily = LocalNoteFontFamily.current
+                        ),
+                        modifier = Modifier.fillMaxSize(),
+                        onFocusChanged = { viewModel.toggleIsDescriptionInFocus(it) }
+                    )
+                }
             }
         )
 
@@ -697,6 +719,7 @@ internal fun isSplitPreviewActive(): Boolean = LocalSplitPreview.current
 private fun LivePreviewPane(viewModel: EditViewModel, settingsViewModel: SettingsViewModel) {
     val settings = settingsViewModel.settings.value
     val body = viewModel.noteDescription.value.text
+    val previewScrollState = rememberScrollState()
     val rendered by produceState(initialValue = body, key1 = body) {
         delay(LIVE_PREVIEW_DEBOUNCE_MS)
         value = body
@@ -730,9 +753,16 @@ private fun LivePreviewPane(viewModel: EditViewModel, settingsViewModel: Setting
                         radius = settings.cornerRadius,
                         markdown = rendered,
                         isEnabled = settings.isMarkdownEnabled,
-                        modifier = Modifier.fillMaxSize(),
+                        // A selection handle that was dragged across a lazy item whose composable
+                        // has since been disposed can crash in SelectionManager. The preview is
+                        // one note, not a feed, so keeping every element composed and scrolling a
+                        // plain column is both safer and cheap enough.
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .verticalScroll(previewScrollState),
                         fontSize = settings.fontSize.sp,
-                        onContentChange = { viewModel.updateNoteDescription(TextFieldValue(text = it)) }
+                        onContentChange = { viewModel.updateNoteDescription(TextFieldValue(text = it)) },
+                        useLazyColumn = false
                     )
                 }
             }
@@ -755,6 +785,7 @@ fun PreviewScreen(
     val focusManager = LocalFocusManager.current
     focusManager.clearFocus()
     val coroutineScope = rememberCoroutineScope()
+    val previewScrollState = rememberScrollState()
 
     // Same readable line length as the editor: on a wide screen the preview keeps a capped column
     // instead of stretching a short note across the whole tablet.
@@ -794,9 +825,14 @@ fun PreviewScreen(
                         radius = settingsViewModel.settings.value.cornerRadius,
                         markdown = viewModel.noteDescription.value.text,
                         isEnabled = settingsViewModel.settings.value.isMarkdownEnabled,
-                        modifier = Modifier.fillMaxSize(),
+                        // See LivePreviewPane: no lazy list under SelectionContainer, so dragging
+                        // a handle after scrolling never targets a disposed text anchor.
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .verticalScroll(previewScrollState),
                         fontSize = settingsViewModel.settings.value.fontSize.sp,
-                        onContentChange = { viewModel.updateNoteDescription(TextFieldValue(text = it)) }
+                        onContentChange = { viewModel.updateNoteDescription(TextFieldValue(text = it)) },
+                        useLazyColumn = false
                     )
                 }
             }

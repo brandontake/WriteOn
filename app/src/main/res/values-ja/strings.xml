@@ -486,6 +486,14 @@
     <string name="return_to_home">ホームに戻る</string>
     <string name="stay_here">このまま留まる</string>
     <string name="attachment_missing">添付ファイルを表示できません</string>
+    <string name="live_attachment_preview">添付のライブプレビュー（実験的）</string>
+    <string name="live_attachment_preview_description">編集中に画像と録音をブロックとして表示します。ノート自体は通常の Markdown のままです。</string>
+    <string name="attachment_actions">添付の操作</string>
+    <string name="attachment_edit_source">Markdown を編集</string>
+    <string name="attachment_edit_source_title">添付の Markdown</string>
+    <string name="attachment_delete">添付を削除</string>
+    <string name="attachment_delete_message">この添付を削除しますか？ノートを保存するとファイルも削除されます。</string>
+    <string name="attachment_open_image">画像を開く</string>
     <string name="search_no_results">検索に一致するノートはありません</string>
     <string name="fmt_inline_code">インラインコード</string>
     <string name="fmt_table">表</string>
