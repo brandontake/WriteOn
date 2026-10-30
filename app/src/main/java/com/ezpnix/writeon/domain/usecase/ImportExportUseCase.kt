@@ -2,8 +2,8 @@ package com.ezpnix.writeon.domain.usecase
 
 import android.net.Uri
 import android.util.Log
-import com.ezpnix.writeon.data.repository.ImportExportRepository
-import com.ezpnix.writeon.data.repository.NoteRepositoryImpl
+import com.ezpnix.writeon.domain.repository.NoteFileReader
+import com.ezpnix.writeon.domain.repository.NoteRepository
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
@@ -18,9 +18,9 @@ data class ImportResult(
 )
 
 class ImportExportUseCase @Inject constructor(
-    private val noteRepository: NoteRepositoryImpl,
+    private val noteRepository: NoteRepository,
     private val coroutineScope: CoroutineScope,
-    private val fileRepository: ImportExportRepository,
+    private val fileRepository: NoteFileReader,
 )
 {
     // AA1

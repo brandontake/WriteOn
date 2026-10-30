@@ -226,8 +226,17 @@ fun TranslateButton(viewModel: EditViewModel, onClick: () -> Unit) {
     IconButton(
         modifier = Modifier.size(56.dp),
         onClick = {
+            // The text goes to the clipboard, not into the URL: putting the whole note in a
+            // translate.google.com query string handed the note's content to a third party (and
+            // into the browser history) with no confirmation. The translator opens empty and the
+            // user pastes what they actually want translated.
             copyToClipboard(context, viewModel.noteDescription.value.text)
-            openTranslateApp(context, viewModel.noteDescription.value.text)
+            openTranslateApp(context)
+            Toast.makeText(
+                context,
+                context.getString(R.string.translate_copied_hint),
+                Toast.LENGTH_SHORT
+            ).show()
         }
     ) {
         Icon(Icons.Rounded.Translate, null)
@@ -244,7 +253,7 @@ fun CopyButton(viewModel: EditViewModel, onClick: () -> Unit) {
             copyToClipboard(context, viewModel.noteDescription.value.text)
         }
     ) {
-        Icon(Icons.Rounded.CopyAll, null)
+        Icon(Icons.Rounded.CopyAll, contentDescription = stringResource(R.string.cd_copy))
     }
 }
 
@@ -252,11 +261,26 @@ fun CopyButton(viewModel: EditViewModel, onClick: () -> Unit) {
 fun copyToClipboard(context: Context, text: String) {
     val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
     val clip = android.content.ClipData.newPlainText(context.getString(R.string.clipboard_label_copied_text), text)
+    // A note is user content; without this flag Android 13+ previews it in full on the clipboard
+    // surface and in the suggestion strip, so anyone glancing at the phone (or an on-screen
+    // recorder) reads it. The clip also lingers there after the app is backgrounded.
+    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+        clip.description.extras = android.os.PersistableBundle().apply {
+            putBoolean(android.content.ClipDescription.EXTRA_IS_SENSITIVE, true)
+        }
+    }
     clipboard.setPrimaryClip(clip)
 }
 
-fun openTranslateApp(context: Context, text: String) {
-    val uri = Uri.parse("https://translate.google.com/?sl=auto&tl=en&text=${Uri.encode(text)}")
+/**
+ * Opens the translator without any note text.
+ *
+ * The old version appended the note as a `text=` query parameter, which put the note's content on
+ * a third-party URL, in the browser history, and in whatever the browser logs. The text now only
+ * ever goes through the clipboard, under the user's control.
+ */
+fun openTranslateApp(context: Context) {
+    val uri = Uri.parse("https://translate.google.com/?sl=auto&tl=en")
     val intent = Intent(Intent.ACTION_VIEW, uri)
     context.startActivity(intent)
 }
@@ -269,7 +293,10 @@ fun CalculatorButton() {
         modifier = Modifier.size(56.dp),
         onClick = { showDialog.value = true }
     ) {
-        Icon(Icons.Rounded.Calculate, contentDescription = null)
+        Icon(
+            Icons.Rounded.Calculate,
+            contentDescription = stringResource(R.string.quick_action_calculator)
+        )
     }
 
     if (showDialog.value) {

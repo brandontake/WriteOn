@@ -61,7 +61,7 @@ fun GuideScreen(navController: NavController, settingsViewModel: SettingsViewMod
                                 this[index] = !this[index]
                             }
                         },
-                    elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
                     shape = appCornerShape()
                 ) {

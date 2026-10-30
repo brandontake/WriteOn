@@ -1,20 +1,22 @@
 package com.ezpnix.writeon.domain.usecase
 
 import android.content.Context
+import android.util.Log
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
-import androidx.glance.appwidget.updateAll
 import com.ezpnix.writeon.core.attachment.AttachmentFiles
+import com.ezpnix.writeon.core.attachment.AttachmentIndex
 import com.ezpnix.writeon.core.attachment.AttachmentSyntax
-import com.ezpnix.writeon.data.repository.NoteRepositoryImpl
+import com.ezpnix.writeon.core.attachment.LegacyAudioSyntax
 import com.ezpnix.writeon.domain.model.Attachment
 import com.ezpnix.writeon.domain.model.Note
-import com.ezpnix.writeon.presentation.components.DecryptionResult
-import com.ezpnix.writeon.presentation.components.EncryptionHelper
-import com.ezpnix.writeon.presentation.components.markdown.AttachmentRegistry
-import com.ezpnix.writeon.widget.NotesWidget
+import com.ezpnix.writeon.domain.repository.NoteRepository
+import com.ezpnix.writeon.core.security.DecryptionResult
+import com.ezpnix.writeon.core.security.EncryptionHelper
+import com.ezpnix.writeon.core.widget.WidgetRefresher
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -30,9 +32,16 @@ import kotlinx.coroutines.withContext
 import javax.inject.Inject
 
 class NoteUseCase @Inject constructor(
-    private val noteRepository: NoteRepositoryImpl,
+    // The domain layer talks to the repository *interface*: a fake implementation is what makes
+    // "attachment reconciliation", "undo save" and the deletion order testable at all, and the
+    // concrete class was the only thing standing in the way.
+    private val noteRepository: NoteRepository,
     private val coroutineScope: CoroutineScope,
     private val encryptionHelper: EncryptionHelper,
+    // The id -> row map and the widget redraw are interfaces for the same reason: the registry is
+    // Compose state and the refresher is Glance, and neither belongs in a domain unit test.
+    private val attachmentIndex: AttachmentIndex,
+    private val widgetRefresher: WidgetRefresher,
     @ApplicationContext private val context: Context
 ) {
     var notes: List<Note> by mutableStateOf(emptyList())
@@ -58,13 +67,13 @@ class NoteUseCase @Inject constructor(
      */
     suspend fun refreshAttachments() {
         val attachments = withContext(Dispatchers.IO) { noteRepository.getAllAttachments() }
-        AttachmentRegistry.put(attachments)
+        attachmentIndex.put(attachments)
     }
 
     suspend fun saveAttachments(items: List<Attachment>) {
         if (items.isEmpty()) return
         withContext(Dispatchers.IO) { noteRepository.upsertAttachments(items) }
-        AttachmentRegistry.put(items)
+        attachmentIndex.put(items)
     }
 
     suspend fun attachmentsForNote(noteId: Int): List<Attachment> =
@@ -89,10 +98,10 @@ class NoteUseCase @Inject constructor(
     /**
      * Loads the notes once and stops.
      *
-     * Widgets need this: [observe] starts collectors that call `NotesWidget().updateAll` on every
-     * emission, so a collector started from inside a widget's own composition refreshed the widget,
-     * which recomposed and started the collector again. Reading once outside the composition ends
-     * that loop.
+     * Widgets need this: [observe] starts collectors that refresh every widget on every emission,
+     * so a collector started from inside a widget's own composition refreshed the widget, which
+     * recomposed and started the collector again. Reading once outside the composition ends that
+     * loop.
      */
     suspend fun loadNotesOnce() {
         val sourceNotes = withContext(Dispatchers.IO) { noteRepository.getAllNotes().first() }
@@ -125,7 +134,7 @@ class NoteUseCase @Inject constructor(
                 this@NoteUseCase.notes = processedNotes
                 // Refreshing on an unchanged list made the widget recompose for nothing.
                 if (previousIds != processedNotes.map { it.id }) {
-                    NotesWidget().updateAll(context)
+                    widgetRefresher.refreshAll()
                 }
             }
         }
@@ -148,11 +157,15 @@ class NoteUseCase @Inject constructor(
     private fun encryptNote(note: Note): Note {
         if (!note.encrypted) return note
         // Without a loaded vault passphrase, sealing the text would write ciphertext under an empty
-        // key. EncryptionHelper.decrypt short-circuits to LOADING while the vault is empty, so that
-        // note could never be read again and would silently drop out of the list. Keeping the text
-        // in plain sight is recoverable; losing it is not. This path is only reached from the note
-        // editor and never from the widget, which reads through NoteCrypto instead.
-        if (encryptionHelper.isPasswordEmpty()) return note.copy(encrypted = false)
+        // key, and EncryptionHelper.decrypt short-circuits to LOADING while the vault is empty, so
+        // that note could never be read again. Silently downgrading it to a plain note was worse:
+        // a password-protected note would be written to disk in the clear without the user asking.
+        // The editor refuses to save in this state (see EditViewModel.saveNote); reaching here means
+        // some other caller tried to rewrite a vault note while it was locked, which must fail
+        // loudly instead of destroying its confidentiality.
+        check(!encryptionHelper.isPasswordEmpty()) {
+            "Refusing to save a vault note while the vault is locked"
+        }
         return note.copy(
             name = encryptionHelper.encrypt(note.name),
             description = encryptionHelper.encrypt(note.description),
@@ -218,6 +231,36 @@ class NoteUseCase @Inject constructor(
         }
     }
 
+    /**
+     * The editor's save path: the note row and its attachment-row changes in one transaction.
+     *
+     * [addNote] plus three separate attachment writes could stop halfway (a cancelled coroutine, a
+     * database error) and leave the body pointing at rows that were never written, or rows deleted
+     * for a body that never landed. The transaction makes "saved" mean all of it or none of it.
+     * File deletion stays outside, in the caller: a leftover file is recoverable, a row whose file
+     * was already deleted is not.
+     *
+     * @return the id Room assigned when the note was new, or the note's own id.
+     */
+    suspend fun saveNoteWithAttachments(
+        note: Note,
+        upsertAttachments: List<Attachment>,
+        reviveAttachmentIds: List<String> = emptyList(),
+        deleteAttachmentIds: List<String> = emptyList(),
+    ): Int {
+        val noteToSave = if (note.encrypted) {
+            encryptNote(note.copy(tags = note.tags.map { it.trim().lowercase() }.distinct()))
+        } else {
+            note.copy(tags = note.tags.map { it.trim().lowercase() }.distinct())
+        }
+        return noteRepository.saveNoteWithAttachments(
+            note = noteToSave,
+            upsertAttachments = upsertAttachments,
+            reviveAttachmentIds = reviveAttachmentIds,
+            deleteAttachmentIds = deleteAttachmentIds,
+        )
+    }
+
     suspend fun batchUpdateNotes(notes: List<Note>) {
         val notesToSave = notes.map { note ->
             if (note.encrypted) encryptNote(note.copy(tags = note.tags.map { it.trim().lowercase() }.distinct())) else note
@@ -225,13 +268,26 @@ class NoteUseCase @Inject constructor(
         noteRepository.batchUpdateNotes(notesToSave)
     }
 
+    /** Replaces one note's tag column without rewriting its body. */
+    suspend fun setTags(noteId: Int, tags: List<String>) {
+        if (noteId == 0) return
+        val normalized = tags.map { it.trim().lowercase() }.distinct().filter { it.isNotBlank() }
+        withContext(Dispatchers.IO) { noteRepository.updateTags(noteId, normalized) }
+    }
+
+    /** Moves one note in or out of the recycle bin without rewriting its body. */
+    suspend fun setTrashed(noteId: Int, trashed: Boolean) {
+        if (noteId == 0) return
+        withContext(Dispatchers.IO) { noteRepository.updateTrashed(noteId, trashed) }
+    }
+
     suspend fun addTagToNote(noteId: Int, tag: String) {
         val trimmedTag = tag.trim().lowercase()
         if (trimmedTag.isNotBlank()) {
             val note = noteRepository.getNoteById(noteId).firstOrNull() ?: return
             if (trimmedTag !in note.tags.map { it.lowercase() }) {
-                val updatedNote = note.copy(tags = note.tags + trimmedTag)
-                noteRepository.updateNote(updatedNote)
+                // Tags are a separate column, so this does not rewrite the body the editor owns.
+                noteRepository.updateTags(noteId, note.tags + trimmedTag)
             }
         }
     }
@@ -239,18 +295,18 @@ class NoteUseCase @Inject constructor(
     suspend fun deleteTagFromNotes(tag: String) {
         val trimmedTag = tag.trim().lowercase()
         val allNotes = noteRepository.getAllNotes().first()
-        val updatedNotes = allNotes.map { note ->
-            val hasTag = trimmedTag in note.tags.map { it.lowercase() }
-            if (hasTag) {
-                val newTags = note.tags.filterNot { it.lowercase() == trimmedTag }
-                note.copy(tags = newTags)
+        val updatedNotes = allNotes.mapNotNull { note ->
+            if (trimmedTag in note.tags.map { it.lowercase() }) {
+                note to note.tags.filterNot { it.lowercase() == trimmedTag }
             } else {
-                note
+                null
             }
-        }.filter { note -> note.tags != allNotes.find { it.id == note.id }?.tags }
+        }
 
-        if (updatedNotes.isNotEmpty()) {
-            noteRepository.batchUpdateNotes(updatedNotes)
+        // One column per note: deleting a tag from the tag manager must not overwrite a note body
+        // from the stale snapshot this function just read.
+        updatedNotes.forEach { (note, newTags) ->
+            noteRepository.updateTags(note.id, newTags)
         }
 
         // Recompute from what the database actually holds rather than from the pre-update list, so
@@ -273,8 +329,7 @@ class NoteUseCase @Inject constructor(
     fun deleteNoteById(id: Int) {
         coroutineScope.launch(NonCancellable + Dispatchers.IO) {
             val noteToDelete = noteRepository.getNoteById(id).firstOrNull() ?: return@launch
-            deleteAssociatedFiles(noteToDelete)
-            noteRepository.deleteNote(noteToDelete)
+            performDelete(noteToDelete)
         }
     }
 
@@ -292,60 +347,62 @@ class NoteUseCase @Inject constructor(
     }
 
     suspend fun updatePinStatus(noteId: Int, pinned: Boolean) {
-        // Tolerate a missing row: the editor pins through toggleNotePin, and for a note that has not
-        // been inserted yet the id is still 0. Flow.first() on an absent row throws
-        // NoSuchElementException, which escaped an uncaught viewModelScope coroutine and killed the
-        // process while the user was still typing.
-        val noteToUpdate = noteRepository.getNoteById(noteId).firstOrNull() ?: return
-        val updatedNote = noteToUpdate.copy(pinned = pinned)
-        noteRepository.updateNote(updatedNote)
+        // Only the flag is written. Reading the row and writing a full Note back would race the
+        // editor: the row read here predates whatever the user has typed since, and the emission
+        // that followed overwrote the text field in the middle of a sentence (P0-2). A missing id
+        // (a brand-new note still at 0) simply updates nothing, which is also what the old
+        // firstOrNull() early return did - without the NoSuchElementException risk.
+        noteRepository.updatePinned(noteId, pinned)
     }
 
     fun moveToTrash(note: Note) {
         coroutineScope.launch(NonCancellable + Dispatchers.IO) {
-            val trashedNote = note.copy(trashed = true)
-            noteRepository.updateNote(trashedNote)
+            noteRepository.updateTrashed(note.id, true)
         }
     }
 
     fun restoreFromTrash(note: Note) {
         coroutineScope.launch(NonCancellable + Dispatchers.IO) {
-            val restoredNote = note.copy(trashed = false)
-            noteRepository.updateNote(restoredNote)
+            noteRepository.updateTrashed(note.id, false)
         }
     }
 
     fun permanentlyDeleteNoteById(id: Int) {
         coroutineScope.launch(NonCancellable + Dispatchers.IO) {
             val noteToDelete = noteRepository.getNoteById(id).firstOrNull() ?: return@launch
-            deleteAssociatedFiles(noteToDelete)
-            noteRepository.deleteNote(noteToDelete)
+            performDelete(noteToDelete)
         }
     }
 
     /**
-     * Removes everything a deleted note owned: attachment rows, the files they point at, and - for
-     * bodies that still carry 1.x syntax - the recordings the old regex can find.
+     * Deletes a note, its attachment rows and (after the commit) their files.
      *
-     * Attachment rows are authoritative now, but the regex fallback stays because a vault note is
-     * only rewritten when it is opened, so a password-protected note deleted from the trash can
-     * still hold `?audio(...)` paths in its decrypted description.
+     * Order matters. The note row and the attachment rows go first, inside one transaction, so an
+     * interruption can never leave an attachment row pointing at a note that is already gone. Only
+     * once that commits are the files removed - a leftover file is recoverable and a later sweep
+     * can find it, while a row whose file was deleted out from under it is an orphan that no screen
+     * can ever render or clean up. File deletion stays best-effort and logged.
      */
-    private suspend fun deleteAssociatedFiles(note: Note) {
+    private suspend fun performDelete(note: Note) {
+        val attachments = noteRepository.deleteNoteWithAttachments(note)
+
         try {
-            val attachments = noteRepository.getAttachmentsForNote(note.id)
             if (attachments.isNotEmpty()) {
                 AttachmentFiles.deleteAll(context, attachments)
-                noteRepository.deleteAttachments(attachments.map { it.id })
-                AttachmentRegistry.remove(attachments.map { it.id })
+                attachmentIndex.remove(attachments.map { it.id })
             }
-
+            // A vault note is only rewritten when it is opened, so a password-protected note
+            // deleted from the trash can still hold `?audio(...)` paths in its decrypted body.
             val text = "${note.name} ${note.description}"
-            val legacyPaths = com.ezpnix.writeon.presentation.screens.edit.components.AudioRecorderManager.extractAudioPaths(text)
+            val legacyPaths = LegacyAudioSyntax.extractAudioPaths(text)
             if (legacyPaths.isNotEmpty()) {
-                com.ezpnix.writeon.presentation.screens.edit.components.AudioRecorderManager.deleteAudioFiles(legacyPaths, context)
+                LegacyAudioSyntax.deleteAudioFiles(legacyPaths, context)
             }
-        } catch (_: Throwable) {}
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.w("NoteUseCase", "Could not clean up every file of note ${note.id}", e)
+        }
     }
 
     fun getTrashedNotesFlow(): Flow<List<Note>> = noteRepository.getTrashedNotes()
@@ -402,7 +459,9 @@ class NoteUseCase @Inject constructor(
             if (rewriteBody && note != null) {
                 val updated = AttachmentSyntax.removeId(note.description, id)
                 if (updated != note.description) {
-                    noteRepository.updateNote(note.copy(description = updated))
+                    // Body-only update: the note may have gained new text since this row was read,
+                    // and a full-row write would put the old text back.
+                    noteRepository.updatePlainDescription(note.id, updated)
                 }
             }
         }
@@ -431,19 +490,32 @@ class NoteUseCase @Inject constructor(
             if (id in AttachmentSyntax.idsIn(note.description)) return@withContext
             val line = AttachmentSyntax.lineFor(attachment.id, attachment.type, attachment.caption)
             val separator = if (note.description.isEmpty() || note.description.endsWith("\n")) "" else "\n"
-            noteRepository.updateNote(
-                note.copy(description = note.description + separator + line)
-            )
+            noteRepository.updatePlainDescription(note.id, note.description + separator + line)
         }
     }
 
-    /** Empties one attachment from the recycle bin: row, file and registry entry all go. */
+    /**
+     * Empties one attachment from the recycle bin: row, file and registry entry all go.
+     *
+     * The file's fate decides the row's: if the file is gone (or was never there) the row can go
+     * too, but a file that still exists and refuses to be deleted - a path outside the guard
+     * roots, a permission problem - keeps its row. Dropping the row anyway orphaned the file
+     * forever: the registry entry went with it, so nothing in the app could ever find it again.
+     */
     suspend fun permanentlyDeleteAttachment(id: String) {
         withContext(Dispatchers.IO) {
             val attachment = noteRepository.getAttachmentById(id) ?: return@withContext
-            AttachmentFiles.delete(context, attachment)
+            val file = java.io.File(attachment.path)
+            val fileStillThere = file.exists() && !AttachmentFiles.delete(context, attachment)
+            if (fileStillThere) {
+                Log.w(
+                    "NoteUseCase",
+                    "Attachment file ${file.name} could not be deleted; keeping its row so it can be retried"
+                )
+                return@withContext
+            }
             noteRepository.deleteAttachments(listOf(id))
-            AttachmentRegistry.remove(listOf(id))
+            attachmentIndex.remove(listOf(id))
         }
     }
 }

@@ -76,7 +76,6 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -230,7 +229,7 @@ fun EditNoteView(
             Surface(
                 shape = RoundedCornerShape(24.dp),
                 color = MaterialTheme.colorScheme.inverseSurface,
-                tonalElevation = 6.dp
+                tonalElevation = 0.dp
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
@@ -647,7 +646,7 @@ fun EditScreen(
             Surface(
                 shape = appCornerShape(CornerFraction.MEDIUM),
                 color = MaterialTheme.colorScheme.surfaceContainerLow,
-                tonalElevation = 1.dp,
+                tonalElevation = 0.dp,
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(bottom = 4.dp)
@@ -721,9 +720,10 @@ private fun LivePreviewPane(viewModel: EditViewModel, settingsViewModel: Setting
     val settings = settingsViewModel.settings.value
     val body = viewModel.noteDescription.value.text
     val previewScrollState = rememberScrollState()
-    val rendered by produceState(initialValue = body, key1 = body) {
+    var rendered by remember { mutableStateOf(body) }
+    LaunchedEffect(body) {
         delay(LIVE_PREVIEW_DEBOUNCE_MS)
-        value = body
+        rendered = body
     }
 
     Column(
@@ -895,9 +895,11 @@ fun MarkdownBox(
                 if (maxHeight != null) base.heightIn(max = maxHeight) else base
             }
             .background(MaterialTheme.colorScheme.surface),
-        elevation = CardDefaults.cardElevation(defaultElevation = if (!isExtremeAmoled) 6.dp else 0.dp),
+        // The editor body used to float above the page on a 6dp shadow. A flat surface with the
+        // surrounding container colour reads as one sheet, which is the Material 3 intent.
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
         colors = CardDefaults.elevatedCardColors(
-            containerColor = MaterialTheme.colorScheme.surface
+            containerColor = if (isExtremeAmoled) Color.Black else MaterialTheme.colorScheme.surface
         )
     ) {
         content()
@@ -966,10 +968,8 @@ private fun RenderButton(
             }
         },
         icon = icon,
-        elevation = when {
-            isExtremeAmoled || isMinimalistic -> 0.dp
-            pagerState.currentPage != pageIndex -> 6.dp
-            else -> 12.dp
-        }
+        // Depth is expressed by the tonal container the button sits on; a per-page shadow made the
+        // three page buttons look like a pile of floating chips.
+        elevation = 0.dp
     )
 }

@@ -10,8 +10,8 @@ import androidx.lifecycle.viewModelScope
 import com.ezpnix.writeon.R
 import com.ezpnix.writeon.domain.model.Note
 import com.ezpnix.writeon.domain.usecase.NoteUseCase
-import com.ezpnix.writeon.presentation.components.DecryptionResult
-import com.ezpnix.writeon.presentation.components.EncryptionHelper
+import com.ezpnix.writeon.core.security.DecryptionResult
+import com.ezpnix.writeon.core.security.EncryptionHelper
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
@@ -71,12 +71,14 @@ class HomeViewModel @Inject constructor(
     fun pinOrUnpinNotes() {
         // Every selected note is set to the same target so a mixed selection pins as a group.
         val pinTo = selectedNotes.any { !it.pinned }
-        updateSelectedNotes { it.copy(pinned = pinTo) }
+        // Flag-only writes: writing the whole row back would restore the body this screen read
+        // before the editor saved.
+        mutateSelection { notes -> notes.forEach { noteUseCase.updatePinStatus(it.id, pinTo) } }
     }
 
     fun pinOrUnpinNote(note: Note) {
         viewModelScope.launch(Dispatchers.IO) {
-            noteUseCase.batchUpdateNotes(listOf(note.copy(pinned = !note.pinned)))
+            noteUseCase.updatePinStatus(note.id, !note.pinned)
             launch(Dispatchers.Main) {
                 noteUseCase.observe()
             }
@@ -84,20 +86,10 @@ class HomeViewModel @Inject constructor(
     }
 
     fun moveSelectedNotesToTrash() {
-        updateSelectedNotes { it.copy(trashed = true) }
+        mutateSelection { notes -> notes.forEach { noteUseCase.setTrashed(it.id, true) } }
     }
 
-    /**
-     * Shared write path for the selection toolbar: applies [update] to a snapshot of the current
-     * selection, persists it as one batch and refreshes the list on the main thread, clearing the
-     * selection afterwards. Pin, trash and restore all used to carry their own copy of this
-     * coroutine scaffolding.
-     */
-    private fun updateSelectedNotes(update: (Note) -> Note) = mutateSelection { notes ->
-        noteUseCase.batchUpdateNotes(notes.map(update))
-    }
-
-    /** Same write path for toolbar actions that act per note instead of persisting a batch. */
+    /** Shared write path for toolbar actions that act per note instead of persisting a batch. */
     private fun forEachSelectedNote(action: suspend (Note) -> Unit) = mutateSelection { notes ->
         notes.forEach { action(it) }
     }
@@ -124,7 +116,8 @@ class HomeViewModel @Inject constructor(
                     }
                 }.filter { it.tags != selectedNotes.find { n -> n.id == it.id }?.tags }
                 if (updatedNotes.isNotEmpty()) {
-                    noteUseCase.batchUpdateNotes(updatedNotes)
+                    // Tags only; the bodies stay as the database has them.
+                    updatedNotes.forEach { noteUseCase.setTags(it.id, it.tags) }
                     launch(Dispatchers.Main) {
                         Toast.makeText(
                             context,
@@ -173,7 +166,8 @@ class HomeViewModel @Inject constructor(
                 }
             }.filter { it.tags != selectedNotes.find { n -> n.id == it.id }?.tags }
             if (updatedNotes.isNotEmpty()) {
-                noteUseCase.batchUpdateNotes(updatedNotes)
+                // Tags only; never write back a body from this selection snapshot.
+                updatedNotes.forEach { noteUseCase.setTags(it.id, it.tags) }
                 // The tag index has to be rebuilt from the persisted rows, so re-read them instead
                 // of patching in memory. `first()` is a suspend call, so this reads the flow
                 // without blocking a thread the way `runBlocking` did.
@@ -248,6 +242,20 @@ class HomeViewModel @Inject constructor(
         }
     }
 
+    /**
+     * Moves one attachment shown on a home card to the recycle bin.
+     *
+     * The use case also removes the `attachment://` line from the note body, so the card stops
+     * showing the recording and reopening the note does not resurrect it. The list is refreshed
+     * afterwards because the note itself changed, not only the attachment row.
+     */
+    fun deleteAttachment(id: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            noteUseCase.trashAttachment(id)
+            launch(Dispatchers.Main) { noteUseCase.observe() }
+        }
+    }
+
     /** Empties one attachment from the recycle bin: row and file both go. */
     fun permanentlyDeleteAttachment(id: String) {
         viewModelScope.launch(Dispatchers.IO) {
@@ -256,7 +264,8 @@ class HomeViewModel @Inject constructor(
     }
 
     fun restoreSelectedNotes() {
-        updateSelectedNotes { it.copy(trashed = false) }
+        // Flag-only write: restoring from the trash must not rewrite any body from this snapshot.
+        mutateSelection { notes -> notes.forEach { noteUseCase.setTrashed(it.id, false) } }
     }
 
     fun permanentlyDeleteSelectedNotes() {

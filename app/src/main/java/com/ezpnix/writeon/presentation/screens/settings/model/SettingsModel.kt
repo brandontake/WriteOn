@@ -15,6 +15,7 @@ import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import com.ezpnix.writeon.BuildConfig
 import com.ezpnix.writeon.R
+import com.ezpnix.writeon.data.local.database.NoteCrypto
 import com.ezpnix.writeon.data.repository.BackupResult
 import com.ezpnix.writeon.data.repository.ImportExportRepository
 import com.ezpnix.writeon.data.repository.SettingsRepositoryImpl
@@ -35,6 +36,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import org.xmlpull.v1.XmlPullParser
 import org.xmlpull.v1.XmlPullParserException
+import java.io.File
 import java.io.IOException
 import java.util.concurrent.TimeUnit
 import javax.inject.Inject
@@ -49,6 +51,7 @@ class SettingsViewModel @Inject constructor(
     private val settingsRepository: SettingsRepositoryImpl,
     @ApplicationContext private val context: Context,
     private val settingsPreferences: SettingsPreferences,
+    private val noteCrypto: NoteCrypto,
 ) : ViewModel() {
 
     private companion object {
@@ -155,12 +158,26 @@ class SettingsViewModel @Inject constructor(
         }
     }
 
+    /**
+     * The scratchpad shares the note table's Keystore key, so it is encrypted at rest exactly like
+     * a note body. It used to be written into SharedPreferences as plain text, which made the
+     * device backup of that file readable and defeated the database encryption. A value written
+     * before this change has no `w1:` marker, so [NoteCrypto.openOrNull] still returns it and the
+     * next save upgrades it in place.
+     */
     fun saveNote(note: String) {
-        sharedPreferences.edit().putString("note", note).apply()
+        val stored = runCatching { noteCrypto.seal(note) }.getOrNull()
+        if (stored == null) {
+            // Never fall back to plaintext: failing the save is recoverable, leaking the text is not.
+            showToast(context.getString(R.string.error), context)
+            return
+        }
+        sharedPreferences.edit().putString("note", stored).apply()
     }
 
     fun loadNote(): String {
-        return sharedPreferences.getString("note", "") ?: ""
+        val stored = sharedPreferences.getString("note", "") ?: ""
+        return noteCrypto.openOrNull(stored) ?: ""
     }
 
     fun updatePlaceholder(newText: String) {
@@ -204,6 +221,50 @@ class SettingsViewModel @Inject constructor(
         }
     }
 
+    /**
+     * Imports a backup and suspends until it is done, reporting whether it succeeded.
+     *
+     * The fire-and-forget [onImportBackup] returns before the archive has been decrypted,
+     * extracted and swapped in - which for an archive carrying recordings is seconds, not the
+     * one second the caller used to wait before restarting the process. A restart that lands
+     * mid-restore either reports success for a restore that never finished or installs the
+     * database without its attachments. The caller uses this to restart only on a real success.
+     */
+    suspend fun importBackupAndWait(uri: Uri, context: Context): Boolean {
+        val result = backup.importBackup(uri, password)
+        handleBackupResult(result, context)
+        databaseUpdate.value = true
+        return result is BackupResult.Success
+    }
+
+    /**
+     * The daily automatic backups this device has written, newest first.
+     *
+     * They are encrypted with a key bound to this install (see [com.ezpnix.writeon.core.util.AutoBackupCrypto]),
+     * so the list is only useful here - but "here" is exactly where a corrupted or emptied database
+     * needs fixing.
+     */
+    fun autoBackupFiles(): List<File> {
+        val folder = File(context.filesDir, "BackupFolder")
+        return folder.listFiles()
+            ?.filter { it.isFile && it.name.endsWith(".zip.enc") }
+            ?.sortedByDescending { it.lastModified() }
+            .orEmpty()
+    }
+
+    /**
+     * Restores the chosen automatic backup and restarts the app so nothing keeps a handle on the
+     * replaced database. The restart only happens after the restore reported success.
+     */
+    fun onRestoreAutoBackup(file: File, context: Context, onFinished: (Boolean) -> Unit) {
+        viewModelScope.launch {
+            val result = backup.importAutoBackup(file)
+            handleBackupResult(result, context)
+            databaseUpdate.value = true
+            onFinished(result is BackupResult.Success)
+        }
+    }
+
     private fun getLocaleListFromXml(context: Context): LocaleListCompat {
         val tagsList = mutableListOf<CharSequence>()
         try {
@@ -236,7 +297,11 @@ class SettingsViewModel @Inject constructor(
     private fun handleBackupResult(result: BackupResult, context: Context) {
         when (result) {
             is BackupResult.Success -> showToast(context.getString(R.string.backup_successful), context)
-            is BackupResult.Error -> showToast(context.getString(R.string.error), context)
+            // The message is carried through (e.g. the auto-backup "could not be decrypted, wrong
+            // device" text); showing only a generic "error" threw that away and left a user
+            // restoring a device-bound archive with no clue why it failed.
+            is BackupResult.Error ->
+                showToast(result.message.ifBlank { context.getString(R.string.error) }, context)
             BackupResult.BadPassword -> showToast(context.getString(R.string.database_restore_error), context)
         }
     }
@@ -259,24 +324,53 @@ class SettingsViewModel @Inject constructor(
     private val gson = Gson()
     private val listType = TypeToken.getParameterized(List::class.java, Flashcard::class.java).type
 
+    /**
+     * True while the stored flashcards could not be parsed.
+     *
+     * An empty list and an unreadable list used to look the same, so one JSON error made the next
+     * save persist the empty list over the user's whole deck. With this flag the save path refuses
+     * to wipe what it could not read.
+     */
+    private var flashcardsUnreadable = false
+
     fun loadFlashcards(): List<Flashcard> {
         val json = flashPrefs.getString("flashcards_key", null)
-        return if (json != null) {
-            try {
-                gson.fromJson<List<Flashcard>>(json, listType)
-            } catch (e: Exception) {
-                emptyList()
+        if (json == null) {
+            flashcardsUnreadable = false
+            return emptyList()
+        }
+        return try {
+            @Suppress("UNCHECKED_CAST")
+            val parsed = gson.fromJson<List<Flashcard>>(json, listType) as? List<Flashcard>
+            if (parsed == null) throw IllegalStateException("flashcards JSON did not decode to a list")
+            flashcardsUnreadable = false
+            parsed
+        } catch (e: Exception) {
+            Log.e(TAG, "Could not parse stored flashcards; keeping them out of the save path", e)
+            flashcardsUnreadable = true
+            // Keep a copy of the unreadable payload: overwriting the key is exactly the failure
+            // mode this branch exists to prevent, so the bytes must survive somewhere recoverable.
+            runCatching {
+                flashPrefs.edit().putString("flashcards_key_corrupt", json).apply()
             }
-        } else {
             emptyList()
         }
     }
 
     fun saveFlashcards(newList: List<Flashcard>) {
+        // The stored deck could not be parsed, and this write is the empty list the failed load
+        // produced: saving it would turn "unreadable" into "gone". A non-empty list means the user
+        // is deliberately building a new deck, which is allowed (the old payload stays under
+        // flashcards_key_corrupt either way).
+        if (flashcardsUnreadable && newList.isEmpty()) {
+            Log.w(TAG, "Refusing to overwrite unreadable flashcards with an empty list")
+            return
+        }
         val json = gson.toJson(newList, listType)
         flashPrefs.edit()
             .putString("flashcards_key", json)
             .apply()
+        flashcardsUnreadable = false
     }
 
     val version: String = BuildConfig.VERSION_NAME

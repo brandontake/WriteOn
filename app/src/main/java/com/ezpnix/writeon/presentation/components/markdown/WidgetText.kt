@@ -125,7 +125,16 @@ fun WidgetMarkdownElement(
                 if (path != null) {
                     val file = File(path)
                     if (file.exists()) {
-                        val bitmap = BitmapFactory.decodeFile(path)
+                        // Measure first, decode second: a full-resolution decode ran on every widget
+                        // refresh (screen on included), and one 12 MP photo is a 48 MB allocation in
+                        // the same process as the editor. inSampleSize keeps the peak near a megabyte
+                        // and the size guard below still catches what sampling could not.
+                        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                        BitmapFactory.decodeFile(path, bounds)
+                        val sampled = BitmapFactory.Options().apply {
+                            inSampleSize = sampleSizeFor(bounds.outWidth, bounds.outHeight)
+                        }
+                        val bitmap = BitmapFactory.decodeFile(path, sampled)
                         val maxFileSize = 15552000
                         if (bitmap != null && bitmap.byteCount < maxFileSize) {
                             Image(
@@ -136,7 +145,12 @@ fun WidgetMarkdownElement(
                                     .padding(6.dp)
                                     .wrapContentHeight()
                             )
+                            // Deliberately not recycled: Glance builds the RemoteViews after
+                            // composition and may still read the pixels. The sampled bitmap is at
+                            // most ~1 MB, so letting the collector reclaim it is the safe trade.
                         } else {
+                            // This path never hands the bitmap to Glance, so it can be freed now.
+                            bitmap?.recycle()
                             Text(
                                 text = context.getString(R.string.unsupported_image_size),
                                 style = TextStyle(
@@ -180,6 +194,18 @@ fun WidgetMarkdownElement(
                         )
                     }
                 }
+            }
+            is MathBlock -> {
+                // Glance cannot stack a fraction, so the widget shows the formula's source rather
+                // than a broken layout. The in-app renderer draws it properly.
+                Text(
+                    text = element.expression,
+                    style = TextStyle(
+                        fontSize = fontSize,
+                        fontWeight = weight,
+                        color = color
+                    )
+                )
             }
             is HorizontalRule -> {
                 Text(
@@ -325,3 +351,25 @@ fun MarkdownWidgetCodeBlock(
         }
     )
 }
+
+/**
+ * Power-of-two [BitmapFactory.Options.inSampleSize] that brings a photo down to the widget's
+ * decode budget without going below it.
+ *
+ * Widgets are at most a few hundred pixels wide, so a 12 MP source is always oversampled; capping
+ * the longest side at [WIDGET_IMAGE_MAX_DIMENSION_PX] bounds the decoded bitmap near 1 MB instead
+ * of the 48 MB a full-resolution decode cost on every refresh.
+ */
+private fun sampleSizeFor(width: Int, height: Int): Int {
+    if (width <= 0 || height <= 0) return 1
+    var sample = 1
+    var longest = maxOf(width, height)
+    while (longest / 2 >= WIDGET_IMAGE_MAX_DIMENSION_PX) {
+        sample *= 2
+        longest /= 2
+    }
+    return sample
+}
+
+/** Longest side a widget photo is decoded at; well above any widget cell, far below 12 MP. */
+private const val WIDGET_IMAGE_MAX_DIMENSION_PX = 512

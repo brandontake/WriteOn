@@ -18,9 +18,10 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -281,11 +282,11 @@ private fun LockDialogScaffold(
 /** Keeps the lockout countdown live while the dialog stays open. */
 @Composable
 private fun lockoutAwareMessage(lockManager: LockManager, errorMessage: String?): String? {
-    val remaining by produceState(0, lockManager.lockoutUntil) {
-        while (true) {
-            value = lockManager.lockoutSecondsRemaining()
-            if (value <= 0) break
+    var remaining by remember(lockManager.lockoutUntil) { mutableIntStateOf(lockManager.lockoutSecondsRemaining()) }
+    LaunchedEffect(lockManager.lockoutUntil) {
+        while (remaining > 0) {
             delay(LOCKOUT_TICK_MS)
+            remaining = lockManager.lockoutSecondsRemaining()
         }
     }
     return if (remaining > 0) stringResource(id = R.string.lock_locked_out, remaining) else errorMessage

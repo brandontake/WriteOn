@@ -10,7 +10,20 @@
     <exclude domain="database" path="note-list.db" />
     <exclude domain="database" path="note-list.db-wal" />
     <exclude domain="database" path="note-list.db-shm" />
-    <!-- The database is excluded above, so restored recordings would arrive with no note pointing
-         at them. Leaving them out also keeps the backup small, since voice memos dominate it. -->
+    <!-- The app lock lives in EncryptedSharedPreferences, whose master key is in the device
+         Keystore and does not travel with a backup. Restoring those files on another device used
+         to make LockManager throw on first access; excluding the whole directory also keeps
+         WebDAV credentials and the scratchpad from arriving in a form this device cannot read. -->
+    <exclude domain="sharedpref" path="." />
+    <!-- DataStore files are plain files under files/, not a separate backup domain. -->
+    <exclude domain="file" path="datastore/" />
+    <!-- The database is excluded above, so restored recordings and pictures would arrive with no
+         note pointing at them. Excluding them also keeps the backup small, since media dominates
+         it. The app's own Backup feature packages the database and these files together. -->
     <exclude domain="file" path="audios/" />
+    <exclude domain="file" path="attachments/" />
+    <!-- Automatic backups are encrypted with a device-bound Tink key. Restoring them elsewhere
+         would only produce files nothing can open, and they can grow to several copies of the
+         database. -->
+    <exclude domain="file" path="BackupFolder/" />
 </full-backup-content>

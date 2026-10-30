@@ -33,9 +33,8 @@ class NotesWidget : GlanceAppWidget() {
             ): DataStore<List<Pair<Int, Int>>> {
                 return NotesDataStore(context)
             }
-            override fun getLocation(context: Context, fileKey: String): File {
-                throw NotImplementedError("Not implemented")
-            }
+            override fun getLocation(context: Context, fileKey: String): File =
+                File(context.filesDir, "glance/widget-state/$fileKey.preferences_pb")
         }
 
     override suspend fun provideGlance(context: Context, id: GlanceId) {

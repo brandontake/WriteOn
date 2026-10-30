@@ -49,7 +49,6 @@ import androidx.compose.ui.graphics.layer.CompositingStrategy
 import androidx.compose.ui.graphics.layer.drawLayer
 import androidx.compose.ui.graphics.rememberGraphicsLayer
 import androidx.compose.ui.graphics.toArgb
-import androidx.compose.ui.graphics.toPixelMap
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
@@ -98,8 +97,8 @@ private const val CAPTURE_FRAMES = 3
 private const val CAPTURE_ATTEMPTS = 3
 
 /** Grid used to spot a blank capture without copying the whole page. */
-private const val BLANK_SAMPLE_COLUMNS = 9
-private const val BLANK_SAMPLE_ROWS = 15
+private const val BLANK_SAMPLE_COLUMNS = 32
+private const val BLANK_SAMPLE_ROWS = 64
 
 /**
  * Samples that must differ from the background before a page counts as drawn.
@@ -111,7 +110,7 @@ private const val BLANK_SAMPLE_ROWS = 15
 private const val BLANK_MIN_VISIBLE_SAMPLES = 1
 
 /** Channel tolerance when comparing a sampled pixel with the container colour. */
-private const val COLOR_TOLERANCE = 0.02f
+private const val COLOR_TOLERANCE = 0.01f
 
 /** Far enough off screen that the capture is never visible, while still being drawn. */
 private const val OFF_SCREEN_X = -200_000
@@ -136,6 +135,45 @@ private const val MAX_EXPORT_PIXELS = 8_000_000L
 private const val IMAGE_LOAD_TIMEOUT_MS = 5_000L
 
 /**
+ * The bottom of the pixels a note actually draws, in the capture's coordinate space.
+ *
+ * The measured column height includes [EXPORT_PADDING] at both ends, but the strip below the footer
+ * holds nothing. Counting it as content produced one extra page that was nothing but background -
+ * the trailing blank page users saw after the real last page.
+ */
+internal fun exportContentBottomPx(contentHeightPx: Int, bottomPaddingPx: Int): Int =
+    (contentHeightPx - bottomPaddingPx.coerceAtLeast(0)).coerceAtLeast(0)
+
+/**
+ * Number of pages a note of [contentHeightPx] needs at [pageHeightPx].
+ *
+ * [contentHeightPx] is the natural height of the whole column, including the export padding; the
+ * page count is measured against the content bottom instead so a note that ends inside the bottom
+ * padding is not given a page that only holds that padding.
+ */
+internal fun exportPageCount(
+    contentHeightPx: Int,
+    pageHeightPx: Int,
+    bottomPaddingPx: Int
+): Int {
+    if (contentHeightPx <= 0 || pageHeightPx <= 0) return 1
+    val contentBottomPx = exportContentBottomPx(contentHeightPx, bottomPaddingPx)
+    if (contentBottomPx <= 0) return 1
+    return ((contentBottomPx + pageHeightPx - 1) / pageHeightPx).coerceAtLeast(1)
+}
+
+/** Whether page [pageIndex] starts before the last drawn pixel of the note. */
+internal fun exportPageHasContent(
+    pageIndex: Int,
+    pageHeightPx: Int,
+    contentBottomPx: Int
+): Boolean {
+    if (pageIndex <= 0) return contentBottomPx > 0
+    if (pageHeightPx <= 0) return contentBottomPx > 0
+    return pageIndex.toLong() * pageHeightPx < contentBottomPx
+}
+
+/**
  * Renders a note exactly the way the preview shows it and records it into an [ImageBitmap].
  *
  * The content is laid out at its natural height (the caller positions it off screen), so the
@@ -158,13 +196,16 @@ fun NoteImageCapture(
      */
     pageHeightPx: Int = 0,
     pageIndex: Int = 0,
+    /** Total pages in this export; the last one may be dropped when it holds no content. */
+    pageCount: Int = 1,
     /** Natural height of the note's column, reported once measured. */
     onMeasuredHeight: (Int) -> Unit = {},
     /** False for the measuring pass, which must not record a bitmap of the whole note. */
     captureEnabled: Boolean = true,
     /** Called instead of [onCaptured] when the page came out empty after every retry. */
     onBlank: () -> Unit = {},
-    onCaptured: (ImageBitmap) -> Unit,
+    /** Receives the captured bitmap and the page index it belongs to. */
+    onCaptured: (ImageBitmap, Int) -> Unit,
     onImageLoaded: (String) -> Unit = {},
     onFailed: (Throwable) -> Unit = {},
     modifier: Modifier = Modifier
@@ -283,6 +324,7 @@ fun NoteImageCapture(
         noteTitle,
         noteBody,
         pageIndex,
+        pageCount,
         contentHeightPx,
         pageHeightPx,
         windowHeightPx,
@@ -296,12 +338,18 @@ fun NoteImageCapture(
         // Wait until the window itself has the page height. Rounding through dp can be off by a
         // pixel, hence the tolerance.
         if (pageHeightPx > 0 && abs(windowHeightPx - pageHeightPx) > 2) return@LaunchedEffect
-        if (pageHeightPx > 0 && pageIndex * pageHeightPx >= contentHeightPx) return@LaunchedEffect
+        val bottomPaddingPx = with(density) { EXPORT_PADDING.roundToPx() }
+        val contentBottomPx = exportContentBottomPx(contentHeightPx, bottomPaddingPx)
+        if (pageHeightPx > 0 && !exportPageHasContent(pageIndex, pageHeightPx, contentBottomPx)) {
+            return@LaunchedEffect
+        }
 
-        // The first page always carries the title, so an empty bitmap there is a failure rather than
-        // a legitimate sliver: retry a few frames first, then report it instead of saving a blank
-        // file. Later pages are accepted as they are.
+        // The first page always carries the title and the last page is the end of the note, so an
+        // empty bitmap there is a failure rather than a legitimate sliver: retry a few frames
+        // first, then report it instead of saving a blank file. A blank middle page is kept - it
+        // can be a deliberate run of empty lines.
         val background = containerColor.toArgb()
+        val checkForBlank = pageIndex == 0 || (pageCount > 1 && pageIndex == pageCount - 1)
         var attempt = 0
         while (true) {
             repeat(CAPTURE_FRAMES) { withFrameNanos { } }
@@ -313,9 +361,9 @@ fun NoteImageCapture(
                 return@LaunchedEffect
             }
             attempt++
-            val blank = pageIndex == 0 && captured.looksBlank(background)
+            val blank = checkForBlank && captured.looksBlank(background)
             if (!blank) {
-                onCaptured(captured)
+                onCaptured(captured, pageIndex)
                 return@LaunchedEffect
             }
             if (attempt >= CAPTURE_ATTEMPTS) {
@@ -329,9 +377,15 @@ fun NoteImageCapture(
 /**
  * Whether a captured page holds nothing but the container colour.
  *
- * Sampling a grid of single pixels is deliberately cheap: a page can be 8 MP, and copying it just to
- * count colours would double the memory an export needs. A hardware backed bitmap refuses pixel
- * access; that is treated as "not blank" so an unreadable layer is still saved rather than dropped.
+ * The page is downscaled to a small fixed grid before it is inspected. Sampling single pixels of a
+ * 1080 x 7000 page gave only a handful of hits and could miss a short last page entirely, which
+ * made the blank guard drop real content. Downscaling averages every source pixel into the grid, so
+ * even one line of text survives; the scaled copy is tiny and recycled immediately. The graphics
+ * layer records only the note's children, so empty space comes back transparent rather than filled
+ * with the container colour; transparent samples are therefore treated as background. A layer that
+ * does record the background is handled by the RGB comparison. A hardware backed bitmap refuses
+ * pixel access; that is treated as "not blank" so an unreadable layer is still saved rather than
+ * dropped.
  */
 private fun ImageBitmap.looksBlank(backgroundColor: Int): Boolean {
     if (width <= 0 || height <= 0) return true
@@ -339,22 +393,38 @@ private fun ImageBitmap.looksBlank(backgroundColor: Int): Boolean {
     val backgroundGreen = ((backgroundColor shr 8) and 0xFF) / 255f
     val backgroundBlue = (backgroundColor and 0xFF) / 255f
     return try {
+        val source = asAndroidBitmap()
+        val scaled = Bitmap.createScaledBitmap(
+            source,
+            BLANK_SAMPLE_COLUMNS,
+            BLANK_SAMPLE_ROWS,
+            true
+        )
         var visible = 0
-        for (row in 0 until BLANK_SAMPLE_ROWS) {
-            val y = (((row + 0.5f) / BLANK_SAMPLE_ROWS) * height).toInt().coerceIn(0, height - 1)
-            for (column in 0 until BLANK_SAMPLE_COLUMNS) {
-                val x = (((column + 0.5f) / BLANK_SAMPLE_COLUMNS) * width).toInt()
-                    .coerceIn(0, width - 1)
-                val pixel = toPixelMap(x, y, 1, 1)[0, 0]
-                if (abs(pixel.red - backgroundRed) > COLOR_TOLERANCE ||
-                    abs(pixel.green - backgroundGreen) > COLOR_TOLERANCE ||
-                    abs(pixel.blue - backgroundBlue) > COLOR_TOLERANCE
+        for (y in 0 until scaled.height) {
+            for (x in 0 until scaled.width) {
+                val pixel = scaled.getPixel(x, y)
+                // Empty pixels in the recorded layer have no alpha at all. Comparing only RGB
+                // counted them as drawn content because a transparent pixel reports 0,0,0, which
+                // is far from a light surface colour - the reason the blank guard never fired.
+                val alpha = ((pixel ushr 24) and 0xFF) / 255f
+                if (alpha <= 0.01f) continue
+                val red = ((pixel shr 16) and 0xFF) / 255f
+                val green = ((pixel shr 8) and 0xFF) / 255f
+                val blue = (pixel and 0xFF) / 255f
+                if (abs(red - backgroundRed) > COLOR_TOLERANCE ||
+                    abs(green - backgroundGreen) > COLOR_TOLERANCE ||
+                    abs(blue - backgroundBlue) > COLOR_TOLERANCE
                 ) {
                     visible++
-                    if (visible >= BLANK_MIN_VISIBLE_SAMPLES) return false
+                    if (visible >= BLANK_MIN_VISIBLE_SAMPLES) {
+                        if (scaled !== source) scaled.recycle()
+                        return false
+                    }
                 }
             }
         }
+        if (scaled !== source) scaled.recycle()
         true
     } catch (_: Throwable) {
         false
@@ -411,6 +481,7 @@ fun NoteImageSaveHost(
         val widthPx = with(density) { EXPORT_WIDTH.roundToPx() }.coerceAtLeast(1)
         (MAX_EXPORT_PIXELS / widthPx).toInt().coerceAtLeast(1)
     }
+    val bottomPaddingPx = remember(density) { with(density) { EXPORT_PADDING.roundToPx() } }
 
     var measured by remember { mutableStateOf(false) }
     // Images are decoded before the first capture. The capture only waits a few frames, and an
@@ -449,6 +520,10 @@ fun NoteImageSaveHost(
     var finished by remember { mutableStateOf(false) }
     // Set on the first capture; after that the page count and the offsets must not move anymore.
     var pagesLocked by remember(noteBody) { mutableStateOf(false) }
+    // A recomposition can restart the capture effect (a late image changes the measured height, for
+    // example). Only the first callback for a page may be saved, otherwise the same bitmap would be
+    // written twice and the page after it skipped.
+    var lastCapturedPage by remember(noteBody) { mutableIntStateOf(-1) }
     val savedLocations = remember { mutableStateListOf<String>() }
 
     // Report the outcome exactly once and always leave the saving state, whether the capture
@@ -501,27 +576,30 @@ fun NoteImageSaveHost(
             cornerRadius = cornerRadius,
             // The first pass only measures: it renders nothing, and its height decides whether the
             // note fits on one page or has to be cut into several.
-            captureEnabled = measured && preloaded && (imagesReady || imagesTimedOut),
+            captureEnabled = measured && preloaded && (imagesReady || imagesTimedOut) && !finished,
             pageHeightPx = if (pageCount > 1) pageHeightPx else 0,
             pageIndex = pageIndex,
+            pageCount = pageCount,
             onMeasuredHeight = { height ->
                 if (!pagesLocked) {
                     // Recompute for every measurement until the first capture: the height grows as
                     // images finish decoding, and a page count locked in before that would leave
-                    // the tail of the note on no page at all.
-                    val pages = ((height + pageHeightPx - 1) / pageHeightPx).coerceAtLeast(1)
+                    // the tail of the note on no page at all. The bottom padding is not content,
+                    // so it must not add a trailing page of its own.
+                    val pages = exportPageCount(height, pageHeightPx, bottomPaddingPx)
                     if (pages != pageCount) pageCount = pages
                     measured = true
                 }
             },
-            onCaptured = { bitmap ->
-                if (!finished) {
+            onCaptured = { bitmap, capturedPage ->
+                if (!finished && capturedPage == pageIndex && capturedPage != lastCapturedPage) {
                     // From the first capture on, every page must use the offsets the first page was
                     // laid out with, so the page count is no longer allowed to change.
                     pagesLocked = true
+                    lastCapturedPage = capturedPage
                     val base = NoteImageSaver.fileBaseName(noteTitle)
                     val fileName = if (pageCount > 1) {
-                        base + "_" + (pageIndex + 1) + "of" + pageCount
+                        base + "_" + (capturedPage + 1) + "of" + pageCount
                     } else {
                         base
                     }
@@ -545,11 +623,11 @@ fun NoteImageSaveHost(
                             )
                         } else {
                             savedLocations.add(location)
-                            if (pageIndex + 1 < pageCount) {
+                            if (capturedPage + 1 < pageCount) {
                                 // Recomposition moves the window down the note; that capture writes
                                 // the next page. Pages are written one at a time so only one bitmap
                                 // is alive at once.
-                                pageIndex++
+                                pageIndex = capturedPage + 1
                             } else {
                                 reportSuccess()
                             }

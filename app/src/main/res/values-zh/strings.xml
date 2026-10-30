@@ -90,7 +90,7 @@
     <string name="backup">备份</string>
     <string name="restore">恢复</string>
     <string name="auto_backup">自动备份</string>
-    <string name="auto_backup_description">自动保存到 Android/data 文件夹（受当前 Android 政策限制，Android 10 及以上设备需 ROOT 才能访问）</string>
+    <string name="auto_backup_description">每天将笔记的加密副本保存到应用私有存储，仅保留最新 7 份。可在 设置 → 云端 中恢复，且只能在本设备恢复——加密密钥永不离开手机</string>
     <string name="backup_dropdown">备份</string>
     <string name="backup_description">将全部笔记存入或恢复到 zip 文件。注意：此操作会替换现有全部笔记并清空回收站。</string>
     <string name="restore_description">从 zip 文件恢复笔记</string>
@@ -121,6 +121,7 @@
     <string name="biometric_authentication">生物识别认证</string>
     <string name="biometric_authentication_description">使用指纹或面容解锁 WriteOn</string>
     <string name="vault_description">启用额外的保护层</string>
+    <string name="vault_locked_cannot_save">保存此笔记前请先解锁保险箱</string>
     <string name="database">数据库</string>
     <string name="not_supported">暂不支持</string>
     <string name="note_details">笔记详情</string>
@@ -206,6 +207,10 @@
     <string name="calculator_result">结果</string>
     <string name="cd_back">返回</string>
     <string name="cd_copy_and_save">复制并保存</string>
+    <string name="cd_copy">复制笔记到剪贴板</string>
+    <string name="cd_toolbar_prev_page">格式工具，上一页</string>
+    <string name="cd_toolbar_next_page">格式工具，下一页</string>
+    <string name="translate_copied_hint">笔记已复制到剪贴板——请粘贴到翻译工具中</string>
     <string name="cd_details">详情</string>
     <string name="cd_guide">指南</string>
     <string name="cd_info">信息</string>
@@ -244,7 +249,19 @@
     <string name="cloud_webdav_backup_started">已开始 WebDAV 备份</string>
     <string name="cloud_webdav_restore_completed">WebDAV 恢复完成！应用即将重启。</string>
     <string name="cloud_webdav_restore_started">已开始 WebDAV 恢复</string>
+    <string name="cloud_webdav_restore_confirm_title">从 WebDAV 恢复？</string>
+    <string name="cloud_webdav_restore_confirm_message">本机当前的全部笔记将被服务器上的备份覆盖，此操作无法撤销。如需保留当前笔记，请先导出本地备份。</string>
+    <string name="cloud_local_restore_confirm_title">恢复此备份？</string>
+    <string name="cloud_local_restore_confirm_message">本机当前的全部笔记将被所选备份覆盖，此操作无法撤销。如需保留当前笔记，请先导出本地备份。</string>
+    <string name="auto_backup_restore">恢复自动备份</string>
+    <string name="auto_backup_restore_desc">用本机最新一次每日自动备份恢复笔记。自动备份使用不离开本设备的密钥加密，因此只能在本设备恢复；换新手机请使用 WebDAV 或本地备份。</string>
+    <string name="auto_backup_restore_confirm_title">恢复自动备份？</string>
+    <string name="auto_backup_restore_confirm_message">本机当前的全部笔记将被最新的自动备份（%1$s 生成）覆盖，此操作无法撤销。</string>
+    <string name="auto_backup_restore_pick">选择自动备份</string>
+    <string name="auto_backup_none">本设备上还没有自动备份。开启自动备份后，第二天即可在此恢复。</string>
+    <string name="auto_backup_decrypt_failed">无法解密此自动备份：它可能由其他安装或设备创建，或文件已损坏。</string>
     <string name="cloud_webdav_saved">WebDAV 凭据已保存！</string>
+    <string name="cloud_webdav_cleartext_warning">该服务器使用明文 http，用户名和密码将以未加密方式传输。请尽量使用 https。</string>
     <string name="cloud_webdav_settings">WebDAV 设置</string>
     <string name="cloud_webdav_url">WebDAV 地址</string>
     <string name="columns_dialog_count">%1$d 列</string>
@@ -274,7 +291,7 @@
     <string name="expand_collapse">展开/收起</string>
     <string name="export_failed">导出失败：%1$s</string>
     <string name="export_successful">导出成功</string>
-    <string name="faq_a_auto_backup_files">它们目前位于 Android/data 文件夹中。遗憾的是，受当前 Android 政策限制，部分用户无法访问该目录。</string>
+    <string name="faq_a_auto_backup_files">自动备份以加密形式保存在应用私有存储中，可在 设置 → 云端 恢复。由于加密密钥永不离开你的设备，它们只是本机的保险；换新手机请使用 WebDAV 或本地备份。</string>
     <string name="faq_a_delete_note">在首页长按一条笔记即可看到可用选项。你还能发现其他隐藏功能，例如左右滑动来编辑/预览笔记。</string>
     <string name="faq_a_developer">WriteOn 由 @3zpnix 创作——一名喜欢制作小型开源应用与游戏的电子工程专业大学生。本版本由 @Brandontake 维护，这是一名 vibecoding 初学者，为自身需求 fork 并加以改进。</string>
     <string name="faq_a_feature_requests">当然！欢迎任何反馈或改进建议。开发者通常会在一两天内回复。</string>
@@ -445,6 +462,8 @@
     <string name="return_to_home">返回主页</string>
     <string name="stay_here">留在此页</string>
     <string name="attachment_missing">附件暂时无法打开</string>
+    <string name="latex_rendering">渲染 LaTeX 公式</string>
+    <string name="latex_rendering_description">把 $...$ 行内公式和 $$...$$ 块级公式显示为数学公式，而不是原样文本。默认关闭。</string>
     <string name="live_attachment_preview">附件即时渲染（实验）</string>
     <string name="live_attachment_preview_description">编辑时把图片和录音显示成真正的块，正文底层仍然是普通 Markdown。</string>
     <string name="attachment_actions">附件操作</string>
@@ -472,6 +491,10 @@
     <string name="cloud_conflict_title">已单独保留一份备份</string>
     <string name="cloud_conflict_desc">远端备份在这台设备上次上传后已被改动，因此你的备份没有覆盖它，而是以另一个文件名保留在旁边。需要合并时可以把这一份下载回来。</string>
     <string name="cloud_conflict_copy">复制链接</string>
+    <string name="cloud_conflict_restore">恢复此副本</string>
+    <string name="cloud_conflict_take_over">覆盖远端</string>
+    <string name="cloud_conflict_take_over_confirm_title">覆盖远端备份？</string>
+    <string name="cloud_conflict_take_over_confirm_message">服务器上的备份将被本设备的笔记替换，此操作无法撤销。仅当本设备持有你想要保留的笔记时才这样做。</string>
     <string name="cloud_conflict_dismiss">知道了</string>
     <string name="msg_image_export_blank">导出结果是空白，没有保存任何图片。请重试，或先把便签导出为文本。</string>
     <string name="msg_image_saved_pages">已保存 %1$d 张图片，第一张：%2$s</string>

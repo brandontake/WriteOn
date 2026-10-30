@@ -62,7 +62,8 @@ fun NotesGrid(
     animationFinished: (Int) -> Unit,
     onPinNote: (Note) -> Unit = {},
     onTagNote: (Note) -> Unit = {},
-    swipeEnabled: Boolean = true
+    swipeEnabled: Boolean = true,
+    onAttachmentDelete: ((String) -> Unit)? = null
 ) {
     // Splitting the note list is pure work over the whole list: keep it tied to `notes` instead of
     // redoing the partition on every recomposition (selection change, animation frame, FAB, ...).
@@ -191,7 +192,8 @@ fun NotesGrid(
                         }
                     },
                     onNoteUpdate = onNoteUpdate,
-                    onLongClick = { handleLongClick(selectedNotes, note) }
+                    onLongClick = { handleLongClick(selectedNotes, note) },
+                    onAttachmentDelete = onAttachmentDelete
                 )
             }
         }
@@ -216,7 +218,8 @@ fun NotesGrid(
                     isBorderEnabled = note.id in selectedNoteIds,
                     onShortClick = { handleShortClick(selectedNotes, note, onNoteClicked) },
                     onNoteUpdate = onNoteUpdate,
-                    onLongClick = { handleLongClick(selectedNotes, note) }
+                    onLongClick = { handleLongClick(selectedNotes, note) },
+                    onAttachmentDelete = onAttachmentDelete
                 )
             }
             if (isDeleteClicked && note.id in selectedNoteIds) {
@@ -252,7 +255,7 @@ fun NotesGrid(
                     Text(
                         modifier = Modifier.padding(bottom = 16.dp),
                         text = stringResource(id = R.string.pinned).uppercase(),
-                        style = TextStyle(fontSize = 10.sp, color = MaterialTheme.colorScheme.secondary)
+                        style = TextStyle(fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     )
                 }
                 // Stable ids keep each card's state and its enter/exit animation attached to the note
@@ -269,7 +272,7 @@ fun NotesGrid(
                         Text(
                             modifier = Modifier.padding(vertical = 16.dp),
                             text = stringResource(id = R.string.others).uppercase(),
-                            style = TextStyle(fontSize = 10.sp, color = MaterialTheme.colorScheme.secondary)
+                            style = TextStyle(fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         )
                     }
                 }

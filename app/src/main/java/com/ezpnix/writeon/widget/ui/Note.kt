@@ -109,7 +109,14 @@ fun SelectedNote(note: Note, noteUseCase: NoteUseCase, widgetId: Int) {
                             } else {
                                 updated
                             }
-                            noteUseCase.addNote(note.copy(name = newName, description = newDesc))
+                            // Saving a vault note without a loaded passphrase must fail loudly (see
+                            // NoteUseCase.encryptNote). In a widget coroutine an uncaught throw would
+                            // take the process down, so it is reported here instead of crashing.
+                            runCatching {
+                                noteUseCase.addNote(note.copy(name = newName, description = newDesc))
+                            }.onFailure { error ->
+                                android.util.Log.e("WidgetNote", "Could not save the widget edit", error)
+                            }
                             noteUseCase.observe()
                         }
                     }

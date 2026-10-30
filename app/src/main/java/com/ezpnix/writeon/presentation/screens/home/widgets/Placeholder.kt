@@ -32,7 +32,9 @@ fun Placeholder(
 
             Text(
                 text = placeholderText,
-                color = MaterialTheme.colorScheme.outline,
+                // onSurfaceVariant, not outline/secondary: outline is a border colour (1.88:1 on
+                // the surface) and the empty-state text is the only thing on screen when it shows.
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
                 style = MaterialTheme.typography.bodyMedium
             )
         }

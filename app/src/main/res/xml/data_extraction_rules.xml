@@ -9,15 +9,24 @@
         <exclude domain="database" path="note-list.db" />
         <exclude domain="database" path="note-list.db-wal" />
         <exclude domain="database" path="note-list.db-shm" />
-        <!-- The database is excluded above, so restored recordings would arrive with no note
-             pointing at them. Leaving them out also keeps the backup small, since voice memos
-             dominate it. -->
+        <!-- EncryptedSharedPreferences cannot be decrypted after the Keystore key is lost. -->
+        <exclude domain="sharedpref" path="." />
+        <exclude domain="file" path="datastore/" />
+        <!-- The database is excluded above, so restored media would arrive with no note pointing
+             at it. Leaving it out also keeps the backup small. -->
         <exclude domain="file" path="audios/" />
+        <exclude domain="file" path="attachments/" />
+        <exclude domain="file" path="BackupFolder/" />
     </cloud-backup>
     <device-transfer>
         <exclude domain="database" path="note-list.db" />
         <exclude domain="database" path="note-list.db-wal" />
         <exclude domain="database" path="note-list.db-shm" />
+        <!-- A device transfer also moves to new hardware, where the Keystore key is unavailable. -->
+        <exclude domain="sharedpref" path="." />
+        <exclude domain="file" path="datastore/" />
         <exclude domain="file" path="audios/" />
+        <exclude domain="file" path="attachments/" />
+        <exclude domain="file" path="BackupFolder/" />
     </device-transfer>
 </data-extraction-rules>

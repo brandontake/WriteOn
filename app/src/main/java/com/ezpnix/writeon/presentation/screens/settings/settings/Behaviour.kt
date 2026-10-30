@@ -4,6 +4,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Calculate
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.Image
 import androidx.compose.material.icons.rounded.Style
@@ -37,6 +38,22 @@ fun MarkdownScreen(navController: NavController, settingsViewModel: SettingsView
                     radius = shapeManager(isBoth = true, radius = settingsViewModel.settings.value.cornerRadius),
                     variable = settingsViewModel.settings.value.isMarkdownEnabled,
                     switchEnabled = { settingsViewModel.update(settingsViewModel.settings.value.copy(isMarkdownEnabled = it))}
+                )
+                Spacer(modifier = Modifier.height(18.dp))
+            }
+            item {
+                SettingsBox(
+                    title = stringResource(id = R.string.latex_rendering),
+                    description = stringResource(id = R.string.latex_rendering_description),
+                    icon = Icons.Rounded.Calculate,
+                    actionType = ActionType.SWITCH,
+                    radius = shapeManager(isBoth = true, radius = settingsViewModel.settings.value.cornerRadius),
+                    variable = settingsViewModel.settings.value.renderLatex,
+                    switchEnabled = {
+                        settingsViewModel.update(
+                            settingsViewModel.settings.value.copy(renderLatex = it)
+                        )
+                    }
                 )
                 Spacer(modifier = Modifier.height(18.dp))
             }

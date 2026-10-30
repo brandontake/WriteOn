@@ -1,6 +1,7 @@
 package com.ezpnix.writeon.presentation.components.markdown
 
 import androidx.compose.runtime.mutableStateMapOf
+import com.ezpnix.writeon.core.attachment.AttachmentIndex
 import com.ezpnix.writeon.core.attachment.AttachmentSyntax
 import com.ezpnix.writeon.domain.model.Attachment
 
@@ -14,19 +15,19 @@ import com.ezpnix.writeon.domain.model.Attachment
  * This is a cache, never the source of truth - the `attachments` table is. A missing entry simply
  * renders as a placeholder until `NoteUseCase` refreshes the registry.
  */
-object AttachmentRegistry {
+object AttachmentRegistry : AttachmentIndex {
 
     private val entries = mutableStateMapOf<String, Attachment>()
 
-    fun put(attachments: Collection<Attachment>) {
+    override fun put(attachments: Collection<Attachment>) {
         attachments.forEach { entries[it.id] = it }
     }
 
-    fun put(attachment: Attachment) {
+    override fun put(attachment: Attachment) {
         entries[attachment.id] = attachment
     }
 
-    fun remove(ids: Collection<String>) {
+    override fun remove(ids: Collection<String>) {
         ids.forEach { entries.remove(it) }
     }
 

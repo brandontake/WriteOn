@@ -4,11 +4,18 @@ import android.app.Application
 import android.content.Context
 import android.os.Handler
 import android.os.Looper
+import com.ezpnix.writeon.core.attachment.AttachmentIndex
+import com.ezpnix.writeon.core.security.EncryptionHelper
+import com.ezpnix.writeon.core.widget.WidgetRefresher
 import com.ezpnix.writeon.data.local.database.NoteDatabaseProvider
 import com.ezpnix.writeon.data.repository.ImportExportRepository
 import com.ezpnix.writeon.data.repository.NoteRepositoryImpl
 import com.ezpnix.writeon.data.repository.SettingsRepositoryImpl
-import com.ezpnix.writeon.presentation.components.EncryptionHelper
+import com.ezpnix.writeon.domain.repository.NoteFileReader
+import com.ezpnix.writeon.domain.repository.NoteRepository
+import com.ezpnix.writeon.domain.repository.SettingsRepository
+import com.ezpnix.writeon.presentation.components.markdown.AttachmentRegistry
+import com.ezpnix.writeon.widget.GlanceWidgetRefresher
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -82,11 +89,26 @@ object ApplicationModule {
         return NoteRepositoryImpl(noteDatabaseProvider)
     }
 
+    /** The domain layer depends on the interface; this binds it to the one real implementation. */
+    @Provides
+    @Singleton
+    fun provideNoteRepositoryInterface(impl: NoteRepositoryImpl): NoteRepository = impl
+
     @Provides
     @Singleton
     fun provideSettingsRepository(@ApplicationContext context: Context): SettingsRepositoryImpl {
         return SettingsRepositoryImpl(context)
     }
+
+    /** Domain-layer binding for settings; a fake implementation makes the migration testable. */
+    @Provides
+    @Singleton
+    fun provideSettingsRepositoryInterface(impl: SettingsRepositoryImpl): SettingsRepository = impl
+
+    /** Domain-layer binding for "turn this Uri into a note"; a fake makes import testable. */
+    @Provides
+    @Singleton
+    fun provideNoteFileReader(impl: ImportExportRepository): NoteFileReader = impl
 
     @Provides
     @Singleton
@@ -94,17 +116,24 @@ object ApplicationModule {
         noteDatabaseProvider: NoteDatabaseProvider,
         application: Application,
         mutex: Mutex,
-        coroutineScope: CoroutineScope,
         executorCoroutineDispatcher: CoroutineDispatcher,
     ): ImportExportRepository {
         return ImportExportRepository(
             provider = noteDatabaseProvider,
             context = application,
             mutex = mutex,
-            scope = coroutineScope,
             dispatcher = executorCoroutineDispatcher
         )
     }
+
+    @Provides
+    @Singleton
+    fun provideWidgetRefresher(refresher: GlanceWidgetRefresher): WidgetRefresher = refresher
+
+    /** The Compose-state registry, behind the domain-facing interface. */
+    @Provides
+    @Singleton
+    fun provideAttachmentIndex(): AttachmentIndex = AttachmentRegistry
 
     @Provides
     @Singleton

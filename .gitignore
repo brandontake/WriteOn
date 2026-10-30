@@ -72,3 +72,6 @@ keystore.properties
 
 # Android Profiling
 *.hprof
+
+# Local offline Gradle cache (per-machine, ~1.5 GB). Never belongs in the repository.
+.gradle-user-home/

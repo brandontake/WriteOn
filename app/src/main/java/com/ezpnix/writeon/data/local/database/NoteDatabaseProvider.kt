@@ -3,33 +3,16 @@ package com.ezpnix.writeon.data.local.database
 import android.app.Application
 import androidx.room.Room
 import androidx.room.RoomDatabase
-import androidx.room.TypeConverter
 import androidx.room.TypeConverters
 import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 import com.ezpnix.writeon.core.constant.DatabaseConst
+import com.ezpnix.writeon.core.database.Converters
 import com.ezpnix.writeon.data.local.dao.AttachmentDao
 import com.ezpnix.writeon.data.local.dao.NoteDao
 import com.ezpnix.writeon.domain.model.Attachment
-import com.google.gson.Gson
-import com.google.gson.reflect.TypeToken
 import java.io.File
 import kotlinx.coroutines.flow.first
-
-class Converters {
-    private val gson = Gson()
-
-    @TypeConverter
-    fun fromStringList(value: List<String>): String {
-        return gson.toJson(value)
-    }
-
-    @TypeConverter
-    fun toStringList(value: String): List<String> {
-        val listType = object : TypeToken<List<String>>() {}.type
-        return gson.fromJson(value, listType) ?: emptyList()
-    }
-}
 
 @TypeConverters(Converters::class)
 class NoteDatabaseProvider(private val application: Application) {
@@ -54,7 +37,7 @@ class NoteDatabaseProvider(private val application: Application) {
             NoteDatabase::class.java,
             DatabaseConst.NOTES_DATABASE_FILE_NAME
         )
-            .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_2_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9)
+            .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_2_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10)
             .build()
     }
 
@@ -91,14 +74,19 @@ class NoteDatabaseProvider(private val application: Application) {
         // only meaningful on this device; see STATUS.md for the cross-device caveat.
         val attachments = attachmentDao().getAll()
 
-        val exportName = "writeon-portable-${System.currentTimeMillis()}.db"
-        val exportFile = application.applicationContext.getDatabasePath(exportName)
-        exportFile.parentFile?.mkdirs()
+        // cacheDir, not getDatabasePath(): the export is a plaintext copy of the whole library, and
+        // the databases directory is where a half-finished run used to leave one behind (a killed
+        // process skips the finally). cacheDir is excluded from Android's auto backup by default
+        // and is cleared when the device runs low on space, so a leaked file is both private and
+        // short-lived.
+        val exportFile = File.createTempFile("writeon-portable-", ".db", application.applicationContext.cacheDir)
 
         val exportDatabase = Room.databaseBuilder(
             application.applicationContext,
             NoteDatabase::class.java,
-            exportName
+            // An absolute path makes Room create the file exactly where createTempFile made it;
+            // with a bare name it would fall back to the databases directory.
+            exportFile.absolutePath
         )
             .setJournalMode(RoomDatabase.JournalMode.TRUNCATE)
             .build()
@@ -255,5 +243,20 @@ private val MIGRATION_7_8 = object : Migration(7, 8) {
 private val MIGRATION_8_9 = object : Migration(8, 9) {
     override fun migrate(db: SupportSQLiteDatabase) {
         db.execSQL("ALTER TABLE `attachments` ADD COLUMN `trashed_at` INTEGER")
+    }
+}
+
+/**
+ * 2.0.3 indexes the three columns the list screens filter and sort on.
+ *
+ * The note list collects `WHERE trashed = 0` (plus pinned / updated_at ordering) on every save,
+ * pin or tag write; without indices each of those was a full-table scan whose cost grew with the
+ * user's library. Index names follow Room's convention so the schema export matches the migration.
+ */
+private val MIGRATION_9_10 = object : Migration(9, 10) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("CREATE INDEX IF NOT EXISTS `index_notes-table_trashed` ON `notes-table` (`trashed`)")
+        db.execSQL("CREATE INDEX IF NOT EXISTS `index_notes-table_pinned` ON `notes-table` (`pinned`)")
+        db.execSQL("CREATE INDEX IF NOT EXISTS `index_notes-table_updated_at` ON `notes-table` (`updated_at`)")
     }
 }

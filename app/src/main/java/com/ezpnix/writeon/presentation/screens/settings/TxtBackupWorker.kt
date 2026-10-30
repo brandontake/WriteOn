@@ -6,7 +6,11 @@ import android.net.Uri
 import com.ezpnix.writeon.data.local.database.NoteDatabaseProvider
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import java.io.ByteArrayOutputStream
+import java.io.IOException
+import java.nio.charset.StandardCharsets
 import java.util.zip.ZipEntry
+import java.util.zip.ZipInputStream
 import java.util.zip.ZipOutputStream
 import androidx.compose.ui.res.stringResource
 import com.ezpnix.writeon.R
@@ -16,7 +20,8 @@ object TxtBackupHelper {
     data class ExportNote(val title: String, val content: String)
 
     suspend fun writeNotesToZipStream(context: Context, uri: Uri) = withContext(Dispatchers.IO) {
-        val outputStream = context.contentResolver.openOutputStream(uri) ?: return@withContext
+        val outputStream = context.contentResolver.openOutputStream(uri)
+            ?: throw IOException(context.getString(R.string.export_failed, ""))
         ZipOutputStream(outputStream).use { zipOut ->
             getAllNotes(context).forEachIndexed { index, note ->
                 val baseName = note.title.ifBlank { context.getString(R.string.untitled) }
@@ -37,7 +42,7 @@ object TxtBackupHelper {
             var entry = zipIn.nextEntry
             while (entry != null) {
                 if (!entry.isDirectory && entry.name.endsWith(".txt")) {
-                    val content = zipIn.reader().readText()
+                    val content = readCurrentZipEntry(zipIn)
 
                     val fileName = entry.name.removeSuffix(".txt")
                     val title = fileName.substringAfter("_").ifBlank { context.getString(R.string.untitled) }
@@ -56,13 +61,17 @@ object TxtBackupHelper {
         }
     }
 
+    internal fun readCurrentZipEntry(zipIn: ZipInputStream): String =
+        ByteArrayOutputStream().use { buffer ->
+            zipIn.copyTo(buffer)
+            buffer.toString(StandardCharsets.UTF_8.name())
+        }
     private suspend fun getAllNotes(context: Context): List<ExportNote> {
         val dbProvider = NoteDatabaseProvider(context.applicationContext as Application)
         val dao = dbProvider.noteDao()
-        return dao.getAllNotesSync().map {
-            ExportNote(it.name, it.description)
-        }
+        return dao.getAllNotesSync().map { ExportNote(it.name, it.description) }
     }
+
 
     private fun sanitizeFileName(name: String): String {
         return name.replace(Regex("[\\\\/:*?\"<>|]"), "_")

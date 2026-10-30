@@ -1,12 +1,15 @@
 package com.ezpnix.writeon.presentation.screens.edit.model
 
 import android.app.Application
+import android.widget.Toast
 import androidx.compose.runtime.State
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.TextFieldValue
+import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.ezpnix.writeon.R
@@ -16,8 +19,8 @@ import com.ezpnix.writeon.data.local.database.LegacyBodyMigration
 import com.ezpnix.writeon.domain.model.Attachment
 import com.ezpnix.writeon.domain.model.Note
 import com.ezpnix.writeon.domain.usecase.NoteUseCase
-import com.ezpnix.writeon.presentation.components.DecryptionResult
-import com.ezpnix.writeon.presentation.components.EncryptionHelper
+import com.ezpnix.writeon.core.security.DecryptionResult
+import com.ezpnix.writeon.core.security.EncryptionHelper
 import com.ezpnix.writeon.presentation.components.markdown.AttachmentRegistry
 import com.ezpnix.writeon.presentation.screens.edit.components.UndoRedoState
 import com.ezpnix.writeon.presentation.screens.edit.segments.AttachmentSegment
@@ -26,8 +29,11 @@ import com.ezpnix.writeon.presentation.screens.edit.segments.segmentize
 import com.ezpnix.writeon.presentation.share.ShareIntake
 import dagger.hilt.android.lifecycle.HiltViewModel
 import java.io.File
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import javax.inject.Inject
@@ -36,7 +42,8 @@ import javax.inject.Inject
 class EditViewModel @Inject constructor(
     private val application: Application,
     private val noteUseCase: NoteUseCase,
-    private val encryption: EncryptionHelper
+    private val encryption: EncryptionHelper,
+    private val savedStateHandle: SavedStateHandle
 ) : ViewModel() {
     private val _noteName = mutableStateOf(TextFieldValue())
     val noteName: State<TextFieldValue> get() = _noteName
@@ -87,6 +94,47 @@ class EditViewModel @Inject constructor(
 
     private var noteJob: Job? = null
 
+    /**
+     * Unsaved text, mirrored into [SavedStateHandle] shortly after the user stops typing.
+     *
+     * The editor only writes on ON_STOP, so a process death mid-sentence (crash, low-memory kill,
+     * an update taking the process down) lost everything typed since the last save. The draft
+     * survives both a configuration change and a system-initiated process death, and is offered
+     * back in [setupNoteData] before the first database emission - the dirty gate in [syncNote]
+     * then treats it as a local edit and keeps it instead of the stored text. It is cleared on a
+     * successful save, so the draft only ever holds text the database does not have.
+     */
+    private fun startDraftPersistence() {
+        viewModelScope.launch {
+            snapshotFlow { noteName.value.text to noteDescription.value.text }
+                .distinctUntilChanged()
+                .collect { (name, body) ->
+                    // Wait out the typing burst: the handle is written into the saved instance
+                    // state on every change, and doing that per keystroke is measurable jank.
+                    delay(DRAFT_DEBOUNCE_MS)
+                    savedStateHandle[KEY_DRAFT_NOTE_ID] = noteId.value
+                    savedStateHandle[KEY_DRAFT_NAME] = name
+                    savedStateHandle[KEY_DRAFT_DESCRIPTION] = body
+                }
+        }
+    }
+
+    private fun clearDraft() {
+        savedStateHandle.remove<Int>(KEY_DRAFT_NOTE_ID)
+        savedStateHandle.remove<String>(KEY_DRAFT_NAME)
+        savedStateHandle.remove<String>(KEY_DRAFT_DESCRIPTION)
+    }
+
+    /** Puts an unsaved draft back into the fields, if one exists for [id]. */
+    private fun restoreDraftFor(id: Int) {
+        if (savedStateHandle.get<Int>(KEY_DRAFT_NOTE_ID) != id) return
+        val name = savedStateHandle.get<String>(KEY_DRAFT_NAME).orEmpty()
+        val body = savedStateHandle.get<String>(KEY_DRAFT_DESCRIPTION).orEmpty()
+        if (name.isEmpty() && body.isEmpty()) return
+        _noteName.value = TextFieldValue(name, selection = TextRange(name.length))
+        _noteDescription.value = TextFieldValue(body, selection = TextRange(body.length))
+    }
+
     fun requestImageSave() {
         _isImageSaveRequested.value = true
     }
@@ -100,7 +148,7 @@ class EditViewModel @Inject constructor(
      *
      * Kept here rather than in Compose state: they only matter to [saveNote], while the preview
      * needs the id -> path pair immediately, which is what [AttachmentRegistry] is for. A picture
-     * picked in a note that is never saved leaves a real file behind, so [persistAttachments] also
+     * picked in a note that is never saved leaves a real file behind, so [finishAttachmentPlan] also
      * prunes the ones the final body stopped referencing.
      */
     private val pendingAttachments = LinkedHashMap<String, Attachment>()
@@ -167,6 +215,7 @@ class EditViewModel @Inject constructor(
 
     fun saveNote(id: Int) {
         viewModelScope.launch {
+            try {
             // Pinning is already persisted by [toggleNotePin]. Rewriting it here compared
             // isPinned.value against _isPinned.value - the same state object - so the branch could
             // never be taken, and it aimed at the placeholder id 0 for a brand-new note anyway.
@@ -203,6 +252,26 @@ class EditViewModel @Inject constructor(
                 } else {
                     null
                 }
+                // A vault note may only be rewritten while its passphrase is loaded: saving with an
+                // empty key would replace the password-sealed body with ciphertext nobody can open,
+                // and the old fallback of "save it as plaintext instead" quietly removed the
+                // protection the user asked for. Refuse, keep the editor open, and tell the user.
+                //
+                // The condition must not depend on [base] alone: when the row could not be read
+                // (null base — first frame not loaded, or the shared connection was closed), the
+                // code below falls back to a full-row insert with `encrypted = false`, which is
+                // exactly the write that used to overwrite a vault note's ciphertext with
+                // plaintext. The editor's own encrypted flag covers that hole.
+                val lockedVault = encryption.isPasswordEmpty() &&
+                    (base?.encrypted == true || (id != 0 && _isEncrypted.value))
+                if (lockedVault) {
+                    Toast.makeText(
+                        application,
+                        application.getString(R.string.vault_locked_cannot_save),
+                        Toast.LENGTH_LONG
+                    ).show()
+                    return@launch
+                }
                 // A note may only be flagged encrypted when a vault passphrase is actually loaded,
                 // otherwise EncryptionHelper would seal it with an empty key and no screen in the
                 // app can decrypt it again.
@@ -226,8 +295,25 @@ class EditViewModel @Inject constructor(
                 )
                 // Captured before the write: [note] is about to replace this row.
                 savePoint = SavePoint(noteId = id, previous = base, saved = note)
-                noteUseCase.addNote(note)
-                persistAttachments(description, note.id)
+                // Plan first, write once: the note row and every attachment row change land in a
+                // single Room transaction, so a failure or a cancelled coroutine can no longer
+                // leave "new body, old rows" (or the reverse). File deletion happens after the
+                // commit - an orphan file is recoverable, a row whose file is already gone is not.
+                val plan = planAttachments(description, note.id, prune = description.isNotEmpty())
+                val savedId = noteUseCase.saveNoteWithAttachments(
+                    note = note,
+                    upsertAttachments = plan.upsert,
+                    reviveAttachmentIds = plan.reviveIds,
+                    deleteAttachmentIds = plan.removeRows.map { it.id },
+                )
+                finishAttachmentPlan(plan, savedId)
+                // The database now holds this text; the draft would only re-offer it after a
+                // restore of a note that no longer needs it.
+                clearDraft()
+                // Clearing the body sends the note to the recycle bin; it does not mean "destroy
+                // every picture and recording it ever held". When the saved body is empty, keep
+                // the rows and files so a restore (or the ten-second undo) still finds them. Only
+                // a body that still has text prunes what it stopped referencing.
                 // Clearing every character and saving now means the note is gone rather than an
                 // empty row left on the home screen: the version just written is the one that lands
                 // in the trash, so it can still be restored.
@@ -241,6 +327,17 @@ class EditViewModel @Inject constructor(
             }
 
             fetchLastNoteAndUpdate()
+            } catch (e: CancellationException) {
+                // Never swallow cancellation: the coroutine is being torn down (screen closed),
+                // and swallowing it would keep a dead scope alive pretending to work.
+                throw e
+            } catch (e: Exception) {
+                Toast.makeText(
+                    application,
+                    application.getString(R.string.msg_error_with_message, e.message ?: ""),
+                    Toast.LENGTH_LONG
+                ).show()
+            }
         }
     }
 
@@ -260,7 +357,9 @@ class EditViewModel @Inject constructor(
             val previous = point.previous
             if (previous != null) {
                 noteUseCase.restoreNote(previous)
-                syncNote(previous)
+                // Forced: undo's whole purpose is to put the stored text back even though it
+                // differs from what the fields hold right now.
+                syncNote(previous, forceText = true)
             } else {
                 val savedId = point.saved.id.takeIf { it != 0 } ?: noteId.value
                 if (savedId != 0) noteUseCase.deleteNoteById(savedId)
@@ -275,18 +374,56 @@ class EditViewModel @Inject constructor(
         }
     }
 
-    private fun syncNote(note: Note) {
-        _originalNote.value = note
-        if (note.encrypted) {
-            val (name, nameStatus) = encryption.decrypt(note.name)
-            val (description, descriptionStatus) = encryption.decrypt(note.description)
-            if (nameStatus == DecryptionResult.SUCCESS && descriptionStatus == DecryptionResult.SUCCESS) {
-                updateNoteName(TextFieldValue(name!!, selection = TextRange(name.length)))
-                updateNoteDescription(TextFieldValue(description!!, selection = TextRange(description.length)))
-            }
+    /**
+     * Plain text of a stored row, or null while a vault row cannot be decrypted.
+     *
+     * Used only for deciding whether the editor fields still match the row; the row itself stays
+     * sealed in [_originalNote] so the save path writes it back untouched.
+     */
+    private fun storedText(note: Note): Pair<String, String>? {
+        if (!note.encrypted) return note.name to note.description
+        val (name, nameStatus) = encryption.decrypt(note.name)
+        val (description, descriptionStatus) = encryption.decrypt(note.description)
+        return if (nameStatus == DecryptionResult.SUCCESS && descriptionStatus == DecryptionResult.SUCCESS) {
+            name!! to description!!
         } else {
-            updateNoteName(TextFieldValue(note.name, selection = TextRange(note.name.length)))
-            updateNoteDescription(TextFieldValue(note.description, selection = TextRange(note.description.length)))
+            null
+        }
+    }
+
+    /**
+     * Applies a database emission to the editor.
+     *
+     * Pinning, tagging or trashing a note makes Room emit its whole row. Writing that row's text
+     * into the fields unconditionally replaced whatever the user had typed since the write began -
+     * a pin tap in the middle of a sentence erased that sentence (P0-2). Metadata is always
+     * applied; the text only moves when the fields hold exactly the stored text. A first row for a
+     * brand-new editor still loads normally, and [forceText] is used by undo, where putting the
+     * stored text back is the whole point.
+     */
+    private fun syncNote(note: Note, forceText: Boolean = false) {
+        val stored = storedText(note)
+        val previous = _originalNote.value
+        val sameName = stored != null && _noteName.value.text == stored.first
+        val sameDescription = stored != null && _noteDescription.value.text == stored.second
+        val fieldsHaveDraft = _noteName.value.text.isNotEmpty() ||
+            _noteDescription.value.text.isNotEmpty()
+        val hasLocalEdits = !forceText && stored != null && (!sameName || !sameDescription) &&
+            (previous != null || fieldsHaveDraft)
+
+        _originalNote.value = note
+        if (stored != null && !hasLocalEdits) {
+            // Equal text is left alone rather than re-assigned: assigning a TextFieldValue moves
+            // the caret to the end, so a metadata emission would otherwise jump the cursor while
+            // the user was typing.
+            if (!sameName) {
+                updateNoteName(TextFieldValue(stored.first, selection = TextRange(stored.first.length)))
+            }
+            if (!sameDescription) {
+                updateNoteDescription(
+                    TextFieldValue(stored.second, selection = TextRange(stored.second.length))
+                )
+            }
         }
         updateNoteCreatedTime(note.createdAt)
         _noteUpdatedTime.longValue = note.updatedAt
@@ -306,6 +443,12 @@ class EditViewModel @Inject constructor(
     fun setupNoteData(id: Int = noteId.value) {
         noteJob?.cancel()
         noteJob = null
+        // The draft is restored for *every* id, including 0. A brand-new note has no database row
+        // to fall back on, so "wrote half a sentence, process died" is exactly the case the draft
+        // exists for - and gating this behind `id != 0` meant new-note drafts were written but
+        // never read back. The dirty gate in syncNote then sees fields that differ from the stored
+        // text and leaves them alone (for id 0 there is no collector at all).
+        restoreDraftFor(id)
         if (id != 0) {
             noteJob = viewModelScope.launch {
                 noteUseCase.getNoteById(id).collectLatest { note ->
@@ -531,14 +674,14 @@ class EditViewModel @Inject constructor(
         requestFocusInText(caret)
         // The row itself leaves through the recycle bin, so the operation stays reversible until
         // the trash is emptied. Rows that never reached the database (picked in this session) have
-        // nothing to trash and are still pruned as abandoned by [persistAttachments].
+        // nothing to trash and are still pruned as abandoned by [finishAttachmentPlan].
         viewModelScope.launch { noteUseCase.trashAttachment(segment.attachmentId, rewriteBody = false) }
     }
 
     /**
      * Deletes an attachment from a rendered preview: the line leaves the body at once and the row
      * moves to the recycle bin. [commitDescription] keeps the change undoable; if the note is saved
-     * while the line is back, [persistAttachments] un-trashes the row it finds referenced again.
+     * while the line is back, [planAttachments] un-trashes the row it finds referenced again.
      */
     fun trashAttachmentById(id: String) {
         val value = _noteDescription.value
@@ -895,51 +1038,79 @@ class EditViewModel @Inject constructor(
     }
 
     /**
-     * Writes the attachment rows the saved body references and removes the ones it stopped using.
+     * Decides the attachment-row changes for one save, without writing anything.
      *
      * Four groups exist after an edit:
      *  - pending rows (picked or recorded in this session) that survived in the text -> upsert;
      *  - rows the note already owned but the text no longer references -> delete row + file;
-     *  - pending rows the user deleted again before the note was ever saved -> delete file;
+     *  - pending rows the user deleted again before the note was ever saved -> delete file only;
      *  - trashed rows (deleted to the recycle bin since 2.0.2) -> untouched, and any of them the
-     *    text references again (an undo before this save) are un-trashed first.
+     *    text references again (an undo before this save) are revived.
      *
-     * A brand-new note has no id yet, so its rows are written with note-id 0 and claimed by
+     * The row changes ride into the save transaction (see [NoteUseCase.saveNoteWithAttachments]);
+     * the file deletions happen after it commits, in [finishAttachmentPlan]. With [prune] false -
+     * a body the user just cleared - nothing is removed or revived: the note is about to be
+     * trashed, and undo or a restore must still find its pictures and recordings.
+     *
+     * A brand-new note has no id yet, so the rows are written with note-id 0 and claimed by
      * [claimAttachments] once Room has assigned the real id.
      */
-    private suspend fun persistAttachments(body: String, savedNoteId: Int) {
+    private suspend fun planAttachments(
+        body: String,
+        noteId: Int,
+        prune: Boolean
+    ): AttachmentPlan {
         val idsInBody = AttachmentSyntax.idsIn(body)
-        val appContext = application.applicationContext
 
-        val owned = pendingAttachments.values.filter { it.id in idsInBody }
-        if (owned.isNotEmpty()) {
-            noteUseCase.saveAttachments(owned.map { it.copy(noteId = savedNoteId) })
-            owned.forEach { pendingAttachments.remove(it.id) }
-        }
+        val upsert = pendingAttachments.values.filter { it.id in idsInBody }
 
-        if (savedNoteId != 0) {
-            val ownedRows = noteUseCase.attachmentsForNote(savedNoteId)
+        var reviveIds: List<String> = emptyList()
+        var removeRows: List<Attachment> = emptyList()
+        if (prune && noteId != 0) {
+            val ownedRows = noteUseCase.attachmentsForNote(noteId)
             // Undoing a delete before the next save puts the line back, and the row that moved to
             // the recycle bin has to come back with it.
-            val revived = ownedRows.filter { it.id in idsInBody && it.trashedAt != null }
-            if (revived.isNotEmpty()) {
-                noteUseCase.setAttachmentsTrashed(revived.map { it.id }, null)
-            }
+            reviveIds = ownedRows.filter { it.id in idsInBody && it.trashedAt != null }.map { it.id }
             // Trashed rows are deliberately not part of the prune: the file and the row have to
             // survive for the recycle bin, which is what this whole column exists for.
-            val removed = ownedRows.filter { it.id !in idsInBody && it.trashedAt == null }
-            if (removed.isNotEmpty()) {
-                AttachmentFiles.deleteAll(appContext, removed)
-                noteUseCase.deleteAttachments(removed.map { it.id })
-                AttachmentRegistry.remove(removed.map { it.id })
-            }
+            removeRows = ownedRows.filter { it.id !in idsInBody && it.trashedAt == null }
         }
 
-        val abandoned = pendingAttachments.values.filter { it.id !in idsInBody }
-        if (abandoned.isNotEmpty()) {
-            AttachmentFiles.deleteAll(appContext, abandoned)
-            AttachmentRegistry.remove(abandoned.map { it.id })
-            abandoned.forEach { pendingAttachments.remove(it.id) }
+        val abandoned = if (prune) {
+            pendingAttachments.values.filter { it.id !in idsInBody }
+        } else {
+            emptyList()
+        }
+
+        return AttachmentPlan(upsert, reviveIds, removeRows, abandoned)
+    }
+
+    /** What one save will do to the attachment rows, and (after commit) to their files. */
+    private data class AttachmentPlan(
+        val upsert: List<Attachment>,
+        val reviveIds: List<String>,
+        val removeRows: List<Attachment>,
+        val abandoned: List<Attachment>,
+    )
+
+    /**
+     * Post-commit half of [planAttachments]: the file and registry cleanup that must not run
+     * unless the rows actually landed. Deleting a file before the transaction could commit left a
+     * row pointing at bytes that were already gone - the one ordering that cannot be undone.
+     */
+    private suspend fun finishAttachmentPlan(plan: AttachmentPlan, savedNoteId: Int) {
+        val appContext = application.applicationContext
+
+        plan.upsert.forEach { pendingAttachments.remove(it.id) }
+
+        if (plan.removeRows.isNotEmpty()) {
+            AttachmentFiles.deleteAll(appContext, plan.removeRows)
+            AttachmentRegistry.remove(plan.removeRows.map { it.id })
+        }
+        if (plan.abandoned.isNotEmpty()) {
+            AttachmentFiles.deleteAll(appContext, plan.abandoned)
+            AttachmentRegistry.remove(plan.abandoned.map { it.id })
+            plan.abandoned.forEach { pendingAttachments.remove(it.id) }
         }
 
         // Anything the legacy rewrite produced is already in the database now; re-reading keeps the
@@ -990,6 +1161,7 @@ class EditViewModel @Inject constructor(
                 )
             }
         }
+        startDraftPersistence()
     }
 
     private companion object {
@@ -1001,5 +1173,13 @@ class EditViewModel @Inject constructor(
 
         /** The row that marks the header/body split in a pipe table. */
         const val TABLE_ALIGNMENT_ROW = "| --- | --- |"
+
+        /** SavedStateHandle keys for the unsaved-text draft. */
+        const val KEY_DRAFT_NOTE_ID = "edit_draft_note_id"
+        const val KEY_DRAFT_NAME = "edit_draft_name"
+        const val KEY_DRAFT_DESCRIPTION = "edit_draft_description"
+
+        /** How long the user must stop typing before the draft is written. */
+        const val DRAFT_DEBOUNCE_MS = 500L
     }
 }

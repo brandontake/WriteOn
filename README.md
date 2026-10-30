@@ -109,7 +109,7 @@ The project produces **APK files only** — there is no App Bundle task in the r
 Release signing is optional for local builds: create `keystore.properties` in the repository root with
 `storeFile`, `storePassword`, `keyAlias` and `keyPassword`, and the release build type picks it up.
 Without that file the release APK is signed with the debug keystore so that local builds stay
-installable — that fallback is still there, but **v2.0.2 is signed with the project's upload key**
+installable — that fallback is still there, but **v2.0.3 is signed with the project's upload key**
 (`CN=Brandontake, OU=WriteOn, O=WriteOn`).
 
 Two things to get right when you create that file:
@@ -167,30 +167,38 @@ Play deadlines: new apps and updates must target API 36 since 2026-08-31 (extens
 
 ### How the build is verified
 
-Both variants were built on **2026-10-22** with `:app:assembleDebug` and `:app:assembleRelease` (offline,
-JDK 21.0.12.1, Gradle 8.9). The figures below are from the **latest** release build, which carries the
-2.0.2 drawer tag-delete confirmation and paged-export first-page fix together with the new library,
-attachment recycle bin, preview delete/save actions and live attachment blocks on by default, plus the
-2.0.1 keyboard/caret and preview-selection fixes, split preview, and the 2.0 body format:
+Both variants were built on **2026-10-30** with `:app:testDebugUnitTest`, `:app:lintDebug`,
+`:app:assembleDebug` and `:app:assembleRelease` (offline, JDK 21.0.12.1, Gradle 8.9). The figures below
+are from the **latest** release build, which carries the 2.0.3 release-audit fixes (database restore no
+longer truncates the restored file, pin/tag writes can no longer overwrite unsaved text, backups now
+include attachments and are encrypted end to end, WebDAV first uploads refuse to overwrite another
+device's copy, restore asks for confirmation, picked images live in internal storage) plus the
+second-round follow-up (streaming backup/restore with size budgets, an automatic-backup restore
+entry, exponential app-lock backoff on a monotonic clock, and restored recordings are deletable again):
 
 | Variant | Size | applicationId | Notes |
 | --- | --- | --- | --- |
-| Release | **3.82 MB** (4,001,851 bytes) | `com.ezpnix.writeon` | full R8 optimisation + obfuscation; ships two baseline profiles (API 28–30, 31+); signed with the project's upload key (`CN=Brandontake, OU=WriteOn, O=WriteOn, C=US`) |
+| Release | **3.86 MB** (4,046,303 bytes) | `com.ezpnix.writeon` | full R8 optimisation + obfuscation; ships two baseline profiles (API 28–30, 31+); signed with the project's upload key (`CN=Brandontake, OU=WriteOn, O=WriteOn, C=US`) |
 
-SHA-256 (Release): `9E44B95587B98418D848622F78877F5DAA98DD557BDFB14C9B6588083857C4AA`.
+SHA-256 (Release): `92718CB8EDE688BF4B9EADB61694699AAF6A025042E9349DCE535280C8FF0ACB`.
 
-Both report `versionCode 14` / `versionName 2.0.2`, `minSdk 26`, `targetSdk 36`, the default + `ja` + `zh`
-locales, and four ABIs. The release run also wrote `app/schemas/com.ezpnix.writeon.data.local.database.NoteDatabase/9.json`,
-which is what makes the 8 -> 9 migration checkable offline instead of only on a device.
+Both report `versionCode 15` / `versionName 2.0.3`, `minSdk 26`, `targetSdk 36`, the default + `ja` + `zh`
+locales, and four ABIs. The database moved to **v10** (`MIGRATION_9_10`), which indexes the `trashed`,
+`pinned` and `updated_at` columns the list screens filter and sort on; `app/schemas/.../10.json` is
+checked in, so the migration is testable offline instead of only on a device.
 
 Beyond the build: `aapt2 dump badging` on both APKs, `apksigner verify` on both, `aapt2 dump resources`
 to confirm the new strings actually landed in the packaged resources, and the R8 mapping files in
 `app/build/outputs/mapping/{debug,release}/mapping.txt`.
 
-`lintVitalRelease` ran and reported **No issues found.** (report:
-`app/build/intermediates/lint_vital_intermediate_text_report/release/lintVitalReportRelease/lint-results-release.txt`).
+`lintVitalRelease` and `:app:lintDebug` both ran; `testDebugUnitTest` covers **61 tests** including the
+`DatabaseRestoreTest` restore regressions (bytes preserved + `.bak` kept, corrupt archive rejected,
+zip-slip members refused, oversized members refused), `BackupArchiveCryptoTest` (current format +
+streaming round-trip, **legacy 2.0.2 CBC archives still readable**, wrong passphrase rejected,
+truncated/tampered archives leak no plaintext) and `LegacyBodyMigrationTest` (1.x token rewrite,
+dedup, idempotence, fenced code left alone).
 
-**Release v2.0.2** (tag `v2.0.2`) carries exactly this release APK (SHA-256 verified and signed).
+**Release v2.0.3** (tag `v2.0.3`) will carry exactly this release APK once it is published.
 
 ---
 
@@ -210,6 +218,7 @@ See GitHub Releases for historical changes and release assets.
 
 ## 📢 Announcements
 
+- *2026-10-30:* v2.0.3 is out — fixes from the release audit: restoring a backup no longer truncates the database, pinning or tagging a note can no longer overwrite text you were still typing, backups now carry their attachments and the daily automatic backup is encrypted and rotated, WebDAV uploads refuse to overwrite another device's backup, restore asks for confirmation first, and picked/shared images now live in private internal storage.
 - *2026-10-22:* v2.0.2 is out — tag deletion from the drawer asks for confirmation, paged image exports no longer lose the first page's content, a Library section lists every image and recording, deleting attachments moves them to the recycle bin, rendered attachments can be saved or deleted, and live attachment blocks are on by default.
 - *2026-10-22:* v2.0.1 is out — experimental live attachment blocks in the editor, a keyboard/caret fix, and a preview selection crash fix.
 - *2025-09-04:* Sophomore year is right around the corner for me, decided to give out an update before it starts.
@@ -253,7 +262,7 @@ WriteOn is built on top of other open-source projects. This section records exac
 - **Save as image** uses Jetpack Compose's `GraphicsLayer` capture (`rememberGraphicsLayer` → `toImageBitmap`) plus `MediaStore`, and reuses WriteOn's own Markdown renderer.
 
 ### Backups
-- A backup is produced by reading the notes back through the decrypting DAO and writing them into a throwaway database, so a restored archive stays readable on any device, not just the one that created it. The optional backup password keeps using PBKDF2-HMAC-SHA256 (65 536 iterations) with AES-CBC, as before.
+- A backup is produced by reading the notes back through the decrypting DAO and writing them into a throwaway database, so a restored archive stays readable on any device, not just the one that created it. The optional backup password now uses PBKDF2-HMAC-SHA256 (120,000 iterations) with AES-256-GCM; archives written by 2.0.2 (PBKDF2 at 65,536 with AES-CBC) are still readable.
 - Restoring an archive goes through `core/util/DatabaseRestore.kt`: archive members are resolved against the destination directory with a canonical-path check (rejecting `..` escapes), capped at 64 MiB per member, and the new database is staged, header-verified (`SQLite format 3`), renamed into place and the previous file kept as `.bak`. A failed rename puts the old database back.
 
 ### Predictive back & image export

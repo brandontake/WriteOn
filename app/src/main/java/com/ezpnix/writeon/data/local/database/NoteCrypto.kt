@@ -10,6 +10,7 @@ import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
+import javax.inject.Inject
 
 /**
  * Encrypts note text so the Room database file does not hold readable notes.
@@ -23,10 +24,9 @@ import javax.crypto.spec.GCMParameterSpec
  * plain text, so rows written before this class existed (and rows restored from an old backup) stay
  * readable, and saved rows are re-encrypted the next time they are written.
  *
- * Both directions fail soft: if the Keystore misbehaves, [seal] stores the text unchanged and
- * [open] returns the stored value, so a hardware hiccup can never cost the user their notes.
+ * Encryption failures are surfaced to the caller; note text is never silently written in plaintext.
  */
-class NoteCrypto {
+class NoteCrypto @Inject constructor() {
 
     /** Encrypts [plaintext] for storage. Empty values are left alone. */
     fun seal(plaintext: String): String {
@@ -37,9 +37,9 @@ class NoteCrypto {
             cipher.init(Cipher.ENCRYPT_MODE, secretKey())
             val encrypted = cipher.doFinal(plaintext.toByteArray(Charsets.UTF_8))
             MARKER + Base64.encodeToString(cipher.iv + encrypted, Base64.NO_WRAP)
-        } catch (t: Throwable) {
-            Log.e(TAG, "Could not encrypt note text, storing it unencrypted", t)
-            plaintext
+        } catch (e: Exception) {
+            Log.e(TAG, "Could not encrypt note text; refusing to store it", e)
+            throw IllegalStateException("Could not encrypt note text", e)
         }
     }
 
@@ -50,6 +50,11 @@ class NoteCrypto {
         cache[stored]?.let { return it }
 
         val plaintext = decrypt(stored)
+        // Never hand ciphertext back as if it were text. The old `return stored` made a note with
+        // an unreadable payload show base64 garbage, and the next save re-sealed that garbage -
+        // silently destroying whatever the row had held. An empty string is at least honest: the
+        // text is gone, and nothing pretends otherwise.
+        if (plaintext == stored && isSealed(stored)) return ""
         cache[stored] = plaintext
         return plaintext
     }
@@ -77,8 +82,8 @@ class NoteCrypto {
             val cipher = Cipher.getInstance(TRANSFORMATION)
             cipher.init(Cipher.DECRYPT_MODE, secretKey(), GCMParameterSpec(TAG_BITS, iv))
             String(cipher.doFinal(ciphertext), Charsets.UTF_8).also { cache[stored] = it }
-        } catch (t: Throwable) {
-            Log.e(TAG, "Could not decrypt note text, leaving the row untouched", t)
+        } catch (e: Exception) {
+            Log.e(TAG, "Could not decrypt note text, leaving the row untouched", e)
             null
         }
     }
@@ -94,8 +99,8 @@ class NoteCrypto {
             val cipher = Cipher.getInstance(TRANSFORMATION)
             cipher.init(Cipher.DECRYPT_MODE, secretKey(), GCMParameterSpec(TAG_BITS, iv))
             String(cipher.doFinal(ciphertext), Charsets.UTF_8)
-        } catch (t: Throwable) {
-            Log.e(TAG, "Could not decrypt note text, showing the stored value", t)
+        } catch (e: Exception) {
+            Log.e(TAG, "Could not decrypt note text, showing the stored value", e)
             stored
         }
     }

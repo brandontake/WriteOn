@@ -82,6 +82,17 @@ data object HorizontalRule : MarkdownElement {
 }
 
 /**
+ * A display formula fenced by `$$` on its own lines. [expression] is the LaTeX source between the
+ * fences; the Compose renderer draws it with [MathBlockView], while the widget keeps the source
+ * readable because a Glance layout cannot stack fractions.
+ */
+data class MathBlock(val expression: String) : MarkdownElement {
+    override fun render(builder: StringBuilder) {
+        builder.append("$$\n$expression\n$$\n\n")
+    }
+}
+
+/**
  * A pipe table. [rows] holds the header first and the body rows after it; the alignment row
  * (`| --- |`) is dropped by [TableProcessor] and the column alignment it carries is not honoured —
  * every cell is rendered left aligned, which is what a note-sized table needs.

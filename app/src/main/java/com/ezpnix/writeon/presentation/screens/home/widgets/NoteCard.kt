@@ -50,7 +50,13 @@ fun NoteCard(
     shape: RoundedCornerShape,
     onShortClick: () -> Unit,
     onLongClick: () -> Unit,
-    onNoteUpdate: (Note) -> Unit
+    onNoteUpdate: (Note) -> Unit,
+    /**
+     * Invoked with an `attachment://` id when the recording or picture block on the card offers
+     * delete. Home passes its handler; the recycle bin leaves it null so trashed cards cannot
+     * delete anything.
+     */
+    onAttachmentDelete: ((String) -> Unit)? = null
 ) {
     // One snapshot read per card instead of one per settings lookup: every `settings.value`
     // read subscribes this card to the settings state, so re-reading it six times made each
@@ -72,7 +78,7 @@ fun NoteCard(
                     shape = shape
                 ) else Modifier
             ),
-        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
         colors = CardDefaults.elevatedCardColors(
             containerColor = if (containerColor != Color.Black) containerColor else MaterialTheme.colorScheme.surface
         )
@@ -102,7 +108,8 @@ fun NoteCard(
                     fontSize = 20.sp,
                     radius = settings.cornerRadius,
                     maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
+                    overflow = TextOverflow.Ellipsis,
+                    onAttachmentDelete = onAttachmentDelete
                 )
             }
             if (note.name.isNotBlank() && note.description.isNotBlank() && !settings.showOnlyTitle) {
@@ -122,7 +129,8 @@ fun NoteCard(
                         .heightIn(max = dimensionResource(R.dimen.max_description_height)),
                     onContentChange = { onNoteUpdate(note.copy(description = it)) },
                     fontSize = 14.sp,
-                    radius = settings.cornerRadius
+                    radius = settings.cornerRadius,
+                    onAttachmentDelete = onAttachmentDelete
                 )
             }
             if (note.tags.isNotEmpty()) {

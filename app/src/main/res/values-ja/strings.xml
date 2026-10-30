@@ -110,7 +110,7 @@
     <string name="backup">バックアップ</string>
     <string name="restore">復元</string>
     <string name="auto_backup">自動バックアップ</string>
-    <string name="auto_backup_description">Android/data フォルダに自動で保存します（Android 10 以降の端末では、現在の Android の仕様によりアクセスに ROOT 権限が必要です）</string>
+    <string name="auto_backup_description">ノートの暗号化コピーを毎日アプリのプライベートストレージに保存し、最新 7 件のみを保持します。設定 → クラウド からこの端末でのみ復元できます。暗号化鍵は端末から出ません</string>
     <string name="backup_dropdown">バックアップ</string>
     <string name="backup_description">すべてのノートを zip ファイルに保存、または zip ファイルから復元します。なお、この操作は既存のノートをすべて置き換え、ゴミ箱も空になります。</string>
     <string name="restore_description">zip ファイルからノートを復元します</string>
@@ -151,6 +151,7 @@
     <string name="biometric_authentication">生体認証</string>
     <string name="biometric_authentication_description">指紋または顔認証で WriteOn のロックを解除します</string>
     <string name="vault_description">保護レイヤーを追加します</string>
+    <string name="vault_locked_cannot_save">このノートを保存する前に保管庫のロックを解除してください</string>
 
     <!-- General -->
     <string name="database">データベース</string>
@@ -247,6 +248,10 @@
     <string name="calculator_result">結果</string>
     <string name="cd_back">戻る</string>
     <string name="cd_copy_and_save">コピーして保存</string>
+    <string name="cd_copy">ノートをクリップボードにコピー</string>
+    <string name="cd_toolbar_prev_page">書式ツール、前のページ</string>
+    <string name="cd_toolbar_next_page">書式ツール、次のページ</string>
+    <string name="translate_copied_hint">ノートをクリップボードにコピーしました。翻訳ツールに貼り付けてください</string>
     <string name="cd_details">詳細</string>
     <string name="cd_guide">ガイド</string>
     <string name="cd_info">情報</string>
@@ -285,7 +290,19 @@
     <string name="cloud_webdav_backup_started">WebDAV バックアップを開始しました</string>
     <string name="cloud_webdav_restore_completed">WebDAV の復元が完了しました。アプリを再起動します。</string>
     <string name="cloud_webdav_restore_started">WebDAV の復元を開始しました</string>
+    <string name="cloud_webdav_restore_confirm_title">WebDAV から復元しますか？</string>
+    <string name="cloud_webdav_restore_confirm_message">この端末のすべてのノートがサーバー上のバックアップで置き換えられます。この操作は取り消せません。現在のノートを残す場合は、先にローカルバックアップを書き出してください。</string>
+    <string name="cloud_local_restore_confirm_title">このバックアップを復元しますか？</string>
+    <string name="cloud_local_restore_confirm_message">この端末のすべてのノートが選択したバックアップで置き換えられます。この操作は取り消せません。現在のノートを残す場合は、先にローカルバックアップを書き出してください。</string>
+    <string name="auto_backup_restore">自動バックアップから復元</string>
+    <string name="auto_backup_restore_desc">この端末で作成された最新の日次自動バックアップからノートを復元します。自動バックアップはこの端末から出ない鍵で暗号化されているため、この端末でのみ復元できます。端末の乗り換えには WebDAV かローカルバックアップを使ってください。</string>
+    <string name="auto_backup_restore_confirm_title">自動バックアップを復元しますか？</string>
+    <string name="auto_backup_restore_confirm_message">この端末のすべてのノートが最新の自動バックアップ（%1$s 作成）で置き換えられます。この操作は取り消せません。</string>
+    <string name="auto_backup_restore_pick">自動バックアップを選択</string>
+    <string name="auto_backup_none">この端末に自動バックアップはまだありません。自動バックアップを有効にし、翌日以降に確認してください。</string>
+    <string name="auto_backup_decrypt_failed">この自動バックアップを復号できません。別のインストールまたは端末で作成されたか、ファイルが破損しています。</string>
     <string name="cloud_webdav_saved">WebDAV の認証情報を保存しました</string>
+    <string name="cloud_webdav_cleartext_warning">このサーバーは平文の http を使用しています。ユーザー名とパスワードは暗号化されずに送信されます。可能であれば https を使用してください。</string>
     <string name="cloud_webdav_settings">WebDAV 設定</string>
     <string name="cloud_webdav_url">WebDAV URL</string>
     <string name="columns_dialog_count">%1$d 列</string>
@@ -316,7 +333,7 @@
     <string name="export_failed">エクスポートに失敗しました: %1$s</string>
     <string name="export_successful">エクスポートしました</string>
 
-    <string name="faq_a_auto_backup_files">現在は Android/data フォルダにありますが、現在の Android の仕様により、一部の環境ではアクセスできません</string>
+    <string name="faq_a_auto_backup_files">自動バックアップはアプリのプライベートストレージに暗号化されて保存され、設定 → クラウド から復元できます。暗号化鍵は端末から出ないため、この端末用の保険です。端末の乗り換えには WebDAV かローカルバックアップを使ってください</string>
     <string name="faq_a_delete_note">ホーム画面でノートを長押しすると、利用できるオプションが表示されます。ほかにも、ノートをスワイプして編集/プレビューするなどの隠し機能があります。</string>
     <string name="faq_a_developer">WriteOn は、小規模なオープンソースアプリやゲームを手がける電子工学専攻の大学生 @3zpnix によって作られました。このビルドは、自身の必要に合わせてフォークし改良を行っているバイブコーディング初心者の @Brandontake が管理しています。</string>
     <string name="faq_a_feature_requests">もちろんです。改善のためのフィードバックや提案を歓迎します。開発者は通常 1〜2 日以内に返信します。</string>
@@ -488,6 +505,8 @@
     <string name="return_to_home">ホームに戻る</string>
     <string name="stay_here">このまま留まる</string>
     <string name="attachment_missing">添付ファイルを表示できません</string>
+    <string name="latex_rendering">LaTeX 数式を描画</string>
+    <string name="latex_rendering_description">$...$ のインライン数式と $$...$$ のブロック数式を、そのままの文字ではなく数式として表示します。既定ではオフです。</string>
     <string name="live_attachment_preview">添付のライブプレビュー（実験的）</string>
     <string name="live_attachment_preview_description">編集中に画像と録音をブロックとして表示します。ノート自体は通常の Markdown のままです。</string>
     <string name="attachment_actions">添付の操作</string>
@@ -515,6 +534,10 @@
     <string name="cloud_conflict_title">バックアップを別名で保存しました</string>
     <string name="cloud_conflict_desc">前回のアップロード後にリモートのバックアップが変更されたため、上書きせず別名で保存しました。統合する場合はダウンロードしてください。</string>
     <string name="cloud_conflict_copy">リンクをコピー</string>
+    <string name="cloud_conflict_restore">このコピーを復元</string>
+    <string name="cloud_conflict_take_over">リモートを上書き</string>
+    <string name="cloud_conflict_take_over_confirm_title">リモートのバックアップを上書きしますか？</string>
+    <string name="cloud_conflict_take_over_confirm_message">サーバー上のバックアップがこの端末のノートで置き換えられます。この操作は取り消せません。この端末に必要なノートがある場合のみ実行してください。</string>
     <string name="cloud_conflict_dismiss">OK</string>
     <string name="msg_image_export_blank">書き出した画像が空だったため、保存していません。もう一度お試しいただくか、テキストで書き出してください。</string>
     <string name="msg_image_saved_pages">%1$d ページを保存しました。1 枚目: %2$s</string>

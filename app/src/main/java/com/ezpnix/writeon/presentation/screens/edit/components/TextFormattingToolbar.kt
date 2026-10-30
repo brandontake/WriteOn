@@ -53,7 +53,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
-import com.ezpnix.writeon.presentation.components.getExternalStorageDir
+import com.ezpnix.writeon.core.attachment.AttachmentFiles
+import com.ezpnix.writeon.domain.model.Attachment
 import com.ezpnix.writeon.presentation.components.getImageName
 import com.ezpnix.writeon.presentation.screens.edit.model.EditViewModel
 import java.io.File
@@ -65,6 +66,9 @@ import com.ezpnix.writeon.R
 
 private const val TAG = "TextFormattingToolbar"
 
+/** 100 MB: matches the share-path cap, far above any photo, far below "fills the partition". */
+private const val MAX_PICKED_IMAGE_BYTES = 100L * 1024 * 1024
+
 data class ToolbarItem(
     val icon: ImageVector,
     val contentDescription: String,
@@ -75,7 +79,9 @@ data class ToolbarItem(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun TextFormattingToolbar(viewModel: EditViewModel, modifier: Modifier = Modifier) {
-    val colorArrow = MaterialTheme.colorScheme.outlineVariant
+    // outlineVariant is a border colour: on the toolbar surface the arrows were effectively
+    // invisible. onSurfaceVariant keeps them legible in both themes while staying secondary.
+    val colorArrow = MaterialTheme.colorScheme.onSurfaceVariant
     val colorIcon = MaterialTheme.colorScheme.inverseSurface
     var currentIndex by remember { mutableIntStateOf(0) }
     var showRecordAudioDialog by remember { mutableStateOf(false) }
@@ -104,7 +110,7 @@ fun TextFormattingToolbar(viewModel: EditViewModel, modifier: Modifier = Modifie
         listOf(
             // Page 0: Common Actions (5 items: Checkbox, Numbered, Bullet, Image, Mic)
             listOf(
-                ToolbarItem(Icons.AutoMirrored.Rounded.ArrowBackIos, "", color = colorArrow) {
+                ToolbarItem(Icons.AutoMirrored.Rounded.ArrowBackIos, context.getString(R.string.cd_toolbar_prev_page), color = colorArrow) {
                 },
                 ToolbarItem(Icons.Rounded.CheckBox, context.getString(R.string.fmt_checkbox), color = colorIcon) {
                     viewModel.insertText("[x] \n[ ] ")
@@ -121,13 +127,13 @@ fun TextFormattingToolbar(viewModel: EditViewModel, modifier: Modifier = Modifie
                 ToolbarItem(Icons.Rounded.Mic, context.getString(R.string.fmt_record_audio), color = colorIcon) {
                     showRecordAudioDialog = true
                 },
-                ToolbarItem(Icons.AutoMirrored.Rounded.ArrowForwardIos, "", color = colorArrow) {
+                ToolbarItem(Icons.AutoMirrored.Rounded.ArrowForwardIos, context.getString(R.string.cd_toolbar_next_page), color = colorArrow) {
                     currentIndex++
                 },
             ),
             // Page 1: Structure & Typography (5 items: Heading, Link, Divider, Quote, Code)
             listOf(
-                ToolbarItem(Icons.AutoMirrored.Rounded.ArrowBackIos, "", color = colorArrow) {
+                ToolbarItem(Icons.AutoMirrored.Rounded.ArrowBackIos, context.getString(R.string.cd_toolbar_prev_page), color = colorArrow) {
                     currentIndex--
                 },
                 ToolbarItem(Icons.Rounded.Title, context.getString(R.string.fmt_heading), color = colorIcon) {
@@ -145,7 +151,7 @@ fun TextFormattingToolbar(viewModel: EditViewModel, modifier: Modifier = Modifie
                 ToolbarItem(Icons.Rounded.Terminal, context.getString(R.string.fmt_code_block), color = colorIcon) {
                     viewModel.insertText("```\n\n```", -4)
                 },
-                ToolbarItem(Icons.AutoMirrored.Rounded.ArrowForwardIos, "", color = colorArrow) {
+                ToolbarItem(Icons.AutoMirrored.Rounded.ArrowForwardIos, context.getString(R.string.cd_toolbar_next_page), color = colorArrow) {
                     currentIndex++
                 },
             ),
@@ -155,7 +161,7 @@ fun TextFormattingToolbar(viewModel: EditViewModel, modifier: Modifier = Modifie
             // it shares a page with the other block-level insertions, and its icon no longer has to
             // double as the code-block button.
             listOf(
-                ToolbarItem(Icons.AutoMirrored.Rounded.ArrowBackIos, "", color = colorArrow) {
+                ToolbarItem(Icons.AutoMirrored.Rounded.ArrowBackIos, context.getString(R.string.cd_toolbar_prev_page), color = colorArrow) {
                     currentIndex--
                 },
                 ToolbarItem(Icons.Rounded.FormatBold, context.getString(R.string.fmt_bold), color = colorIcon) {
@@ -173,13 +179,13 @@ fun TextFormattingToolbar(viewModel: EditViewModel, modifier: Modifier = Modifie
                 ToolbarItem(Icons.Rounded.AutoFixHigh, context.getString(R.string.fmt_highlight), color = colorIcon) {
                     viewModel.applyFormat("==")
                 },
-                ToolbarItem(Icons.AutoMirrored.Rounded.ArrowForwardIos, "", color = colorArrow) {
+                ToolbarItem(Icons.AutoMirrored.Rounded.ArrowForwardIos, context.getString(R.string.cd_toolbar_next_page), color = colorArrow) {
                     currentIndex++
                 },
             ),
             // Page 3: Blocks and literal text (inline code, table, indent, escape, date/time).
             listOf(
-                ToolbarItem(Icons.AutoMirrored.Rounded.ArrowBackIos, "", color = colorArrow) {
+                ToolbarItem(Icons.AutoMirrored.Rounded.ArrowBackIos, context.getString(R.string.cd_toolbar_prev_page), color = colorArrow) {
                     currentIndex--
                 },
                 ToolbarItem(Icons.Rounded.Code, context.getString(R.string.fmt_inline_code), color = colorIcon) {
@@ -198,7 +204,7 @@ fun TextFormattingToolbar(viewModel: EditViewModel, modifier: Modifier = Modifie
                     val dateTime = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"))
                     viewModel.insertText(dateTime, newLine = false)
                 },
-                ToolbarItem(Icons.AutoMirrored.Rounded.ArrowForwardIos, "", color = colorArrow) {
+                ToolbarItem(Icons.AutoMirrored.Rounded.ArrowForwardIos, context.getString(R.string.cd_toolbar_next_page), color = colorArrow) {
                 },
             ),
         )
@@ -251,9 +257,12 @@ fun TextFormattingToolbar(viewModel: EditViewModel, modifier: Modifier = Modifie
 }
 
 private fun saveImageToAppStorage(context: Context, uri: Uri): String {
-    val appStorageDir = getExternalStorageDir(context)
-    if (!appStorageDir.exists()) {
-        appStorageDir.mkdirs()
+    // Internal storage, not getExternalFilesDir(): a picked picture is user content and must stay
+    // behind the same filesystem boundary as the (encrypted) note database.
+    val appStorageDir = AttachmentFiles.directoryFor(context, Attachment.TYPE_IMAGE)
+    if (!appStorageDir.exists() && !appStorageDir.mkdirs()) {
+        android.util.Log.e(TAG, "Could not create the attachment directory")
+        return ""
     }
     val imageFile = File(appStorageDir, getImageName(uri))
 
@@ -262,14 +271,29 @@ private fun saveImageToAppStorage(context: Context, uri: Uri): String {
     // URI that points at nothing.
     val copied = context.contentResolver.openInputStream(uri)?.use { input ->
         FileOutputStream(imageFile).use { output ->
-            input.copyTo(output)
+            // Same guard the share path has: a mistaken pick (a video offered as an image) must
+            // not be able to fill the private partition, and a partial copy is removed below.
+            val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+            var total = 0L
+            while (true) {
+                val read = input.read(buffer)
+                if (read < 0) break
+                total += read
+                if (total > MAX_PICKED_IMAGE_BYTES) {
+                    throw java.io.IOException("picked image exceeds $MAX_PICKED_IMAGE_BYTES bytes")
+                }
+                output.write(buffer, 0, read)
+            }
         }
         true
     } ?: false
 
     if (!copied || !imageFile.exists()) {
         android.util.Log.e(TAG, "Could not save the picked image to app storage")
+        runCatching { imageFile.delete() }
         return ""
     }
-    return Uri.fromFile(imageFile).toString()
+    // A filesystem path, not a file:// Uri: the attachment row is read with File(path) by the
+    // exporter and by AttachmentFiles, both of which would treat a Uri string as a literal name.
+    return imageFile.absolutePath
 }

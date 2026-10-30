@@ -104,6 +104,7 @@ fun MarkdownQuote(
     containerColor: Color = MaterialTheme.colorScheme.surface
 ) {
     val customFont = LocalNoteFontFamily.current
+    val latexEnabled = LocalLatexEnabled.current
     Row(horizontalArrangement = Arrangement.Center) {
         Box(
             modifier = Modifier
@@ -119,7 +120,7 @@ fun MarkdownQuote(
         )
         Spacer(modifier = Modifier.width(6.dp))
         Text(
-            text = buildString(" $content"),
+            text = buildString(" $content", latexEnabled = latexEnabled),
             fontSize = fontSize,
             fontFamily = customFont
         )
@@ -388,6 +389,7 @@ fun TableBlock(
     modifier: Modifier = Modifier
 ) {
     val customFont = LocalNoteFontFamily.current
+    val latexEnabled = LocalLatexEnabled.current
     Column(
         modifier = modifier
             .fillMaxWidth()
@@ -413,7 +415,8 @@ fun TableBlock(
                         // escapes inside a cell render exactly as they did before the extraction.
                         text = buildString(
                             cell,
-                            if (rowIndex == 0) FontWeight.SemiBold else weight
+                            if (rowIndex == 0) FontWeight.SemiBold else weight,
+                            latexEnabled = latexEnabled
                         ),
                         fontSize = fontSize,
                         fontFamily = customFont,
@@ -445,8 +448,9 @@ fun MarkdownText(
     onImageLoaded: (String) -> Unit = {},
     /**
      * When set, rendered pictures and recordings offer a delete action that calls this with the
-     * `attachment://` id. Screens that can edit the note pass their handler; note cards leave it
-     * null so a feed of notes can never delete anything.
+     * `attachment://` id. The editor and the home feed pass their handler, so a recording can be
+     * removed without opening the note; the recycle bin leaves it null so trashed cards cannot
+     * delete anything.
      */
     onAttachmentDelete: ((String) -> Unit)? = null
 ) {
@@ -465,11 +469,12 @@ fun MarkdownText(
     // Parsed once per text change instead of once per recomposition. This composable is
     // instantiated for every note card in the grid, so an unremembered pipeline re-tokenised
     // the whole note (and allocated the five line processors) on every scroll frame.
+    val latexEnabled = LocalLatexEnabled.current
     val lines = remember(markdown) { markdown.lines() }
-    val content = remember(lines) {
+    val content = remember(lines, latexEnabled) {
         MarkdownBuilder(
             lines = lines,
-            lineProcessors = defaultMarkdownLineProcessors()
+            lineProcessors = defaultMarkdownLineProcessors(renderLatex = latexEnabled)
         ).apply { parse() }.content
     }
 
@@ -623,11 +628,12 @@ fun RenderMarkdownElement(
 ) {
     val element = content[index]
     val customFont = LocalNoteFontFamily.current
+    val latexEnabled = LocalLatexEnabled.current
     Row {
         when (element) {
             is Heading -> {
                 Text(
-                    text = buildString(element.text, weight),
+                    text = buildString(element.text, weight, latexEnabled = latexEnabled),
                     // Two steps, not six: the toolbar only offers one heading button (`##`), and a
                     // note that carries `#` or `###` asks for a section break rather than a smaller
                     // heading. Scaling also stops overriding the reader's own text size.
@@ -643,7 +649,7 @@ fun RenderMarkdownElement(
                 MarkdownCheck(
                     content = {
                         Text(
-                            text = buildString(element.text, weight),
+                            text = buildString(element.text, weight, latexEnabled = latexEnabled),
                             fontSize = fontSize,
                             fontWeight = weight,
                             fontFamily = customFont,
@@ -663,7 +669,7 @@ fun RenderMarkdownElement(
             }
             is ListItem -> {
                 Text(
-                    text = buildString("鈥?${element.text}", weight),
+                    text = buildString("• ${element.text}", weight, latexEnabled = latexEnabled),
                     fontSize = fontSize,
                     fontWeight = weight,
                     fontFamily = customFont,
@@ -743,6 +749,12 @@ fun RenderMarkdownElement(
                     overflow = overflow
                 )
             }
+            is MathBlock -> {
+                MathBlockView(
+                    expression = element.expression,
+                    fontSize = fontSize
+                )
+            }
             is HorizontalRule -> {
                 HorizontalDivider(
                     modifier = Modifier
@@ -754,7 +766,7 @@ fun RenderMarkdownElement(
             }
             is NormalText -> {
                 Text(
-                    text = buildString(element.text, weight),
+                    text = buildString(element.text, weight, latexEnabled = latexEnabled),
                     fontSize = fontSize,
                     fontFamily = customFont,
                     maxLines = maxLines,

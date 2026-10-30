@@ -45,6 +45,7 @@ fun NoteFilter(
     onPinNote: (Note) -> Unit = {},
     onTagNote: (Note) -> Unit = {},
     swipeEnabled: Boolean = true,
+    onAttachmentDelete: ((String) -> Unit)? = null,
     onRestore: () -> Unit = {},
     onSearch: () -> Unit = {},
     modifier: Modifier = Modifier,
@@ -94,7 +95,8 @@ fun NoteFilter(
             animationFinished = onDeleteNote,
             onPinNote = onPinNote,
             onTagNote = onTagNote,
-            swipeEnabled = swipeEnabled
+            swipeEnabled = swipeEnabled,
+            onAttachmentDelete = onAttachmentDelete
         )
     }
 }
@@ -109,7 +111,13 @@ internal fun filterNotes(notes: List<Note>, searchText: String?): List<Note> {
 
 @Composable
 private fun getEmptyText(searchText: String?): String {
-    return stringResource(R.string.startup)
+    // "No results" only makes sense when something was actually searched: on a genuinely empty
+    // library the welcome text is the right answer.
+    return if (searchText.isNullOrBlank()) {
+        stringResource(R.string.startup)
+    } else {
+        stringResource(R.string.search_no_results)
+    }
 }
 
 @Composable

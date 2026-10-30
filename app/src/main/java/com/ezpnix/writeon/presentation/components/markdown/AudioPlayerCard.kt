@@ -91,8 +91,8 @@ fun AudioPlayerCard(
      */
     onRename: ((String) -> Unit)? = null,
     /**
-     * Called when the user confirms the delete entry in the card menu. Screens that can edit the
-     * note move the attachment to the recycle bin; readers pass null and no entry is offered.
+     * Called when the user confirms the delete entry in the card menu. The editor and the home feed
+     * move the attachment to the recycle bin; the recycle bin passes null and no entry is offered.
      */
     onDelete: (() -> Unit)? = null
 ) {
@@ -163,7 +163,9 @@ fun AudioPlayerCard(
             .fillMaxWidth()
             .clip(RoundedCornerShape((radius / 2).coerceAtLeast(12).dp)),
         color = MaterialTheme.colorScheme.surfaceContainerHigh,
-        tonalElevation = 2.dp
+        // MD3 depth comes from the container colour, not a shadow: stacked shadows on a scrolling
+        // feed of cards read as grime rather than hierarchy.
+        tonalElevation = 0.dp
     ) {
         Row(
             modifier = Modifier

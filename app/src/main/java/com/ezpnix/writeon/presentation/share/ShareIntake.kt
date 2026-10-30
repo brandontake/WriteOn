@@ -8,7 +8,10 @@ import android.util.Log
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.setValue
+import com.ezpnix.writeon.core.attachment.AttachmentFiles
+import com.ezpnix.writeon.domain.model.Attachment
 import java.io.File
+import java.io.IOException
 
 /**
  * What another app handed us: some text, some pictures, or both.
@@ -78,7 +81,9 @@ fun readShareIntent(context: Context, intent: Intent?): SharePayload? {
 }
 
 private fun importImage(context: Context, uri: Uri): String? {
-    val directory = context.getExternalFilesDir(null) ?: return null
+    // Shared pictures are user content: keep them in internal storage, not the app-specific
+    // external directory that any file manager (or MTP) can read.
+    val directory = AttachmentFiles.directoryFor(context, Attachment.TYPE_IMAGE)
     if (!directory.exists() && !directory.mkdirs()) return null
 
     // The display name decides the extension, so a shared PNG stays a PNG instead of being
@@ -91,14 +96,35 @@ private fun importImage(context: Context, uri: Uri): String? {
 
     return try {
         context.contentResolver.openInputStream(uri)?.use { input ->
-            file.outputStream().use { output -> input.copyTo(output) }
+            file.outputStream().use { output ->
+                // A share is one file out of the sender's app; the cap only trips on something no
+                // note should carry (a video picked as an image, a corrupt length). Without it a
+                // malicious or mistaken sender could fill the private partition.
+                val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+                var copied = 0L
+                while (true) {
+                    val read = input.read(buffer)
+                    if (read < 0) break
+                    copied += read
+                    if (copied > MAX_SHARED_IMAGE_BYTES) {
+                        throw IOException("shared image exceeds $MAX_SHARED_IMAGE_BYTES bytes")
+                    }
+                    output.write(buffer, 0, read)
+                }
+            }
+            true
         } ?: return null
         file.absolutePath
     } catch (throwable: Throwable) {
         Log.e("ShareIntake", "Could not import a shared image", throwable)
+        // A partial file would linger and render as a broken attachment.
+        runCatching { file.delete() }
         null
     }
 }
+
+/** 100 MB: far above any photo, far below "one share fills the disk". */
+private const val MAX_SHARED_IMAGE_BYTES = 100L * 1024 * 1024
 
 private fun displayName(context: Context, uri: Uri): String? = runCatching {
     context.contentResolver

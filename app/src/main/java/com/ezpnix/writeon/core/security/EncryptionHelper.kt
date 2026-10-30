@@ -1,4 +1,4 @@
-package com.ezpnix.writeon.presentation.components
+package com.ezpnix.writeon.core.security
 
 import android.util.Base64
 import java.nio.charset.StandardCharsets

@@ -97,7 +97,7 @@ fun ScratchpadScreen(
                     IconButton(onClick = {
                         if (undoStack.isNotEmpty()) {
                             redoStack.add(textState)
-                            textState = undoStack.removeLast()
+                            textState = undoStack.removeAt(undoStack.lastIndex)
                         }
                     }) {
                         Icon(Icons.AutoMirrored.Rounded.Undo, contentDescription = context.getString(R.string.cd_undo), tint = MaterialTheme.colorScheme.primary)
@@ -113,7 +113,7 @@ fun ScratchpadScreen(
                     IconButton(onClick = {
                         if (redoStack.isNotEmpty()) {
                             undoStack.add(textState)
-                            textState = redoStack.removeLast()
+                            textState = redoStack.removeAt(redoStack.lastIndex)
                         }
                     }) {
                         Icon(Icons.AutoMirrored.Rounded.Redo, contentDescription = stringResource(R.string.cd_redo), tint = MaterialTheme.colorScheme.primary)
@@ -159,7 +159,7 @@ fun ScratchpadScreen(
                                 .padding(16.dp)
                                 .fillMaxWidth(),
                             shape = appCornerShape(),
-                            elevation = CardDefaults.cardElevation(8.dp)
+                            elevation = CardDefaults.cardElevation(0.dp)
                         ) {
                             Text(
                                 stringResource(R.string.scratchpad_about),

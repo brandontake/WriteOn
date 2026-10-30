@@ -49,20 +49,72 @@ class AttachmentAudioProcessor : MarkdownLineProcessor {
  * The legacy processors stay in the pipeline: a body that the 7 -> 8 migration could not rewrite
  * (password-protected vault notes, text restored from an old backup, anything a user pastes by
  * hand) must keep rendering until it is opened and saved once.
+ *
+ * [renderLatex] is a user setting and defaults to off: when it is false the `$$` processor is not
+ * installed, so a body containing dollar signs keeps rendering exactly as it did before.
  */
-fun defaultMarkdownLineProcessors(): List<MarkdownLineProcessor> = listOf(
-    AttachmentImageProcessor(),
-    AttachmentAudioProcessor(),
-    TableProcessor(),
-    HeadingProcessor(),
-    HorizontalRuleProcessor(),
-    ListItemProcessor(),
-    CodeBlockProcessor(),
-    QuoteProcessor(),
-    ImageInsertionProcessor(),
-    AudioInsertionProcessor(),
-    CheckboxProcessor()
-)
+fun defaultMarkdownLineProcessors(renderLatex: Boolean = false): List<MarkdownLineProcessor> = buildList {
+    add(AttachmentImageProcessor())
+    add(AttachmentAudioProcessor())
+    if (renderLatex) add(MathBlockProcessor())
+    add(TableProcessor())
+    add(HeadingProcessor())
+    add(HorizontalRuleProcessor())
+    add(ListItemProcessor())
+    add(CodeBlockProcessor())
+    add(QuoteProcessor())
+    add(ImageInsertionProcessor())
+    add(AudioInsertionProcessor())
+    add(CheckboxProcessor())
+}
+
+
+/**
+ * A display formula fenced by `$$`:
+ *
+ * ```
+ * $$
+ * \frac{a}{b}
+ * $$
+ * ```
+ *
+ * The opening and closing fences may share a line with the expression (`$$a^2$$`). An opening
+ * fence with no closing fence is left as ordinary text instead of swallowing the rest of the note.
+ */
+class MathBlockProcessor : MarkdownLineProcessor {
+    override fun canProcessLine(line: String): Boolean = line.trim().startsWith("$$")
+
+    override fun processLine(line: String, builder: MarkdownBuilder) {
+        val trimmed = line.trim()
+        if (trimmed.length > 4 && trimmed.endsWith("$$")) {
+            builder.add(MathBlock(trimmed.substring(2, trimmed.length - 2).trim()))
+            return
+        }
+
+        val expression = StringBuilder(trimmed.removePrefix("$$"))
+        var index = builder.lineIndex + 1
+        var closed = false
+        while (index < builder.lines.size) {
+            val next = builder.lines[index]
+            val nextTrimmed = next.trim()
+            if (nextTrimmed.endsWith("$$")) {
+                expression.append('\n').append(nextTrimmed.removeSuffix("$$"))
+                builder.lineIndex = index
+                closed = true
+                break
+            }
+            expression.append('\n').append(next)
+            index++
+        }
+
+        if (closed) {
+            builder.add(MathBlock(expression.toString().trim()))
+        } else {
+            // The lines were only read, never consumed, so they are parsed normally afterwards.
+            builder.add(NormalText(line))
+        }
+    }
+}
 
 
 /**

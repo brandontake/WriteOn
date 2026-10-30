@@ -168,7 +168,7 @@ fun TrashScreen(
             Surface(
                 shape = CircleShape,
                 color = MaterialTheme.colorScheme.surfaceContainerHigh,
-                tonalElevation = 3.dp,
+                tonalElevation = 0.dp,
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 12.dp, vertical = 8.dp)
@@ -205,8 +205,8 @@ fun TrashScreen(
             }
 
             Surface(
-                tonalElevation = 2.dp,
-                shadowElevation = 2.dp,
+                tonalElevation = 0.dp,
+                shadowElevation = 0.dp,
                 color = MaterialTheme.colorScheme.surface,
                 modifier = Modifier
                     .fillMaxWidth()
@@ -281,7 +281,7 @@ fun TrashScreen(
                     Text(
                         text = stringResource(R.string.trash_empty),
                         style = MaterialTheme.typography.bodyLarge,
-                        color = MaterialTheme.colorScheme.secondary
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
             } else if (visibleNotes.isEmpty()) {
@@ -294,7 +294,7 @@ fun TrashScreen(
                     Text(
                         text = stringResource(R.string.search_no_results),
                         style = MaterialTheme.typography.bodyLarge,
-                        color = MaterialTheme.colorScheme.secondary
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
             } else {
@@ -503,7 +503,7 @@ private fun TrashAttachmentsGrid(
             Text(
                 text = emptyText,
                 style = MaterialTheme.typography.bodyLarge,
-                color = MaterialTheme.colorScheme.secondary
+                color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
         return
@@ -555,7 +555,7 @@ private fun TrashAttachmentsList(
             Text(
                 text = emptyText,
                 style = MaterialTheme.typography.bodyLarge,
-                color = MaterialTheme.colorScheme.secondary
+                color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
         return

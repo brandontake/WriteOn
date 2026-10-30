@@ -109,7 +109,7 @@
     <string name="backup">Backup</string>
     <string name="restore">Restore</string>
     <string name="auto_backup">Automatic Backup</string>
-    <string name="auto_backup_description">Saves automatically to Android/data folder (For Android 10+ devices requires ROOT to access due to the current android policy)</string>
+    <string name="auto_backup_description">Saves an encrypted copy of your notes in the app\'s private storage every day, keeping the newest seven. They can be restored from Settings → Cloud on this device only - the encryption key never leaves the phone</string>
     <string name="backup_dropdown">Backup</string>
     <string name="backup_description">Store or restore all notes to/from a zip file. Note that this replaces your entire existing notes as well as clearing the recycle bin.</string>
     <string name="restore_description">Restore notes from a zip file</string>
@@ -150,6 +150,7 @@
     <string name="biometric_authentication">Biometric Authentication</string>
     <string name="biometric_authentication_description">Unlock WriteOn with your fingerprint or face</string>
     <string name="vault_description">Enable extra layer of protection</string>
+    <string name="vault_locked_cannot_save">Unlock the vault before saving this note</string>
 
     <!-- General -->
     <string name="database">Database</string>
@@ -245,6 +246,10 @@
     <string name="calculator_result">Result</string>
     <string name="cd_back">Back</string>
     <string name="cd_copy_and_save">Copy and Save</string>
+    <string name="cd_copy">Copy note to clipboard</string>
+    <string name="cd_toolbar_prev_page">Formatting tools, previous page</string>
+    <string name="cd_toolbar_next_page">Formatting tools, next page</string>
+    <string name="translate_copied_hint">Note copied to clipboard - paste it into the translator</string>
     <string name="cd_details">Details</string>
     <string name="cd_guide">Guide</string>
     <string name="cd_info">Info</string>
@@ -283,7 +288,19 @@
     <string name="cloud_webdav_backup_started">WebDAV backup started</string>
     <string name="cloud_webdav_restore_completed">WebDAV restore completed! App will restart now.</string>
     <string name="cloud_webdav_restore_started">WebDAV restore started</string>
+    <string name="cloud_webdav_restore_confirm_title">Restore from WebDAV?</string>
+    <string name="cloud_webdav_restore_confirm_message">Every note currently on this device will be replaced by the backup on the server. This cannot be undone. Export a local backup first if you need to keep the current notes.</string>
+    <string name="cloud_local_restore_confirm_title">Restore this backup?</string>
+    <string name="cloud_local_restore_confirm_message">Every note currently on this device will be replaced by the selected backup. This cannot be undone. Export a local backup first if you need to keep the current notes.</string>
+    <string name="auto_backup_restore">Restore automatic backup</string>
+    <string name="auto_backup_restore_desc">Puts the notes back from the newest daily backup made on this device. Automatic backups are encrypted with a key that never leaves this device, so this only works here - moving to a new phone needs a WebDAV or local backup.</string>
+    <string name="auto_backup_restore_confirm_title">Restore the automatic backup?</string>
+    <string name="auto_backup_restore_confirm_message">Every note currently on this device will be replaced by the newest automatic backup (made %1$s). This cannot be undone.</string>
+    <string name="auto_backup_restore_pick">Choose an automatic backup</string>
+    <string name="auto_backup_none">No automatic backups on this device yet. Turn on automatic backup and check back after the next daily run.</string>
+    <string name="auto_backup_decrypt_failed">This automatic backup could not be decrypted. It was made by a different install or device, or the file is damaged.</string>
     <string name="cloud_webdav_saved">WebDAV credentials saved!</string>
+    <string name="cloud_webdav_cleartext_warning">This server uses plain http, so your username and password travel unencrypted. Use https where possible.</string>
     <string name="cloud_webdav_settings">WebDAV Settings</string>
     <string name="cloud_webdav_url">WebDAV URL</string>
     <string name="columns_dialog_count">%1$d columns</string>
@@ -313,7 +330,7 @@
     <string name="expand_collapse">Expand/Collapse</string>
     <string name="export_failed">Export failed: %1$s</string>
     <string name="export_successful">Export successful</string>
-    <string name="faq_a_auto_backup_files">They are currently located in the Android/data folder, which, unfortunately, is inaccessible to some because of the current android policy</string>
+    <string name="faq_a_auto_backup_files">Automatic backups are kept encrypted in the app\'s private storage and can be restored from Settings → Cloud. Because the encryption key never leaves your device, they are a safety net for this phone - use a WebDAV or local backup to move to a new one</string>
     <string name="faq_a_delete_note">Long-press a note on your home screen to see the available options. You may also discover other hidden features as well such as the swipe to edit/preview note.</string>
     <string name="faq_a_developer">WriteOn was created by @3zpnix, an electronic engineering university student who creates small open-source apps and games. This build is maintained by @Brandontake, a vibecoding beginner who forked it and improved it for their own needs.</string>
     <string name="faq_a_feature_requests">Of course! Any feedback or suggestions for improvement are welcome. The developer usually replies within a day or two.</string>
@@ -484,6 +501,8 @@
     <string name="return_to_home">Return to Home</string>
     <string name="stay_here">Stay Here</string>
     <string name="attachment_missing">Attached file unavailable</string>
+    <string name="latex_rendering">Render LaTeX formulas</string>
+    <string name="latex_rendering_description">Show $...$ inline and $$...$$ block formulas as math instead of plain text. Off by default.</string>
     <string name="live_attachment_preview">Live attachment preview (experimental)</string>
     <string name="live_attachment_preview_description">Show pictures and recordings as blocks while editing. The note is still stored as plain Markdown.</string>
     <string name="attachment_actions">Attachment actions</string>
@@ -511,6 +530,10 @@
     <string name="cloud_conflict_title">Backup kept as a separate copy</string>
     <string name="cloud_conflict_desc">The remote backup had changed since this device last uploaded, so this device\'s version was saved beside it instead of replacing it. Download it if you want to merge both.</string>
     <string name="cloud_conflict_copy">Copy link</string>
+    <string name="cloud_conflict_restore">Restore this copy</string>
+    <string name="cloud_conflict_take_over">Overwrite remote</string>
+    <string name="cloud_conflict_take_over_confirm_title">Overwrite the remote backup?</string>
+    <string name="cloud_conflict_take_over_confirm_message">The backup on the server will be replaced by the notes on this device. This cannot be undone. Only do this if this device holds the notes you want to keep.</string>
     <string name="cloud_conflict_dismiss">Got it</string>
     <string name="msg_image_export_blank">The export came out empty, so nothing was saved. Try again, or export the note as text.</string>
     <string name="msg_image_saved_pages">Saved %1$d pages. First one: %2$s</string>

@@ -69,7 +69,7 @@ fun SettingsBox(
     AnimatedVisibility(visible = isEnabled) {
         ElevatedCard(
             shape = radius,
-            elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+            elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
             colors = CardDefaults.elevatedCardColors(
                 containerColor = MaterialTheme.colorScheme.surface,
                 contentColor = MaterialTheme.colorScheme.onSurface

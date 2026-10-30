@@ -9,6 +9,7 @@ import android.content.Context
 import android.content.SharedPreferences
 import android.os.SystemClock
 import android.util.Base64
+import android.util.Log
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -35,7 +36,31 @@ import javax.inject.Singleton
 @Singleton
 class LockManager @Inject constructor(@ApplicationContext private val context: Context) {
 
+    /**
+     * Encrypted lock storage with a last-resort fallback.
+     *
+     * The master key lives in the device Keystore. After a device transfer, a restored auto backup
+     * or a Keystore reset, the preferences file is present but cannot be decrypted;
+     * EncryptedSharedPreferences.create used to throw here, and because this happens during
+     * ViewModel construction the app crashed on every launch. The unreadable file is deleted and
+     * recreated first; if even that fails, a separate plain-preferences file keeps the app usable.
+     * That fallback still stores only PBKDF2 hashes and salts, never the PIN or pattern itself.
+     */
     private val prefs: SharedPreferences by lazy {
+        encryptedPreferences() ?: fallbackPreferences()
+    }
+
+    private fun encryptedPreferences(): SharedPreferences? {
+        createEncryptedPreferences()?.let { return it }
+
+        Log.e(TAG, "Lock preferences could not be decrypted; resetting them")
+        context.deleteSharedPreferences(PREFS_NAME)
+        return createEncryptedPreferences().also {
+            if (it == null) Log.e(TAG, "Encrypted lock storage unavailable; using fallback prefs")
+        }
+    }
+
+    private fun createEncryptedPreferences(): SharedPreferences? = try {
         val masterKey = MasterKey.Builder(context)
             .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
             .build()
@@ -46,7 +71,13 @@ class LockManager @Inject constructor(@ApplicationContext private val context: C
             EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
             EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM,
         )
+    } catch (e: Exception) {
+        Log.e(TAG, "Could not open encrypted lock preferences", e)
+        null
     }
+
+    private fun fallbackPreferences(): SharedPreferences =
+        context.getSharedPreferences(FALLBACK_PREFS_NAME, Context.MODE_PRIVATE)
 
     private val random = SecureRandom()
 
@@ -59,12 +90,30 @@ class LockManager @Inject constructor(@ApplicationContext private val context: C
     private val _patternEnabled = MutableStateFlow(prefs.getString(KEY_PATTERN_HASH, null) != null)
     val patternEnabled: StateFlow<Boolean> = _patternEnabled.asStateFlow()
 
-    private val _lockoutUntil = MutableStateFlow(prefs.getLong(KEY_LOCKOUT_UNTIL, 0L))
-    val lockoutUntil: StateFlow<Long> = _lockoutUntil.asStateFlow()
+    /**
+     * Elapsed-realtime deadline of the current lockout, 0 when not locked out.
+     *
+     * [android.os.SystemClock.elapsedRealtime] is monotonic and unaffected by the user changing the
+     * clock, which the old `System.currentTimeMillis()` deadline was not: setting the clock forward
+     * skipped any lockout instantly, turning a four-digit PIN's 10,000 combinations into an
+     * afternoon of guessing.
+     *
+     * It is also *persisted* (see [restoreLockoutFromPrefs]) so killing the process does not reset
+     * it. An in-memory-only deadline meant a force-stop handed out five free tries on every cold
+     * start, which is cheaper to exploit than changing the clock.
+     */
+    private var lockoutDeadlineElapsed = 0L
 
     /** True while the lock screen must cover the app; also true on a cold start if a lock is set. */
     private val _isLocked = MutableStateFlow(anyLockEnabled())
     val isLocked: StateFlow<Boolean> = _isLocked.asStateFlow()
+
+    private val _lockoutUntil = MutableStateFlow(0L)
+    val lockoutUntil: StateFlow<Long> = _lockoutUntil.asStateFlow()
+
+    init {
+        restoreLockoutFromPrefs()
+    }
 
     /** Monotonic timestamp of the last ON_STOP and whether the app was unlocked at that moment. */
     private var backgroundedAt = 0L
@@ -156,28 +205,90 @@ class LockManager @Inject constructor(@ApplicationContext private val context: C
 
     // region brute force throttle
 
-    fun isLockedOut(): Boolean = lockoutUntil.value > System.currentTimeMillis()
+    fun isLockedOut(): Boolean = lockoutDeadlineElapsed > SystemClock.elapsedRealtime()
 
     /** Seconds the user still has to wait, 0 when not locked out; for the inline message. */
     fun lockoutSecondsRemaining(): Int {
-        val remaining = lockoutUntil.value - System.currentTimeMillis()
+        val remaining = lockoutDeadlineElapsed - SystemClock.elapsedRealtime()
         return if (remaining > 0) ((remaining + MILLIS_PER_SECOND - 1) / MILLIS_PER_SECOND).toInt() else 0
     }
 
+    /**
+     * One failed attempt, with a wait that doubles each time the user burns through a lockout.
+     *
+     * A flat 30 seconds per five failures makes a four-digit PIN brute-forceable in an afternoon,
+     * because an attacker gets ten thousand free tries a day. The schedule now grows
+     * 30s -> 1m -> 5m -> 15m -> 30m (capped) per lockout, and the failure count that decides the
+     * step survives reboots. The wait itself is measured on [SystemClock.elapsedRealtime] (so
+     * changing the clock no longer skips it) and is persisted alongside a wall-clock copy, so a
+     * force-stop cannot hand out a fresh batch of tries either (see [restoreLockoutFromPrefs]).
+     */
     private fun registerFailure() {
         val failures = prefs.getInt(KEY_FAILURES, 0) + 1
         if (failures >= MAX_FAILURES) {
-            val until = System.currentTimeMillis() + LOCKOUT_MS
-            prefs.edit().putInt(KEY_FAILURES, 0).putLong(KEY_LOCKOUT_UNTIL, until).apply()
-            _lockoutUntil.value = until
+            val lockouts = prefs.getInt(KEY_LOCKOUTS, 0) + 1
+            val waitMs = LOCKOUT_SCHEDULE_MS[minOf(lockouts - 1, LOCKOUT_SCHEDULE_MS.lastIndex)]
+            val elapsedStart = SystemClock.elapsedRealtime()
+            val wallStart = System.currentTimeMillis()
+            lockoutDeadlineElapsed = elapsedStart + waitMs
+            _lockoutUntil.value = wallStart + waitMs
+            prefs.edit()
+                .putInt(KEY_FAILURES, 0)
+                .putInt(KEY_LOCKOUTS, lockouts)
+                .putLong(KEY_LOCKOUT_WAIT_MS, waitMs)
+                .putLong(KEY_LOCKOUT_ELAPSED_START, elapsedStart)
+                .putLong(KEY_LOCKOUT_WALL_START, wallStart)
+                .apply()
         } else {
             prefs.edit().putInt(KEY_FAILURES, failures).apply()
         }
     }
 
     private fun resetFailures() {
-        prefs.edit().putInt(KEY_FAILURES, 0).putLong(KEY_LOCKOUT_UNTIL, 0L).apply()
+        prefs.edit()
+            .putInt(KEY_FAILURES, 0)
+            .putInt(KEY_LOCKOUTS, 0)
+            .remove(KEY_LOCKOUT_WAIT_MS)
+            .remove(KEY_LOCKOUT_ELAPSED_START)
+            .remove(KEY_LOCKOUT_WALL_START)
+            .apply()
+        lockoutDeadlineElapsed = 0L
         _lockoutUntil.value = 0L
+    }
+
+    /**
+     * Restores an in-flight lockout after a process death or a reboot.
+     *
+     * [registerFailure] persists the wait duration plus two start stamps. Within the same boot the
+     * monotonic [SystemClock.elapsedRealtime] is authoritative: it cannot be skipped by changing the
+     * system clock or by force-stopping the app. After a reboot (elapsed resets, so `elapsedNow <
+     * elapsedStart`) we fall back to the wall-clock stamp - weaker, but the failure count survived,
+     * so the next lockout in the sequence is longer. A wait that already expired while the app was
+     * dead clears its own markers rather than leaving them to confuse the next failure.
+     */
+    private fun restoreLockoutFromPrefs() {
+        val waitMs = prefs.getLong(KEY_LOCKOUT_WAIT_MS, 0L)
+        if (waitMs <= 0L) return
+        val elapsedStart = prefs.getLong(KEY_LOCKOUT_ELAPSED_START, 0L)
+        val wallStart = prefs.getLong(KEY_LOCKOUT_WALL_START, 0L)
+        val elapsedNow = SystemClock.elapsedRealtime()
+
+        val remaining = if (elapsedStart > 0L && elapsedNow >= elapsedStart) {
+            waitMs - (elapsedNow - elapsedStart)
+        } else {
+            wallStart + waitMs - System.currentTimeMillis()
+        }
+
+        if (remaining > 0L) {
+            lockoutDeadlineElapsed = elapsedNow + remaining
+            _lockoutUntil.value = System.currentTimeMillis() + remaining
+        } else {
+            prefs.edit()
+                .remove(KEY_LOCKOUT_WAIT_MS)
+                .remove(KEY_LOCKOUT_ELAPSED_START)
+                .remove(KEY_LOCKOUT_WALL_START)
+                .apply()
+        }
     }
 
     // endregion
@@ -215,7 +326,9 @@ class LockManager @Inject constructor(@ApplicationContext private val context: C
         const val MAX_PIN_LENGTH = 6
         const val MIN_PATTERN_CELLS = 4
 
+        private const val TAG = "LockManager"
         private const val PREFS_NAME = "writeon_lock"
+        private const val FALLBACK_PREFS_NAME = "writeon_lock_fallback"
         private const val ALGORITHM = "PBKDF2WithHmacSHA256"
         /** PBKDF2-HMAC-SHA256 iterations, at the current OWASP minimum for this KDF. */
         private const val ITERATIONS = 600_000
@@ -228,11 +341,30 @@ class LockManager @Inject constructor(@ApplicationContext private val context: C
         private const val KEY_PATTERN_SALT = "pattern_salt"
         private const val KEY_PATTERN_HASH = "pattern_hash"
         private const val KEY_FAILURES = "failed_attempts"
-        private const val KEY_LOCKOUT_UNTIL = "lockout_until"
+
+        /** How many lockouts the user has already burned through; decides the current wait step. */
+        private const val KEY_LOCKOUTS = "lockout_count"
+
+        /** In-flight lockout, persisted so a force-stop cannot reset it (see restoreLockoutFromPrefs). */
+        private const val KEY_LOCKOUT_WAIT_MS = "lockout_wait_ms"
+        private const val KEY_LOCKOUT_ELAPSED_START = "lockout_elapsed_start"
+        private const val KEY_LOCKOUT_WALL_START = "lockout_wall_start"
 
         private const val MAX_FAILURES = 5
-        private const val LOCKOUT_MS = 30_000L
         private const val MILLIS_PER_SECOND = 1_000L
+
+        /**
+         * Wait after the 5th, 10th, 15th... consecutive failures. Doubling per lockout is what makes
+         * "try every 4-digit PIN" cost weeks instead of an afternoon; the cap keeps a user who
+         * genuinely forgot their PIN from waiting forever between the first and second try.
+         */
+        private val LOCKOUT_SCHEDULE_MS = longArrayOf(
+            30_000L,        // 1st lockout
+            60_000L,        // 2nd
+            5 * 60_000L,    // 3rd
+            15 * 60_000L,   // 4th
+            30 * 60_000L    // 5th and beyond
+        )
 
         /** Re-lock only when the app stayed in the background longer than this. */
         private const val GRACE_PERIOD_MS = 20_000L

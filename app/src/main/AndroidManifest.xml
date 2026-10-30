@@ -6,11 +6,13 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <!-- WorkManager reschedules the daily automatic backup after a reboot; without this permission
+         the periodic work silently never runs again. -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
     <!-- Removed ones -->
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" tools:node="remove"/>
     <uses-permission android:name="android.permission.WAKE_LOCK" tools:node="remove"/>
-    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" tools:node="remove"/>
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" tools:node="remove"/>
 
     <application
@@ -30,25 +32,32 @@
         tools:ignore="DataExtractionRules">
 
         <!-- Widget Receivers -->
-        <receiver android:name=".widget.AddNoteReceiver" android:exported="true">
+        <receiver
+            android:name=".widget.AddNoteReceiver"
+            android:exported="true"
+            android:permission="android.permission.BIND_APPWIDGET">
             <intent-filter>
                 <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
             </intent-filter>
             <meta-data android:name="android.appwidget.provider" android:resource="@xml/add_note" />
         </receiver>
 
-        <receiver android:name=".widget.NotesWidgetReceiver" android:exported="true">
+        <receiver
+            android:name=".widget.NotesWidgetReceiver"
+            android:exported="true"
+            android:permission="android.permission.BIND_APPWIDGET">
             <intent-filter>
                 <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
             </intent-filter>
             <meta-data android:name="android.appwidget.provider" android:resource="@xml/notes" />
         </receiver>
 
-        <!-- Widget Config Activity -->
+        <!-- Widget Config Activity. `android.permission.UPDATE_WIDGETS` does not exist on Android,
+             so declaring it made the activity impossible to launch and left the widget config
+             screen unreachable; the launcher already starts it as the widget host. -->
         <activity
             android:name=".widget.NotesWidgetActivity"
-            android:exported="true"
-            android:permission="android.permission.UPDATE_WIDGETS">
+            android:exported="true">
             <intent-filter>
                 <action android:name="android.appwidget.action.APPWIDGET_CONFIGURE"/>
                 <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />

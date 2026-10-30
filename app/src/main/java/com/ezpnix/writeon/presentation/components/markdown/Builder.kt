@@ -88,10 +88,31 @@ private class StyledRun(val start: Int, val endExclusive: Int, val styleMask: In
 fun buildString(
     input: String,
     defaultFontWeight: FontWeight = FontWeight.Normal,
-    linkColor: Color = Color(0xFF1976D2)
+    linkColor: Color = Color(0xFF1976D2),
+    latexEnabled: Boolean = false
 ): AnnotatedString {
     if (input.isEmpty()) return AnnotatedString("")
 
+    // Inline formulas are swapped for private-use placeholders before the style scanner runs:
+    // otherwise the `_` in `x_1` would be read as italics and the `*` in `a*b` as bold. The
+    // placeholders are replaced with styled math after the rest of the line has been built.
+    val extraction = if (latexEnabled) {
+        LatexParser.extractInline(input)
+    } else {
+        InlineMathExtraction(input, emptyMap())
+    }
+
+    val styled = buildLinkedString(extraction.text, defaultFontWeight, linkColor)
+    if (extraction.expressions.isEmpty()) return styled
+    return replaceMathPlaceholders(styled, extraction.expressions)
+}
+
+/** Builds the link-aware styled text; split out so math can be restored over the finished string. */
+private fun buildLinkedString(
+    input: String,
+    defaultFontWeight: FontWeight,
+    linkColor: Color
+): AnnotatedString {
     // Check for markdown links: [text](url). A backslash in front of the opening bracket marks it as
     // an escaped literal (see protectEscapes), so those matches are left to the styled-run builder
     // and render as text instead of turning into a tappable link.
@@ -137,6 +158,30 @@ fun buildString(
         if (lastIndex < input.length) {
             append(buildStyledRunString(input.substring(lastIndex), defaultFontWeight))
         }
+    }
+}
+
+/**
+ * Swaps every placeholder character in [text] for the formula it stands for, keeping the styles of
+ * the surrounding runs. Appending a substring copies its span and link annotations with the offset
+ * adjusted, so bold text around a formula stays bold.
+ */
+private fun replaceMathPlaceholders(
+    text: AnnotatedString,
+    expressions: Map<Char, String>
+): AnnotatedString {
+    val hasPlaceholder = text.text.any { it in expressions }
+    if (!hasPlaceholder) return text
+
+    return buildAnnotatedString {
+        var segmentStart = 0
+        for (index in text.text.indices) {
+            val expression = expressions[text.text[index]] ?: continue
+            if (index > segmentStart) append(text.subSequence(segmentStart, index))
+            append(inlineMath(expression))
+            segmentStart = index + 1
+        }
+        if (segmentStart < text.length) append(text.subSequence(segmentStart, text.length))
     }
 }
 

@@ -44,7 +44,15 @@ fun AppNavHost(
                 encrypted = encrypted
             ) {
                 if (noteId == -1) {
-                    navController.popBackStack()
+                    // A share or a notification can launch straight into the editor, leaving no
+                    // entry underneath: popBackStack() then returns false. Finishing the activity
+                    // there made back exit the app instead of returning to the note list, so the
+                    // editor - the one screen that can be the root - now falls back to Home.
+                    if (!navController.popBackStack()) {
+                        navController.navigate(NavRoutes.Home.route) {
+                            popUpTo(NavRoutes.Edit.route) { inclusive = true }
+                        }
+                    }
                 } else {
                     navController.navigate(NavRoutes.Home.route) {
                         popUpTo(NavRoutes.Edit.route) { inclusive = true }

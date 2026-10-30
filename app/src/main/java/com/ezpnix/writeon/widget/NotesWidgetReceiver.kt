@@ -6,7 +6,6 @@ import androidx.glance.appwidget.GlanceAppWidget
 import androidx.glance.appwidget.GlanceAppWidgetReceiver
 import com.ezpnix.writeon.data.repository.SettingsRepositoryImpl
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.flow
 
 class NotesWidgetReceiver : GlanceAppWidgetReceiver() {
     override val glanceAppWidget: GlanceAppWidget = NotesWidget()
@@ -16,15 +15,17 @@ class NotesWidgetReceiver : GlanceAppWidgetReceiver() {
     }
 }
 
+/**
+ * Glance's state adapter over the existing settings DataStore. Widget selections are kept as
+ * settings keys so the configuration screen and widget rendering share one serialized store.
+ */
+class NotesDataStore(private val context: Context) : DataStore<List<Pair<Int, Int>>> {
+    private val settingsRepository = SettingsRepositoryImpl(context)
 
-class NotesDataStore(private val context: Context): DataStore<List<Pair<Int, Int>>> {
     override val data: Flow<List<Pair<Int, Int>>>
-        get() {
-            val settingsRepository = SettingsRepositoryImpl(context)
-            return flow { emit(settingsRepository.getEveryNotesWidget()) }
-        }
+        get() = settingsRepository.observeEveryNotesWidget()
 
-    override suspend fun updateData(transform: suspend (t: List<Pair<Int, Int>>) -> List<Pair<Int, Int>>): List<Pair<Int, Int>> {
-        throw NotImplementedError("Not implemented")
-    }
+    override suspend fun updateData(
+        transform: suspend (List<Pair<Int, Int>>) -> List<Pair<Int, Int>>
+    ): List<Pair<Int, Int>> = settingsRepository.updateEveryNotesWidget(transform)
 }

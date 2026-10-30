@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="lock_title">WriteOn はロックされています</string>
+    <string name="lock_subtitle_pin">続行するには PIN を入力してください</string>
+    <string name="lock_subtitle_pattern">続行するにはパターンを描いてください</string>
+    <string name="lock_subtitle_biometric">生体認証でロックを解除</string>
+    <string name="lock_unlock">ロック解除</string>
+    <string name="lock_use_biometric">生体認証を使用</string>
+    <string name="lock_use_pin">PIN を使用</string>
+    <string name="lock_use_pattern">パターンを使用</string>
+    <string name="lock_wrong_pin">PIN が正しくありません</string>
+    <string name="lock_wrong_pattern">パターンが正しくありません</string>
+    <string name="lock_locked_out">試行回数が上限に達しました。%1$d 秒後に再試行してください。</string>
+    <string name="lock_biometric_failed">生体認証に失敗しました</string>
+    <string name="lock_biometric_unavailable">この端末では生体認証を利用できません</string>
+    <string name="lock_biometric_prompt_title">WriteOn のロックを解除</string>
+    <string name="lock_biometric_prompt_subtitle">ノートを開くために本人確認してください</string>
+    <string name="lock_cancel">キャンセル</string>
+    <string name="lock_backspace">1 文字削除</string>
+    <string name="lock_confirm">確認</string>
+    <string name="lock_setup_pin_title">PIN を設定</string>
+    <string name="lock_setup_pin_confirm">PIN を確認</string>
+    <string name="lock_setup_pin_length">4～6 桁で入力してください</string>
+    <string name="lock_setup_pin_mismatch">PIN が一致しません。最初からやり直してください。</string>
+    <string name="lock_setup_pattern_title">パターンを描く</string>
+    <string name="lock_setup_pattern_confirm">もう一度パターンを描く</string>
+    <string name="lock_setup_pattern_short">4 つ以上の点をつないでください</string>
+    <string name="lock_setup_pattern_mismatch">パターンが一致しません。最初からやり直してください。</string>
+    <string name="lock_verify_pin_title">現在の PIN を入力</string>
+    <string name="lock_verify_pattern_title">現在のパターンを描く</string>
+    <string name="lock_biometric_description">指紋または顔認証で WriteOn のロックを解除</string>
+    <string name="lock_pattern_description">パターンを描いて WriteOn のロックを解除</string>
+    <string name="lock_pin_description">4～6 桁の PIN で WriteOn のロックを解除</string>
+    <string name="lock_biometric_enabled">生体認証によるロック解除を有効にしました</string>
+    <string name="lock_biometric_disabled">生体認証によるロック解除を無効にしました</string>
+    <string name="lock_pin_enabled">PIN ロックを有効にしました</string>
+    <string name="lock_pin_disabled">PIN ロックを無効にしました</string>
+    <string name="lock_pattern_enabled">パターンロックを有効にしました</string>
+    <string name="lock_pattern_disabled">パターンロックを無効にしました</string>
+</resources>

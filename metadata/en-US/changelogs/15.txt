@@ -1,0 +1,23 @@
+v2.0.3 - Release audit fixes:
+- Restoring a backup no longer truncates the notes database (atomic, integrity-checked restore).
+- Pinning, tagging or trashing a note can no longer overwrite text you were still typing.
+- Saving a note is one transaction, and deleting one is too - no more orphan rows or files.
+- Unsaved text survives an app restart or a crash, including for a brand-new note.
+- Backups now include every picture and recording, and restore them with the notes.
+- Backup and restore stream end to end, so a library full of recordings no longer overflows memory.
+- A corrupt or truncated backup is rejected before it replaces your notes.
+- The daily automatic backup is encrypted, stays in private storage, keeps only the newest copies -
+  and can now be restored from Settings -> Cloud on this device.
+- WebDAV uploads never overwrite another device's backup silently; the first upload refuses to clobber,
+  and a kept conflict copy can be restored or used to reclaim the remote.
+- Restoring (WebDAV, a local file, an automatic backup, or a conflict copy) asks for confirmation.
+- A restore requested while a backup is running is queued instead of being dropped.
+- Picked and shared images are stored in private internal storage.
+- Clearing a note's body keeps its attachments, so the undo or a restore still finds them.
+- Restored recordings can be deleted again, and tag screens list their notes again.
+- Saving a vault note without unlocking the vault is refused instead of dropping the password.
+- The app lock's retry wait doubles with each lockout and survives a force-stop or a clock change.
+- Note lists load faster: the columns they sort and filter by are indexed.
+- The translate button copies the note instead of sending it to a third party.
+- Back from a shared note no longer gets stuck; the toolbar arrows are visible and labelled.
+- Search says "no results" instead of the welcome text; icon buttons have spoken labels.

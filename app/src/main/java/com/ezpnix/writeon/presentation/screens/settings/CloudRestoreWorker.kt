@@ -1,25 +1,27 @@
 package com.ezpnix.writeon.presentation.screens.settings
 
 import android.app.Application
-import androidx.datastore.preferences.core.edit
-import com.ezpnix.writeon.data.local.database.NoteDatabaseProvider
 import android.content.Context
 import android.util.Log
 import android.widget.Toast
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
+import androidx.datastore.preferences.core.booleanPreferencesKey
+import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
 import com.ezpnix.writeon.R
+import com.ezpnix.writeon.core.attachment.AttachmentArchive
 import com.ezpnix.writeon.core.constant.DatabaseConst
+import com.ezpnix.writeon.core.util.BackupArchiveCrypto
 import com.ezpnix.writeon.core.util.DatabaseRestore
+import com.ezpnix.writeon.data.local.database.NoteDatabaseProvider
 import com.google.crypto.tink.Aead
 import com.google.crypto.tink.integration.android.AndroidKeysetManager
 import com.jakewharton.processphoenix.ProcessPhoenix
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
 import okhttp3.Credentials
@@ -28,14 +30,8 @@ import okhttp3.Request
 import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
-import java.security.spec.KeySpec
 import java.util.Base64
 import java.util.zip.ZipInputStream
-import javax.crypto.Cipher
-import javax.crypto.SecretKeyFactory
-import javax.crypto.spec.IvParameterSpec
-import javax.crypto.spec.PBEKeySpec
-import javax.crypto.spec.SecretKeySpec
 
 @Suppress("DEPRECATION")
 internal val Context.webDavDataStore: DataStore<Preferences> by preferencesDataStore(name = WebDavPrefs.STORE_NAME)
@@ -70,6 +66,13 @@ object WebDavPrefs {
      * It is how an upload notices that another device replaced the file in the meantime.
      */
     const val ETAG = "webdav_etag"
+
+    /**
+     * True once this install has written the remote archive (or restored from it). It lets an upload
+     * distinguish "the server has a file but provides no ETag, and we know we wrote it" from "the
+     * server has a file we have never seen", which must not be overwritten.
+     */
+    const val REMOTE_WRITTEN = "webdav_remote_written"
 }
 
 /** Tink keyset for the WebDAV credentials, shared by the settings screen and the workers. */
@@ -114,11 +117,19 @@ class WebDAVRestoreWorker(
 
     private val client = OkHttpClient()
 
+    /** Main-looper handler used to post the post-restore restart after the result is recorded. */
+    private val restartHandler = android.os.Handler(android.os.Looper.getMainLooper())
+
     override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
         val tempEncryptedFile = File(applicationContext.cacheDir, BACKUP_FILENAME)
         try {
             val prefs = applicationContext.webDavDataStore.data.first()
-            val webdavUrl = prefs[stringPreferencesKey(WebDavPrefs.URL)] ?: return@withContext Result.failure()
+            val configuredUrl = prefs[stringPreferencesKey(WebDavPrefs.URL)] ?: return@withContext Result.failure()
+            // An explicit URL (the conflict-copy restore) overrides the configured one. It is a
+            // different file from the canonical archive, so its validator must never be stored as
+            // though it described the canonical one.
+            val restoreUrl = inputData.getString(DATA_RESTORE_URL)?.takeIf { it.isNotBlank() } ?: configuredUrl
+            val restoringOtherFile = restoreUrl != configuredUrl
             val username = prefs[stringPreferencesKey(WebDavPrefs.USERNAME)] ?: return@withContext Result.failure()
             val encryptedPassword = prefs[stringPreferencesKey(WebDavPrefs.PASSWORD)]
                 ?: return@withContext Result.failure()
@@ -134,27 +145,39 @@ class WebDAVRestoreWorker(
                 ?: return@withContext Result.failure()
 
             val request = Request.Builder()
-                .url(webdavUrl)
+                .url(restoreUrl)
                 .header("Authorization", Credentials.basic(username, password))
                 .build()
 
-            val response = client.newCall(request).execute()
-            if (!response.isSuccessful) return@withContext Result.retry()
+            var downloadedEtag: String? = null
+            client.newCall(request).execute().use { response ->
+                if (!response.isSuccessful) return@withContext Result.retry()
+                downloadedEtag = normalizeEtag(response.header("ETag"))
+                response.body?.byteStream()?.use { input ->
+                    FileOutputStream(tempEncryptedFile).use { output ->
+                        input.copyTo(output)
+                    }
+                } ?: return@withContext Result.failure()
+            }
 
-            response.body?.byteStream()?.use { input ->
-                FileOutputStream(tempEncryptedFile).use { output ->
-                    input.copyTo(output)
+            unzipAndReplaceDatabase(tempEncryptedFile, userPassword)
+            applicationContext.webDavDataStore.edit { stored ->
+                val etagKey = stringPreferencesKey(WebDavPrefs.ETAG)
+                if (restoringOtherFile) {
+                    // This was a conflict copy, not the canonical archive: its validator says
+                    // nothing about the file the next upload will target. Clear both markers so the
+                    // upload path treats the canonical file as "someone else's" and makes a fresh
+                    // conflict copy instead of overwriting it.
+                    stored.remove(etagKey)
+                    stored[booleanPreferencesKey(WebDavPrefs.REMOTE_WRITTEN)] = false
+                } else {
+                    // The remote archive is now the database we just installed. Remember the
+                    // validator that belongs to it (instead of deleting it) so the next upload does
+                    // not treat the file as a stranger and cannot silently overwrite another
+                    // device's copy.
+                    if (downloadedEtag.isNullOrBlank()) stored.remove(etagKey) else stored[etagKey] = downloadedEtag!!
+                    stored[booleanPreferencesKey(WebDavPrefs.REMOTE_WRITTEN)] = true
                 }
-            } ?: return@withContext Result.failure()
-
-            val encryptedBytes = tempEncryptedFile.readBytes()
-            val decryptedBytes = decrypt(encryptedBytes, userPassword) ?: return@withContext Result.failure()
-
-            unzipAndReplaceDatabase(decryptedBytes)
-            // The remote archive is now the database we just installed, so the ETag remembered for
-            // the previous one would read as "someone else changed the file" on the next upload.
-            applicationContext.webDavDataStore.edit { prefs ->
-                prefs.remove(stringPreferencesKey(WebDavPrefs.ETAG))
             }
 
             withContext(Dispatchers.Main) {
@@ -163,14 +186,27 @@ class WebDAVRestoreWorker(
                     applicationContext.getString(R.string.cloud_webdav_restore_completed),
                     Toast.LENGTH_LONG
                 ).show()
-                delay(1000)
-                ProcessPhoenix.triggerRebirth(applicationContext)
+                // The restart is posted *after* doWork returns: killing the process from inside the
+                // worker (the old `delay(1000); triggerRebirth()`) meant WorkManager never got to
+                // record `Result.success()`, so the unique work stayed RUNNING forever and every
+                // later backup or restore was silently dropped by ExistingWorkPolicy.KEEP. The two
+                // seconds give WorkManager time to persist the result before the process dies.
+                restartHandler.postDelayed({ ProcessPhoenix.triggerRebirth(applicationContext) }, RESTART_DELAY_MS)
             }
 
             Result.success()
         } catch (e: IOException) {
-            Log.w(TAG, "WebDAV restore hit a network or IO error, retrying", e)
-            Result.retry()
+            // A wrong passphrase surfaces as an IOException wrapping the crypto failure (the
+            // streaming cipher stream rethrows it); retrying would spin on every run, so it is
+            // terminal. A real network/IO problem still deserves a retry.
+            val cause = e.cause
+            if (cause is javax.crypto.BadPaddingException || cause is javax.crypto.IllegalBlockSizeException) {
+                Log.e(TAG, "WebDAV restore archive failed authentication", e)
+                Result.failure()
+            } else {
+                Log.w(TAG, "WebDAV restore hit a network or IO error, retrying", e)
+                Result.retry()
+            }
         } catch (e: Exception) {
             Log.e(TAG, "WebDAV restore failed", e)
             Result.failure()
@@ -179,70 +215,52 @@ class WebDAVRestoreWorker(
         }
     }
 
-    private fun decrypt(encrypted: ByteArray, password: String): ByteArray? {
-        return try {
-            val salt = encrypted.copyOfRange(0, SALT_BYTES)
-            val iv = encrypted.copyOfRange(SALT_BYTES, SALT_BYTES + IV_BYTES)
-            val data = encrypted.copyOfRange(SALT_BYTES + IV_BYTES, encrypted.size)
-
-            val factory = SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256")
-            val spec: KeySpec = PBEKeySpec(password.toCharArray(), salt, PBKDF2_ITERATIONS, KEY_SIZE_BITS)
-            val secretKey = SecretKeySpec(factory.generateSecret(spec).encoded, "AES")
-
-            val cipher = Cipher.getInstance("AES/CBC/PKCS5Padding")
-            cipher.init(Cipher.DECRYPT_MODE, secretKey, IvParameterSpec(iv))
-            cipher.doFinal(data)
-        } catch (e: Exception) {
-            // A wrong passphrase and a corrupt archive are indistinguishable here — CBC only
-            // detects a bad key when the padding check fails. Log the type, not the password.
-            Log.w(TAG, "Could not decrypt the downloaded archive (wrong passphrase or corrupt file)", e)
-            null
-        }
-    }
+    private fun normalizeEtag(raw: String?): String? =
+        raw?.trim()?.takeIf { it.isNotEmpty() && !it.startsWith("W/") }
 
     /**
-     * Unpacks the notes database from [zipData] and swaps it in.
+     * Unpacks the notes database and its attachments from the downloaded archive and swaps the
+     * database in.
      *
-     * Entry names come straight from the archive and used to be handed to `File(tempDir, name)`
-     * unchecked, so a crafted entry could write outside the cache directory. Names are now resolved
-     * against the canonical staging directory and refused if they escape it, and the replacement
-     * goes through [DatabaseRestore.replaceDatabaseAtomically] so an interrupted restore leaves the
-     * existing database intact.
+     * The archive is decrypted as a stream straight into the extractor: the old version read the
+     * whole encrypted file, decrypted it into a second ByteArray and wrote a third copy to disk,
+     * which is three full copies of every recording alive at once. Entry names come straight from
+     * the archive and used to be handed to `File(tempDir, name)` unchecked, so a crafted entry could
+     * write outside the cache directory. Names are now resolved against the canonical staging
+     * directory and refused if they escape it, and the replacement goes through
+     * [DatabaseRestore.replaceDatabaseAtomically] so an interrupted restore leaves the existing
+     * database intact.
      */
-    private fun unzipAndReplaceDatabase(zipData: ByteArray) {
-        // The connection has to be closed before its file is replaced. Room keeps the old file
-        // mapped, so a restore that only renamed the new file into place left the running app
-        // reading and writing the previous database - the notes looked restored until the next
-        // write went to the discarded file.
-        NoteDatabaseProvider(applicationContext as Application).close()
+    private fun unzipAndReplaceDatabase(encryptedArchive: File, passphrase: String) {
         val dbFile = applicationContext.getDatabasePath(DatabaseConst.NOTES_DATABASE_FILE_NAME)
         val tempDir = File(applicationContext.cacheDir, "unzipped_restore")
         tempDir.deleteRecursively()
         tempDir.mkdirs()
 
-        val tempZipFile = File(applicationContext.cacheDir, "decrypted_backup.zip")
         try {
-            tempZipFile.writeBytes(zipData)
-
-            var restored: File? = null
-            ZipInputStream(tempZipFile.inputStream()).use { zipStream ->
-                var entry = zipStream.nextEntry
-                while (entry != null) {
-                    if (!entry.isDirectory) {
-                        val outFile = DatabaseRestore.resolveEntry(tempDir, entry.name)
-                        DatabaseRestore.extractEntry(zipStream, outFile)
-                        if (entry.name == dbFile.name) restored = outFile
-                    }
-                    zipStream.closeEntry()
-                    entry = zipStream.nextEntry
+            val stagedDatabase = encryptedArchive.inputStream().use { encryptedInput ->
+                val decrypted = BackupArchiveCrypto.decryptStream(encryptedInput, passphrase)
+                ZipInputStream(decrypted).use { zipStream ->
+                    DatabaseRestore.extractAll(zipStream, tempDir, dbFile.name)
                 }
             }
+            // Attachments are written next to the database but only become visible after their paths
+            // are rewritten inside the staged copy.
+            AttachmentArchive.restore(applicationContext, tempDir, stagedDatabase)
 
-            DatabaseRestore.replaceDatabaseAtomically(dbFile, requireNotNull(restored) {
-                "notes database missing from the downloaded backup"
-            })
+            // A truncated or corrupt download can still carry a valid 100-byte header; quick_check
+            // walks the real pages so a database that would open but lose rows is rejected here,
+            // while the live file is still untouched.
+            if (!DatabaseRestore.quickCheckPasses(stagedDatabase)) {
+                throw IOException("downloaded backup database failed integrity check")
+            }
+            // The connection has to be closed before its file is replaced. Room keeps the old file
+            // mapped, so a restore that only renamed the new file into place left the running app
+            // reading and writing the previous database - the notes looked restored until the next
+            // write went to the discarded file.
+            NoteDatabaseProvider(applicationContext as Application).close()
+            DatabaseRestore.replaceDatabaseAtomically(dbFile, stagedDatabase)
         } finally {
-            tempZipFile.delete()
             tempDir.deleteRecursively()
         }
     }
@@ -250,9 +268,16 @@ class WebDAVRestoreWorker(
     private companion object {
         const val TAG = "WebDAVRestoreWorker"
         const val BACKUP_FILENAME = "notes-backup-encrypted.zip"
-        const val SALT_BYTES = 16
-        const val IV_BYTES = 16
-        const val KEY_SIZE_BITS = 256
-        const val PBKDF2_ITERATIONS = 65_536
+
+        /** Grace period so WorkManager can persist the worker result before the process restarts. */
+        const val RESTART_DELAY_MS = 2_000L
     }
 }
+
+/**
+ * Optional worker input: download this URL instead of the configured archive.
+ *
+ * The conflict-copy restore uses it to pull the copy that was kept beside the canonical file.
+ * Public because the cloud screen enqueues the work with it.
+ */
+const val DATA_RESTORE_URL = "restore_url"

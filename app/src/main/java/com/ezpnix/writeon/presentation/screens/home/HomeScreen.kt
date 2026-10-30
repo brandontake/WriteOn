@@ -456,7 +456,8 @@ fun HomeView(
                                     viewModel.selectedNotes.clear()
                                     viewModel.selectedNotes.add(note)
                                     viewModel.showTagDialog.value = true
-                                }
+                                },
+                                onAttachmentDelete = { id -> viewModel.deleteAttachment(id) }
                             )
                         }
                     }
@@ -809,7 +810,7 @@ fun HomeViewTopBarWithSearch(
         Surface(
             shape = RoundedCornerShape(cornerRadius.dp),
             color = barColor,
-            tonalElevation = 3.dp,
+            tonalElevation = 0.dp,
             modifier = Modifier
                 .fillMaxWidth()
                 .height(barHeight)
@@ -1181,7 +1182,7 @@ fun SmallFAB(
         onClick = onClick,
         shape = appCornerShape(),
         color = MaterialTheme.colorScheme.primary,
-        tonalElevation = 6.dp,
+        tonalElevation = 0.dp,
         modifier = Modifier
             .height(48.dp)
             .fillMaxWidth()

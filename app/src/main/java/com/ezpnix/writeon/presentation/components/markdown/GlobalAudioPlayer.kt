@@ -81,35 +81,51 @@ object GlobalAudioPlayer {
         } else {
             // Play a new audio file
             stop()
+            // Own the instance before configuring it: `MediaPlayer().apply { setDataSource(...) }`
+            // leaked the decoder whenever setDataSource or prepare threw, because the assignment
+            // to `mediaPlayer` never happened and nothing else held the reference to release it.
+            val player = MediaPlayer()
+            mediaPlayer = player
             try {
-                mediaPlayer = MediaPlayer().apply {
-                    setDataSource(filePath)
-                    prepare()
-                    setOnCompletionListener {
-                        // Release the decoder as soon as the clip ends. Holding on to a finished
-                        // MediaPlayer keeps its native buffers and codec alive for the rest of the
-                        // process lifetime; stop() also clears the ticker and the shared state.
-                        stop()
-                    }
-                    // Without an error listener an unplayable file left isPlaying = true for ever,
-                    // so the ticker kept rescheduling itself on the main looper with nothing to
-                    // report: a permanent 10 Hz wake-up for the rest of the process lifetime.
-                    setOnErrorListener { _, what, extra ->
-                        Log.e("GlobalAudioPlayer", "Playback error what=$what extra=$extra")
-                        stop()
-                        true
-                    }
-                    start()
-                    // A fresh MediaPlayer always starts at 1x, so the user's chosen speed has to
-                    // be re-applied after every start().
-                    applySpeed(this, speed)
+                player.setDataSource(filePath)
+                player.setOnCompletionListener {
+                    // Release the decoder as soon as the clip ends. Holding on to a finished
+                    // MediaPlayer keeps its native buffers and codec alive for the rest of the
+                    // process lifetime; stop() also clears the ticker and the shared state.
+                    stop()
                 }
-                currentPlayingPath = filePath
-                isPlaying = true
-                durationMs = mediaPlayer?.duration ?: 0
-                handler.post(progressUpdater)
+                // Without an error listener an unplayable file left isPlaying = true for ever,
+                // so the ticker kept rescheduling itself on the main looper with nothing to
+                // report: a permanent 10 Hz wake-up for the rest of the process lifetime.
+                player.setOnErrorListener { _, what, extra ->
+                    Log.e("GlobalAudioPlayer", "Playback error what=$what extra=$extra")
+                    stop()
+                    true
+                }
+                // prepareAsync, not prepare: prepare blocks the main thread, and the editor is
+                // composing while this runs. Playback starts from the onPrepared callback.
+                player.setOnPreparedListener { prepared ->
+                    // Identity guard: prepareAsync is asynchronous, so the user can tap another
+                    // recording before this fires. That path calls stop(), which releases this
+                    // instance; starting a released MediaPlayer throws IllegalStateException. The
+                    // callback still arrives, so it must check it is still the live player.
+                    if (prepared !== mediaPlayer) return@setOnPreparedListener
+                    applySpeed(prepared, speed)
+                    prepared.start()
+                    currentPlayingPath = filePath
+                    isPlaying = true
+                    durationMs = try {
+                        prepared.duration
+                    } catch (e: Exception) {
+                        Log.e("GlobalAudioPlayer", "Could not read the duration", e)
+                        0
+                    }
+                    handler.post(progressUpdater)
+                }
+                player.prepareAsync()
             } catch (e: Exception) {
                 Log.e("GlobalAudioPlayer", "Failed to start playback for $filePath", e)
+                runCatching { player.release() }
                 stop()
             }
         }

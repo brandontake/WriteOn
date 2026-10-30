@@ -13,8 +13,9 @@ import androidx.room.PrimaryKey
  * text, and a note deleted from the trash can find its files without regex-scanning every
  * description for private `!(...)` / `?audio(...)` syntax.
  *
- * Files are still written to the same folders as before (images in the app-specific external
- * files dir, recordings in `filesDir/audios`); this table is metadata, not a new storage root.
+ * Files live in internal storage (images in `filesDir/attachments`, recordings in
+ * `filesDir/audios`); this table is metadata, not a new storage root. Older rows may still point
+ * at the former external files directory - reads handle both, and deletion checks both roots.
  */
 @Entity(
     tableName = "attachments",

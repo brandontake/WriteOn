@@ -19,6 +19,7 @@ import androidx.navigation.compose.rememberNavController
 import com.ezpnix.writeon.R
 import com.ezpnix.writeon.data.repository.SettingsRepositoryImpl
 import com.ezpnix.writeon.presentation.components.GalleryObserver
+import com.ezpnix.writeon.presentation.components.markdown.LocalLatexEnabled
 import com.ezpnix.writeon.presentation.components.registerGalleryObserver
 import com.ezpnix.writeon.presentation.components.unregisterGalleryObserver
 import com.ezpnix.writeon.presentation.lock.LockGate
@@ -104,7 +105,11 @@ class MainActivity : AppCompatActivity() {
                 sharedAtLaunch != null -> NavRoutes.Edit.createRoute(0, false)
                 isNewNoteShortcut -> NavRoutes.Edit.createRoute(0, false)
                 noteId == -1 -> NavRoutes.Home.route
-                else -> NavRoutes.Edit.route
+                // A concrete route, not the "edit/{id}/{encrypted}" template. The template bound no
+                // arguments, so a notification deep-link started on a route that could never match
+                // and the editor showed nothing. The encrypted flag is corrected by syncNote as
+                // soon as the row is read; false is only the pre-load value.
+                else -> NavRoutes.Edit.createRoute(noteId, false)
             }
 
             setContent {
@@ -123,21 +128,34 @@ class MainActivity : AppCompatActivity() {
                 // One provider for the whole app: every screen and component reads the radius the
                 // user chose in Settings > Colours from this local, so no corner stays hard-coded.
                 val cornerRadius = settingsViewModel.settings.value.cornerRadius
+                val renderLatex = settingsViewModel.settings.value.renderLatex
                 val customFontFamily by NoteFontManager.getFontState(this@MainActivity)
                 CompositionLocalProvider(
                     LocalCornerRadius provides cornerRadius.dp,
-                    LocalNoteFontFamily provides customFontFamily
+                    LocalNoteFontFamily provides customFontFamily,
+                    LocalLatexEnabled provides renderLatex
                 ) {
                     LeafNotesTheme(settingsViewModel) {
                         Surface(
                             color = MaterialTheme.colorScheme.surfaceContainerLow,
                         ) {
                             LockGate {
-                                val isAtRoot = backStackEntry?.destination?.route == startDestination
+                                // Compare destination ids, not route strings: a start destination built
+                                // by createRoute() is a filled path ("edit/0/false"), while the graph
+                                // stores the template ("edit/{id}/{encrypted}"), so the old comparison
+                                // was never true for the share/shortcut entry points and left them on
+                                // the predictive-back root path (where back does nothing).
+                                val rootDestinationId = runCatching {
+                                    navController.graph.startDestinationId
+                                }.getOrNull()
+                                val isAtRoot = rootDestinationId != null &&
+                                    backStackEntry?.destination?.id == rootDestinationId
                                 PredictiveBackHost(
                                     enabled = !isAtRoot,
                                     showPreview = predictiveBackEnabled,
-                                    onBack = { navController.popBackStack() },
+                                    // A failed pop means there is nowhere left to go; closing the
+                                    // activity is the only exit that does not strand the user.
+                                    onBack = { if (!navController.popBackStack()) finish() },
                                     // The home quick action bar, drawer, and note selection are overlays
                                     // on the root screen. Only when at the root destination can an overlay
                                     // suppress the predictive back host; when away from the root, sub-screens

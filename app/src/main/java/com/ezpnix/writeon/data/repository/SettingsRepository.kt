@@ -88,21 +88,36 @@ class SettingsRepositoryImpl (private val context: Context) : SettingsRepository
         return preferences[preferencesKey]
     }
 
+    fun observeEveryNotesWidget(): Flow<List<Pair<Int, Int>>> =
+        context.dataStore.data.map { it.widgetNotes() }
+
     override suspend fun getEveryNotesWidget(): List<Pair<Int, Int>> {
         val preferences = context.dataStore.data.first()
-        val widgetPairs = mutableListOf<Pair<Int, Int>>()
+        return preferences.widgetNotes()
+    }
 
-        preferences.asMap().forEach { entry ->
-            val key = entry.key.name
-
-            if (entry.key.name.startsWith(NotesWidgetReceiver.WIDGET_PREFERENCE)) {
-                val widgetId = key.substringAfter(NotesWidgetReceiver.WIDGET_PREFERENCE).toIntOrNull()
-                if (widgetId != null) {
-                    val value = entry.value as? Int ?: 0
-                    widgetPairs.add(widgetId to value)
-                }
+    /** Applies a widget mapping change inside the settings DataStore transaction. */
+    suspend fun updateEveryNotesWidget(
+        transform: suspend (List<Pair<Int, Int>>) -> List<Pair<Int, Int>>
+    ): List<Pair<Int, Int>> {
+        var updated = emptyList<Pair<Int, Int>>()
+        context.dataStore.edit { preferences ->
+            updated = transform(preferences.widgetNotes())
+            preferences.asMap().keys
+                .filter { it.name.startsWith(NotesWidgetReceiver.WIDGET_PREFERENCE) }
+                .forEach { preferences.remove(it) }
+            updated.forEach { (widgetId, noteId) ->
+                preferences[intPreferencesKey("${NotesWidgetReceiver.WIDGET_PREFERENCE}$widgetId")] = noteId
             }
         }
-        return widgetPairs
+        return updated
     }
+
+    private fun Preferences.widgetNotes(): List<Pair<Int, Int>> = asMap()
+        .mapNotNull { (key, value) ->
+            if (!key.name.startsWith(NotesWidgetReceiver.WIDGET_PREFERENCE)) return@mapNotNull null
+            val widgetId = key.name.substringAfter(NotesWidgetReceiver.WIDGET_PREFERENCE).toIntOrNull()
+                ?: return@mapNotNull null
+            (value as? Int)?.let { widgetId to it }
+        }
 }
