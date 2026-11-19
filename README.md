@@ -198,7 +198,7 @@ unlock, and the AA-contrast / 48 dp / screen-reader fixes the accessibility audi
 | --- | --- | --- | --- |
 | Release | **3.91 MB** (4,102,355 bytes) | `com.ezpnix.writeon` | full R8 optimisation + obfuscation; carries the baseline profiles its dependencies ship (AGP merges the AAR `baseline-prof.txt` files into `app/release/baselineProfiles/{0,1}` — the app has no hand-authored profile of its own); signed with the project's upload key (`CN=Brandontake, OU=WriteOn, O=WriteOn, C=US`) |
 
-SHA-256 (Release): `6E164D7D4DAAE5CBE3361E5702CD0926A15FBB7966059986F6642540DE6768D1`.
+SHA-256 (Release): `DCAA299BE0E0428D1086089C593F6B86AC3AA3AD7DEA831D8047AA0BAC750DB5`.
 
 Both report `versionCode 16` / `versionName 2.0.4`, `minSdk 26`, `targetSdk 36`, the default + `ja` + `zh`
 locales, and four ABIs. The database moved to **v11** (`MIGRATION_10_11`), which indexes the

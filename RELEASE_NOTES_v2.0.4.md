@@ -22,6 +22,7 @@
 - **附件对账**：恢复失败留下的无主文件、删除失败留下的无主行，由 `AttachmentArchive.reconcileAfterRestore` 收口。
 - **TXT 备份幂等**：按内容去重，单条目 1 MiB 上限。
 - **导出一致性快照**：notes 与 attachments 在同一个 `withTransaction` 内读取。
+- **zip-slip 绝对路径修复**：`resolveEntry` 现在显式拒绝 `/`、`\` 和平台绝对路径。原先的 canonical 检查在 Linux 上会把 `/etc/passwd` 当成 `<staging>/etc/passwd`，CI 已抓到这条。
 
 ## WebDAV
 
@@ -86,7 +87,7 @@
 
 - Release APK：**4,102,355 bytes**（3.91 MiB），`versionCode 16` / `versionName 2.0.4`，`minSdk 26` / `targetSdk 36`，四 ABI，`en` + `ja` + `zh`。
 - 使用项目上传密钥签名：`CN=Brandontake, OU=WriteOn, O=WriteOn, C=US`；证书 SHA-256 `67a2d2a5…e9fd9244`，与 1.10 / 2.0 / 2.0.1 / 2.0.2 / 2.0.3 一致，可直接覆盖安装。
-- Release APK SHA-256：`6E164D7D4DAAE5CBE3361E5702CD0926A15FBB7966059986F6642540DE6768D1`。
+- Release APK SHA-256：`DCAA299BE0E0428D1086089C593F6B86AC3AA3AD7DEA831D8047AA0BAC750DB5`。
 
 ## 安装
 

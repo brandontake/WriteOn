@@ -95,6 +95,14 @@ object DatabaseRestore {
      */
     fun resolveEntry(destinationDir: File, entryName: String): File {
         val root = destinationDir.canonicalFile
+
+        // Reject absolute names before constructing the child. `File(root, "/tmp/outside")` does
+        // not escape on Unix - it becomes `<root>/tmp/outside` - so relying on canonicalisation
+        // alone let an absolute zip member through on CI even though the Windows test caught it.
+        if (entryName.startsWith('/') || entryName.startsWith('\\') || File(entryName).isAbsolute) {
+            throw IOException("Archive entry is absolute and cannot be extracted: $entryName")
+        }
+
         val candidate = File(root, entryName).canonicalFile
 
         // canonicalPath on Windows is case-preserving but comparisons are case-insensitive, and a

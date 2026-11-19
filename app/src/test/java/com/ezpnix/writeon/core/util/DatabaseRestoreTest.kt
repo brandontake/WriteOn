@@ -115,16 +115,23 @@ class DatabaseRestoreTest {
     @Test
     fun `resolveEntry rejects an absolute path`() {
         val dir = temporaryFolder.newFolder("stage")
-        // A genuinely absolute path on any platform (built from the temp root). An archive member
-        // with such a name must never be written, wherever it points.
-        val absolute = File(temporaryFolder.root, "outside.db").absolutePath
-        var rejected = false
-        try {
-            DatabaseRestore.resolveEntry(dir, absolute)
-        } catch (_: IOException) {
-            rejected = true
+        // Cover the two shapes an archive can actually carry: a host-absolute path and the
+        // POSIX/UNC roots that are absolute even when the JVM runs on the other OS. The second
+        // and third cases are what failed on the Linux CI runner before the explicit check.
+        val names = listOf(
+            File(temporaryFolder.root, "outside.db").absolutePath,
+            "/etc/passwd",
+            "\\\\server\\share\\outside.db",
+        )
+        names.forEach { name ->
+            var rejected = false
+            try {
+                DatabaseRestore.resolveEntry(dir, name)
+            } catch (_: IOException) {
+                rejected = true
+            }
+            assertTrue("an absolute entry name must be refused: $name", rejected)
         }
-        assertTrue("an absolute entry name must be refused", rejected)
     }
 
     // -----------------------------------------------------------------------------------------
