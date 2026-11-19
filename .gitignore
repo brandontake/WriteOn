@@ -30,6 +30,10 @@
 *~
 *.swp
 
+# AGP module-level generated outputs (output metadata, baseline profiles)
+/app/debug/
+/app/release/
+
 # IntelliJ IDEA
 *.iws
 /out/
