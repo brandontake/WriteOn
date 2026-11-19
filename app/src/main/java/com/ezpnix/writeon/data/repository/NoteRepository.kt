@@ -38,6 +38,10 @@ class NoteRepositoryImpl @Inject constructor(
         provider.noteDao().updatePlainDescription(id, description)
     }
 
+    override suspend fun updateVaultFields(id: Int, name: String, description: String): Int {
+        return provider.noteDao().updateVaultFields(id, name, description)
+    }
+
     override suspend fun saveNoteWithAttachments(
         note: Note,
         upsertAttachments: List<Attachment>,
@@ -86,9 +90,6 @@ class NoteRepositoryImpl @Inject constructor(
 
     override fun getNoteById(id: Int): Flow<Note> {
         return provider.noteDao().getNoteById(id)
-    }
-    override fun getLastNoteId(): Long? {
-        return provider.noteDao().getLastNoteId()
     }
     override fun getTrashedNotes(): Flow<List<Note>> {
         return provider.noteDao().getTrashedNotes()

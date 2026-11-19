@@ -14,7 +14,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.TextFieldValue
@@ -65,8 +64,9 @@ fun CustomTextField(
     )
 }
 
-class UndoRedoState {
-    var input by mutableStateOf(TextFieldValue(""))
+class UndoRedoState(initialValue: TextFieldValue = TextFieldValue("")) {
+    var input by mutableStateOf(initialValue)
+        private set
     private val undoHistory = ArrayDeque<TextFieldValue>()
     private val redoHistory = ArrayDeque<TextFieldValue>()
 
@@ -75,31 +75,64 @@ class UndoRedoState {
     }
 
     fun onInput(value: TextFieldValue) {
-        val updatedValue = value.copy(value.text, selection = TextRange(value.text.length))
-        undoHistory.add(updatedValue)
+        if (undoHistory.lastOrNull() == value) return
         redoHistory.clear()
-        input = updatedValue
+        // Coalesce a typing run: consecutive single-caret appends at the end of the text replace
+        // the tail entry instead of pushing another full copy of the document. Without this a
+        // long note still grew the history by one whole string per keystroke until the cap kicked
+        // in; with it a run costs one entry no matter how long it is.
+        val last = undoHistory.lastOrNull()
+        if (undoHistory.size >= 2 && last != null && isTypingContinuation(last, value)) {
+            undoHistory.removeLast()
+        }
+        undoHistory.add(value)
+        while (undoHistory.size > MAX_HISTORY_SIZE) undoHistory.removeFirst()
+        input = value
+    }
+
+    /**
+     * Drops the pre-save history: the database now holds [current], so the only undo a user needs
+     * after saving is the save-point bar, and every retained snapshot is pure memory overhead.
+     */
+    fun clearTo(current: TextFieldValue) {
+        undoHistory.clear()
+        redoHistory.clear()
+        undoHistory.add(current)
+        input = current
+    }
+
+    /** True when [next] is just [previous] with a few characters typed at its end. */
+    private fun isTypingContinuation(previous: TextFieldValue, next: TextFieldValue): Boolean {
+        val prevText = previous.text
+        val nextText = next.text
+        if (nextText.length <= prevText.length) return false
+        if (nextText.length - prevText.length > MAX_COALESCE_CHARS) return false
+        if (!nextText.startsWith(prevText)) return false
+        // Only merge while the caret was parked at the end for both snapshots; a jump to the
+        // middle (selection, paste, cursor move) is a distinct undo point.
+        return previous.selection.end == prevText.length && next.selection.end == nextText.length
     }
 
     fun undo() {
         if (undoHistory.size > 1) {
-            val lastState = undoHistory.removeLastOrNull()
-            lastState?.let {
-                redoHistory.add(it)
-            }
-
-            val previousState = undoHistory.lastOrNull()
-            previousState?.let {
-                input = it
-            }
+            redoHistory.add(input)
+            undoHistory.removeLast()
+            input = undoHistory.last()
         }
     }
 
     fun redo() {
-        val redoState = redoHistory.removeLastOrNull()
-        redoState?.let {
-            undoHistory.add(it)
-            input = it
+        redoHistory.removeLastOrNull()?.let { value ->
+            undoHistory.add(value)
+            while (undoHistory.size > MAX_HISTORY_SIZE) undoHistory.removeFirst()
+            input = value
         }
+    }
+
+    private companion object {
+        /** Keeps the resident history bounded even for a six-figure-character note. */
+        const val MAX_HISTORY_SIZE = 100
+        /** One coalesced typing entry may absorb at most this many characters at once. */
+        const val MAX_COALESCE_CHARS = 8
     }
 }

@@ -32,6 +32,13 @@ okhttp = "4.12.0"
 processPhoenix = "2.1.2"
 tink = "1.8.0"
 junit = "4.13.2"
+# Test-only: Robolectric runs the Room migration tests on the JVM. 4.17 is the current stable
+# and knows API 36 (Android 16) - the compileSdk this app pins - so no @Config(sdk=...) fallback
+# is needed in the tests.
+robolectric = "4.17"
+# InstrumentationRegistry that MigrationTestHelper needs to locate the exported schema JSON
+# in the test assets (ApplicationProvider comes along for the ride).
+androidxTestCore = "1.7.0"
 
 [libraries]
 junit = { module = "junit:junit", version.ref = "junit" }
@@ -42,6 +49,13 @@ androidx-glance = { module = "androidx.glance:glance", version.ref = "glance" }
 androidx-room-compiler = { module = "androidx.room:room-compiler", version.ref = "room" }
 androidx-room-runtime = { module = "androidx.room:room-runtime", version.ref = "room" }
 androidx-room-ktx = { group = "androidx.room", name = "room-ktx", version.ref = "room" }
+# MigrationTestHelper: creates the database at an old version from the exported schema and
+# runs the migration chain over it.
+androidx-room-testing = { module = "androidx.room:room-testing", version.ref = "room" }
+
+# Unit-test runtime for the migration tests (JVM stand-in for a device).
+robolectric = { module = "org.robolectric:robolectric", version.ref = "robolectric" }
+androidx-test-core = { module = "androidx.test:core", version.ref = "androidxTestCore" }
 
 # AndroidX
 androidx-appcompat = { module = "androidx.appcompat:appcompat", version.ref = "appcompat" }

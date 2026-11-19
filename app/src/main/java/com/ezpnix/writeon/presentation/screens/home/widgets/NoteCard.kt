@@ -23,6 +23,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -56,18 +57,32 @@ fun NoteCard(
      * delete. Home passes its handler; the recycle bin leaves it null so trashed cards cannot
      * delete anything.
      */
-    onAttachmentDelete: ((String) -> Unit)? = null
+    onAttachmentDelete: ((String) -> Unit)? = null,
+    /**
+     * Applied to the card itself. Home uses it to publish pin / tags / delete as custom
+     * accessibility actions, because those only exist behind a left swipe (U7).
+     */
+    modifier: Modifier = Modifier
 ) {
     // One snapshot read per card instead of one per settings lookup: every `settings.value`
     // read subscribes this card to the settings state, so re-reading it six times made each
     // card recompose on unrelated settings writes.
     val settings = settingsViewModel.settings.value
+    // The body is cut down to a summary *before* it reaches the layout: the card used to compose
+    // the whole note into a Column and merely clip it with `heightIn`, so a 20 000 character note
+    // still measured and drew every line on every visible card (P-2).
+    val body = remember(note.description) { buildCardBody(note.description) }
     ElevatedCard(
-        modifier = Modifier
+        modifier = modifier
             .padding(bottom = 12.dp)
             .padding(4.dp)
             .clip(shape)
             .combinedClickable(
+                // Neither label is inferable from the card, so without them TalkBack announced a
+                // plain "double tap to activate" for both gestures (U8). Long pressing is what
+                // starts selection, hence a different wording for each.
+                onClickLabel = stringResource(R.string.cd_note_open_note),
+                onLongClickLabel = stringResource(R.string.cd_note_select_note),
                 onClick = { onShortClick() },
                 onLongClick = { onLongClick() }
             )
@@ -119,7 +134,8 @@ fun NoteCard(
                 MarkdownText(
                     isPreview = false,
                     useLazyColumn = false,
-                    markdown = note.description,
+                    // The summary, not the whole note - see buildCardBody.
+                    markdown = body.text,
                     isEnabled = settings.isMarkdownEnabled,
                     spacing = 0.dp,
                     containerColor = containerColor,
@@ -127,7 +143,12 @@ fun NoteCard(
                         .fillMaxWidth()
                         .padding(horizontal = 4.dp)
                         .heightIn(max = dimensionResource(R.dimen.max_description_height)),
-                    onContentChange = { onNoteUpdate(note.copy(description = it)) },
+                    // A checkbox toggled on the card edits the note, so the write-back has to
+                    // restore the lines the summary dropped. Without this, ticking a box on a long
+                    // note would save the summary over the full text.
+                    onContentChange = { updated ->
+                        onNoteUpdate(note.copy(description = rebuildFullBody(body, updated)))
+                    },
                     fontSize = 14.sp,
                     radius = settings.cornerRadius,
                     onAttachmentDelete = onAttachmentDelete
@@ -162,4 +183,53 @@ fun NoteCard(
             }
         }
     }
+}
+
+/** Enough of a note to fill the 150dp body area on any density, far less than most notes. */
+private const val CARD_BODY_MAX_LINES = 12
+
+/** A single line longer than this (a pasted paragraph, a one-line log) is cut as well. */
+private const val CARD_BODY_MAX_LINE_CHARS = 400
+
+/**
+ * The part of a note body a home card renders, plus whatever was cut off.
+ *
+ * [tails] holds the remainder of each line that was too long and [hiddenLines] the lines past
+ * [CARD_BODY_MAX_LINES]; both exist so [rebuildFullBody] can put the note back together when a
+ * checkbox is ticked from the card. Ticking a checkbox in the summary must never write the summary
+ * over the note.
+ */
+private class CardBody(
+    val text: String,
+    val isTruncated: Boolean,
+    val tails: List<String>,
+    val hiddenLines: List<String>
+)
+
+private fun buildCardBody(description: String): CardBody {
+    val lines = description.lines()
+    val fits = lines.size <= CARD_BODY_MAX_LINES &&
+        lines.none { it.length > CARD_BODY_MAX_LINE_CHARS }
+    if (fits) {
+        return CardBody(description, isTruncated = false, tails = emptyList(), hiddenLines = emptyList())
+    }
+    val head = lines.take(CARD_BODY_MAX_LINES)
+    return CardBody(
+        text = head.joinToString("\n") { it.take(CARD_BODY_MAX_LINE_CHARS) },
+        isTruncated = true,
+        tails = head.map { it.drop(CARD_BODY_MAX_LINE_CHARS) },
+        hiddenLines = lines.drop(CARD_BODY_MAX_LINES)
+    )
+}
+
+/**
+ * Re-attaches what [buildCardBody] cut off, so [updated] (the summary after the user ticked a
+ * checkbox in it) can be saved as the note body without losing the rest of the text.
+ */
+private fun rebuildFullBody(body: CardBody, updated: String): String {
+    if (!body.isTruncated) return updated
+    val head = updated.lines().mapIndexed { index, line ->
+        line + (body.tails.getOrNull(index) ?: "")
+    }
+    return (head + body.hiddenLines).joinToString("\n")
 }

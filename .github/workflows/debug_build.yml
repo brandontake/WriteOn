@@ -34,9 +34,8 @@ jobs:
         run: chmod +x gradlew
 
       # Tests and lint run before the APK is built: a change that breaks either must not produce a
-      # green build artifact. 46 tests now exist locally (38 from the 2.0.3 audit round plus 8 new
-      # ones for the backup archive format and the 1.x -> 2.0 body rewrite); none of them ran in CI
-      # before this gate existed.
+      # green build artifact. The suite (unit tests for the restore/crypto/migration/undo paths) is
+      # grown with each audit round; none of it ran in CI before this gate existed.
       - name: Unit tests
         run: ./gradlew :app:testDebugUnitTest --console=plain
 

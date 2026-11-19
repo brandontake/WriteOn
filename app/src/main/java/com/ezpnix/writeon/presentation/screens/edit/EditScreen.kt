@@ -66,6 +66,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.VerticalDivider
@@ -107,6 +108,7 @@ import com.ezpnix.writeon.R
 import com.ezpnix.writeon.presentation.components.CalButton
 import com.ezpnix.writeon.presentation.components.CalculatorButton
 import com.ezpnix.writeon.presentation.components.CopyButton
+import com.ezpnix.writeon.presentation.components.LocalAppSnackbar
 import com.ezpnix.writeon.presentation.components.MoreButton
 import com.ezpnix.writeon.presentation.components.NavigationIcon
 import com.ezpnix.writeon.presentation.components.NotesScaffold
@@ -162,26 +164,6 @@ fun EditNoteView(
     }
     ObserveLifecycleEvents(viewModel)
 
-    val permissionLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.RequestMultiplePermissions()
-    ) { permissions ->
-        if (!permissions.getOrDefault(Manifest.permission.READ_EXTERNAL_STORAGE, false) ||
-            !permissions.getOrDefault(Manifest.permission.WRITE_EXTERNAL_STORAGE, false)) {
-            Toast.makeText(context, context.getString(R.string.msg_storage_permission_required), Toast.LENGTH_SHORT).show()
-        }
-    }
-
-    LaunchedEffect(Unit) {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
-            permissionLauncher.launch(
-                arrayOf(
-                    Manifest.permission.READ_EXTERNAL_STORAGE,
-                    Manifest.permission.WRITE_EXTERNAL_STORAGE
-                )
-            )
-        }
-    }
-
     val pagerState = rememberPagerState(initialPage = if (id == 0) 0 else 1, pageCount = { 2 })
     val coroutineScope = rememberCoroutineScope()
 
@@ -195,68 +177,35 @@ fun EditNoteView(
     }
 
     // The editor persists on ON_STOP, so a note can be saved by a gesture the user did not think of
-    // as saving. The bar is the only way back, and it is shown for a short window: it is a correction
-    // for the save that just happened, not an editing history.
-    var undoVisible by remember { mutableStateOf(false) }
+    // as saving. The global snackbar is the only way back (U2): it survives leaving the editor,
+    // unlike the old in-screen bar, and the action uses [PendingSaveUndo] so it still works after
+    // this destination's ViewModel scope has been cancelled.
+    val snackbar = LocalAppSnackbar.current
+    val undoMessage = stringResource(R.string.msg_note_saved)
+    val undoLabel = stringResource(R.string.cd_undo)
     val undoToken = viewModel.undoToken
     LaunchedEffect(undoToken) {
         if (undoToken > 0 && viewModel.canUndoSave) {
-            undoVisible = true
-            delay(UNDO_WINDOW_MS)
-            undoVisible = false
-        }
-    }
-
-    Box(modifier = Modifier.fillMaxSize()) {
-        CompositionLocalProvider(
-            LocalSplitPreview provides (
-                shouldSplitPreview() && settingsViewModel.settings.value.isMarkdownEnabled
-                )
-        ) {
-            NotesScaffold(
-                topBar = { if (!settingsViewModel.settings.value.minimalisticMode) TopBar(pagerState, exitEditor, viewModel, settingsViewModel) },
-                content = { PagerContent(pagerState, coroutineScope, viewModel, settingsViewModel, exitEditor) }
+            snackbar?.show(
+                message = undoMessage,
+                actionLabel = undoLabel,
+                duration = SnackbarDuration.Long,
+                onAction = { PendingSaveUndo.undo() },
             )
         }
-        AnimatedVisibility(
-            visible = undoVisible,
-            enter = fadeIn(),
-            exit = fadeOut(),
-            modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .padding(bottom = 24.dp)
-        ) {
-            Surface(
-                shape = RoundedCornerShape(24.dp),
-                color = MaterialTheme.colorScheme.inverseSurface,
-                tonalElevation = 0.dp
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        text = stringResource(R.string.msg_note_saved),
-                        color = MaterialTheme.colorScheme.inverseOnSurface,
-                        style = MaterialTheme.typography.bodyMedium,
-                        modifier = Modifier.padding(start = 16.dp)
-                    )
-                    TextButton(
-                        onClick = {
-                            undoVisible = false
-                            viewModel.undoLastSave()
-                        }
-                    ) {
-                        Text(
-                            text = stringResource(R.string.cd_undo),
-                            color = MaterialTheme.colorScheme.inversePrimary
-                        )
-                    }
-                }
-            }
-        }
+    }
+
+    CompositionLocalProvider(
+        LocalSplitPreview provides (
+            shouldSplitPreview() && settingsViewModel.settings.value.isMarkdownEnabled
+            )
+    ) {
+        NotesScaffold(
+            topBar = { if (!settingsViewModel.settings.value.minimalisticMode) TopBar(pagerState, exitEditor, viewModel, settingsViewModel) },
+            content = { PagerContent(pagerState, coroutineScope, viewModel, settingsViewModel, exitEditor) }
+        )
     }
 }
-
-/** How long the save that just happened stays undoable. */
-private const val UNDO_WINDOW_MS = 10_000L
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -762,7 +711,7 @@ private fun LivePreviewPane(viewModel: EditViewModel, settingsViewModel: Setting
                             .fillMaxSize()
                             .verticalScroll(previewScrollState),
                         fontSize = settings.fontSize.sp,
-                        onContentChange = { viewModel.updateNoteDescription(TextFieldValue(text = it)) },
+                        onContentChange = { viewModel.updateNoteDescriptionFromRendered(it) },
                         onAttachmentDelete = { viewModel.trashAttachmentById(it) },
                         useLazyColumn = false
                     )
@@ -833,7 +782,7 @@ fun PreviewScreen(
                             .fillMaxSize()
                             .verticalScroll(previewScrollState),
                         fontSize = settingsViewModel.settings.value.fontSize.sp,
-                        onContentChange = { viewModel.updateNoteDescription(TextFieldValue(text = it)) },
+                        onContentChange = { viewModel.updateNoteDescriptionFromRendered(it) },
                         onAttachmentDelete = { viewModel.trashAttachmentById(it) },
                         useLazyColumn = false
                     )

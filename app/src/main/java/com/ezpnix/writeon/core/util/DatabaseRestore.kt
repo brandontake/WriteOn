@@ -1,9 +1,12 @@
 package com.ezpnix.writeon.core.util
 
+import com.ezpnix.writeon.core.constant.DatabaseConst
 import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
 import java.io.RandomAccessFile
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
 import java.util.zip.ZipEntry
 import java.util.zip.ZipInputStream
 
@@ -41,6 +44,9 @@ object DatabaseRestore {
     /**
      * Streams every member of [zip] into [stagingDir] and returns the extracted database.
      *
+     * The backup manifest entry (when present) is skipped: it describes the archive rather than
+     * belonging to it, and legacy archives without one extract exactly the same way.
+     *
      * This replaces "read the whole archive into a ByteArray, write it to a temp file, then
      * extract": once attachments travel with the backup, the archive is as large as the user's
      * media and that model held several full copies in memory at once. Entry names are resolved
@@ -54,6 +60,14 @@ object DatabaseRestore {
         var total = 0L
         var entry = zip.nextEntry
         while (entry != null) {
+            // The archive manifest (W6) is metadata, not payload: callers read it through
+            // BackupArchiveCrypto.readManifest and it must never land in the staging directory
+            // (or be mistaken for content by a restore path that only looks at entry order).
+            if (entry.name == BackupArchiveCrypto.MANIFEST_ENTRY_NAME) {
+                zip.closeEntry()
+                entry = zip.nextEntry
+                continue
+            }
             if (!entry.isDirectory) {
                 val target = resolveEntry(stagingDir, entry.name)
                 val written = extractEntry(zip, target)
@@ -122,10 +136,21 @@ object DatabaseRestore {
     /**
      * Swaps [replacement] in for [target] without ever leaving the app without a readable database.
      *
-     * The sequence is: stage next to the target, verify the staged file opens as a SQLite database,
-     * move the old file aside to `.bak`, rename the staged file into place, then drop the `-wal` /
-     * `-shm` side files that belonged to the old handle. If the rename fails the old database is put
-     * back, so a failed restore degrades to "nothing changed" rather than "notes gone".
+     * The sequence is: stage next to the target, verify the staged file opens as a SQLite database
+     * and passes the D8 compatibility gate ([assertArchiveCompatible]), copy the old database to
+     * `.bak`, then replace the target with a **single atomic move**. The target therefore exists at
+     * every instant of the operation: a crash can leave "old database" or "old database + `.bak` +
+     * new database", but never "no database" - the window the previous two-rename sequence had
+     * (rename #1 target→`.bak`, rename #2 staged→target) is gone, because the old file is copied
+     * aside instead of renamed away (W14).
+     *
+     * `.bak` retention: exactly **one** backup is ever kept, and the next restore overwrites it.
+     * That rotation is the cleanup outlet (W14) - the file can neither pile up nor disappear
+     * before it has served its purpose. It is deliberately *not* deleted after a successful swap:
+     * nothing verifies the installed database yet, so the `.bak` is the only undo for "restored
+     * the wrong backup". Consuming it earlier (startup auto-rollback when the main file is
+     * missing, or a "restore from .bak" entry in the UI) needs a caller outside this file and
+     * stays open work.
      *
      * @return the backup file holding the previous database, for a caller that wants to delete it
      *   once the restored database has proven usable.
@@ -145,26 +170,50 @@ object DatabaseRestore {
         // keeps the bytes and still lets us force them to disk.
         RandomAccessFile(staged, "rw").use { it.fd.sync() }
 
-        if (!looksLikeSqliteDatabase(staged)) {
+        try {
+            if (!looksLikeSqliteDatabase(staged)) {
+                throw IOException("Archive does not contain a readable notes database")
+            }
+            // D8's last gate: everything before this line only looked at bytes; this refuses a
+            // database from a newer app version (the "install a v12 backup on v11 = crash loop
+            // on every launch" failure) or one this app's Room schema does not recognise, while
+            // the live database is still untouched. Every restore path passes through here.
+            assertArchiveCompatible(staged)
+        } catch (e: Exception) {
             staged.delete()
-            throw IOException("Archive does not contain a readable notes database")
+            throw e
         }
 
         val hadPrevious = target.exists()
         if (hadPrevious) {
-            backup.delete()
-            if (!target.renameTo(backup)) {
+            try {
+                // Copy, do not rename: renaming the live database away is what opened the
+                // "crash between the two renames = no note-list.db" window in the first place.
+                // The rotation comment on this function explains why the copy is kept.
+                target.copyTo(backup, overwrite = true)
+                RandomAccessFile(backup, "rw").use { it.fd.sync() }
+            } catch (e: Exception) {
                 staged.delete()
-                throw IOException("Could not move the current database aside")
+                throw IOException("Could not keep a backup of the current database", e)
             }
         }
 
-        val renamed = staged.renameTo(target)
-        if (!renamed) {
-            // Put the old database back rather than leaving the app with nothing.
-            if (hadPrevious) backup.renameTo(target)
+        try {
+            // One atomic replacement: POSIX rename(2) over an existing target swaps the file in a
+            // single step, and java.nio mirrors that on every platform this code reaches (verified
+            // on the Windows JVM the unit tests run on, where File.renameTo refuses to overwrite
+            // and would leave the restore failing forever).
+            Files.move(
+                staged.toPath(),
+                target.toPath(),
+                StandardCopyOption.ATOMIC_MOVE,
+                StandardCopyOption.REPLACE_EXISTING
+            )
+        } catch (e: Exception) {
+            // The move is atomic: on failure the target still holds the old database, so there is
+            // nothing to roll back - only the staged copy has to go.
             staged.delete()
-            throw IOException("Could not install the restored database")
+            throw IOException("Could not install the restored database", e)
         }
 
         // The old handle's WAL still describes the previous database; leaving it behind would let
@@ -214,4 +263,202 @@ object DatabaseRestore {
 
     private val SQLITE_MAGIC = "SQLite format 3\u0000".toByteArray(Charsets.US_ASCII)
     private const val SQLITE_HEADER_SIZE = 100L
+
+    // -----------------------------------------------------------------------------------------
+    // D8: is this archive's database something this build may install?
+    //
+    // `quick_check` only proves the pages are intact; it happily accepts a database written by a
+    // *newer* WriteOn (user_version 12+ has no migration back to 11, so Room throws on every
+    // launch afterwards - no destructive fallback, no automatic rollback: a permanent crash loop
+    // the user can only escape by clearing app data) and it accepts any other app's valid SQLite
+    // file. Both are refused here, before the live database is replaced.
+    // -----------------------------------------------------------------------------------------
+
+    /**
+     * The `identityHash` Room exported for [DatabaseConst.NOTES_DATABASE_VERSION] in
+     * `app/schemas/com.ezpnix.writeon.data.local.database.NoteDatabase/<version>.json`.
+     *
+     * Frozen as a constant because schema JSON is not packaged into the APK. **When the schema
+     * version is bumped, update this together with `DatabaseConst.NOTES_DATABASE_VERSION`** -
+     * `DatabaseRestoreTest` reads the schema JSON back and fails if the two drift.
+     */
+    const val CURRENT_IDENTITY_HASH = "8598c93745210e14c65948bf3dd61048"
+
+    /** Why an archive's database must not be installed. Drives the user-facing error string. */
+    enum class Incompatibility {
+        /** Backup written by a newer app version: no migration exists *backwards*. */
+        NEWER_VERSION,
+
+        /** Not a WriteOn/Room database at all (no `room_master_table`, no usable header). */
+        NOT_WRITEON_DATABASE,
+
+        /** Same version as this build but a different schema identity: changed without a bump. */
+        SCHEMA_MISMATCH,
+    }
+
+    /**
+     * Thrown by [assertArchiveCompatible] and [checkCompatibility].
+     *
+     * An [IOException] so every existing restore path - which already funnels failures through
+     * `catch (e: IOException)` - keeps working, while callers that care can catch this type first
+     * and show a specific message instead of a generic "restore failed" or a pointless retry.
+     */
+    class IncompatibleArchiveException(
+        val incompatibility: Incompatibility,
+        message: String,
+    ) : IOException(message)
+
+    /** Outcome of reading `identity_hash` out of an archive's `room_master_table`. */
+    sealed class IdentityHashRead {
+        /** The table exists and carries a hash. */
+        data class Found(val hash: String) : IdentityHashRead()
+
+        /** The table (and usually the whole schema) is missing - not a database we can install. */
+        object TableMissing : IdentityHashRead()
+
+        /**
+         * The file could not be opened for reading at all.
+         *
+         * Readability is [quickCheckPasses]' job and callers run it first; a plain JVM unit test
+         * has no SQLite to open either. Skipping the metadata comparison in this state keeps the
+         * decision function testable and never *rejects* a file another check already vetted.
+         */
+        object Unreadable : IdentityHashRead()
+    }
+
+    /** Byte offset of SQLite's big-endian `user_version` field in the 100-byte file header. */
+    private const val USER_VERSION_OFFSET = 60L
+
+    /**
+     * Reads the `user_version` straight from the SQLite header of [file] (pure `java.io`, so it
+     * works in JVM unit tests), or null when the file is too short to hold a header.
+     */
+    fun readUserVersion(file: File): Int? {
+        if (file.length() < SQLITE_HEADER_SIZE) return null
+        return try {
+            RandomAccessFile(file, "r").use { handle ->
+                handle.seek(USER_VERSION_OFFSET)
+                handle.readInt()
+            }
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    /**
+     * Reads `identity_hash` from the archive's `room_master_table`, read-only.
+     *
+     * A database without that table is not a Room database this app can open, so keeping
+     * "missing" distinct from "unreadable" lets us reject the former while leaving the latter to
+     * [quickCheckPasses].
+     */
+    fun readIdentityHash(file: File): IdentityHashRead {
+        val database = try {
+            android.database.sqlite.SQLiteDatabase.openDatabase(
+                file.absolutePath,
+                null,
+                android.database.sqlite.SQLiteDatabase.OPEN_READONLY
+            )
+        } catch (e: Exception) {
+            return IdentityHashRead.Unreadable
+        }
+        return try {
+            database.use { open ->
+                open.rawQuery("SELECT identity_hash FROM room_master_table", null).use { cursor ->
+                    if (cursor.moveToFirst() && !cursor.isNull(0)) {
+                        IdentityHashRead.Found(cursor.getString(0))
+                    } else {
+                        IdentityHashRead.TableMissing
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            // "no such table: room_master_table" and friends all mean: not our schema.
+            IdentityHashRead.TableMissing
+        }
+    }
+
+    /**
+     * The D8 rule itself - a pure decision over two values, so every branch is unit-testable on
+     * the JVM without Android's SQLite.
+     *
+     * Rules, in order:
+     * 1. no readable header → not a WriteOn database;
+     * 2. `user_version` above this build → [Incompatibility.NEWER_VERSION] (the crash loop);
+     * 3. metadata unreadable → accept; [quickCheckPasses] owns readability (see [IdentityHashRead]);
+     * 4. `room_master_table` missing → not a WriteOn database;
+     * 5. `user_version < 1` (only reachable when the table *was* readable) → not a WriteOn
+     *    database: Room has always written the version it migrated to;
+     * 6. same version as this build but a different hash → [Incompatibility.SCHEMA_MISMATCH];
+     * 7. an **older** version with its own (different) hash is accepted on purpose: that is what
+     *    the registered 1→11 migration chain exists for, and Room rewrites the hash after it runs.
+     *
+     * @throws IncompatibleArchiveException when the archive must not be installed.
+     */
+    fun checkCompatibility(
+        userVersion: Int?,
+        identityHash: IdentityHashRead,
+        currentVersion: Int = DatabaseConst.NOTES_DATABASE_VERSION,
+        expectedIdentityHash: String = CURRENT_IDENTITY_HASH,
+    ) {
+        if (userVersion == null) {
+            throw IncompatibleArchiveException(
+                Incompatibility.NOT_WRITEON_DATABASE,
+                "Archive database has no readable SQLite header"
+            )
+        }
+        if (userVersion > currentVersion) {
+            throw IncompatibleArchiveException(
+                Incompatibility.NEWER_VERSION,
+                "Archive database is schema version $userVersion; this build understands up to $currentVersion"
+            )
+        }
+        when (identityHash) {
+            IdentityHashRead.Unreadable -> return
+            IdentityHashRead.TableMissing -> throw IncompatibleArchiveException(
+                Incompatibility.NOT_WRITEON_DATABASE,
+                "Archive database has no room_master_table"
+            )
+            is IdentityHashRead.Found -> {
+                if (userVersion < 1) {
+                    throw IncompatibleArchiveException(
+                        Incompatibility.NOT_WRITEON_DATABASE,
+                        "Archive database reports user_version $userVersion"
+                    )
+                }
+                if (userVersion == currentVersion && identityHash.hash != expectedIdentityHash) {
+                    throw IncompatibleArchiveException(
+                        Incompatibility.SCHEMA_MISMATCH,
+                        "Archive database identity ${identityHash.hash} does not match this " +
+                            "build's $expectedIdentityHash at version $currentVersion"
+                    )
+                }
+            }
+        }
+    }
+
+    /**
+     * D8 gate for one file: header version first (works even when the file cannot be opened),
+     * then the full rule from [checkCompatibility].
+     *
+     * Callers run it right next to [quickCheckPasses], before anything is moved, replaced or
+     * rewritten; [replaceDatabaseAtomically] runs it again as the last gate before the live
+     * database is touched, so a path that forgets its own check still cannot install an
+     * incompatible database.
+     *
+     * @throws IncompatibleArchiveException when the archive must not be installed.
+     */
+    fun assertArchiveCompatible(file: File) {
+        val userVersion = readUserVersion(file)
+        // Fast path: a newer schema is refused from the 100-byte header alone, without opening
+        // the file - the primary protection has no dependency on Android's SQLite at all.
+        if (userVersion != null && userVersion > DatabaseConst.NOTES_DATABASE_VERSION) {
+            throw IncompatibleArchiveException(
+                Incompatibility.NEWER_VERSION,
+                "Archive database is schema version $userVersion; this build understands up to " +
+                    "${DatabaseConst.NOTES_DATABASE_VERSION}"
+            )
+        }
+        checkCompatibility(userVersion, readIdentityHash(file))
+    }
 }

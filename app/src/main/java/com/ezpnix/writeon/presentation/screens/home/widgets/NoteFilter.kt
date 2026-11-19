@@ -54,7 +54,12 @@ fun NoteFilter(
     // Only re-filter when the notes or the query actually change. This used to run on every
     // recomposition, doing two ignore-case substring scans across every note and its body text, so
     // any unrelated state change in a parent redid the whole pass for a result nobody looked at.
-    val filteredNotes = remember(notes, searchText) { filterNotes(notes, searchText) }
+    //
+    // Memoisation alone still left one full library scan per keystroke. The state below narrows
+    // each novel query to the rows its prefix matched, which is what makes typing in a large
+    // library cost nothing after the first character (see NoteSearchState).
+    val searchState = remember(notes) { NoteSearchState(notes) }
+    val filteredNotes = remember(searchState, searchText) { searchState.filter(searchText) }
     if (filteredNotes.isEmpty()) {
         Placeholder(
             placeholderIcon = {
@@ -98,6 +103,44 @@ fun NoteFilter(
             swipeEnabled = swipeEnabled,
             onAttachmentDelete = onAttachmentDelete
         )
+    }
+}
+
+/**
+ * Search state for one snapshot of [notes], memoising the last query's result.
+ *
+ * [filterNotes] scans the name and the body of every note. That is the right cost for the first
+ * keystroke, but not for the ninth: a query that extends the previous one (`"bea"` -> `"bean"`)
+ * can only match notes the shorter query already matched, so the next scan runs over that
+ * shrinking result set instead of the whole library.
+ *
+ * Everything else - a backspace, a paste, replacing a selection, clearing the field - falls back
+ * to the full pass, so the answer is always exactly what `filterNotes(notes, searchText)` returns.
+ *
+ * The object is rebuilt whenever the note list changes (see `remember(notes)` at the call site),
+ * so a result set can never outlive the data it was computed from.
+ */
+internal class NoteSearchState(private val notes: List<Note>) {
+    private var query: String? = null
+    private var result: List<Note> = notes
+
+    fun filter(searchText: String?): List<Note> {
+        val next = searchText?.takeIf { it.isNotBlank() }
+        if (next == null) {
+            query = null
+            result = notes
+            return notes
+        }
+        if (next == query) return result
+
+        val previous = query
+        val canNarrow = previous != null &&
+            next.length > previous.length &&
+            next.startsWith(previous, ignoreCase = true)
+        val scanned = if (canNarrow) result else notes
+        query = next
+        result = filterNotes(scanned, next)
+        return result
     }
 }
 

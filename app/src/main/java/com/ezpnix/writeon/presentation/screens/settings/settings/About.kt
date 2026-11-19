@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.rememberScrollState
@@ -280,7 +281,10 @@ fun LicenseSection(settingsViewModel: SettingsViewModel, context: Context, navCo
                 AnimatedVisibility(visible = isExpanded) {
                     Column(
                         modifier = Modifier
-                            .height(150.dp)
+                            // A licence list is a variable amount of text: a fixed 150dp box left a
+                            // dead gap under the short lists and clipped the long ones without saying
+                            // so. Whatever the list needs up to 150dp now, and it scrolls past that.
+                            .heightIn(max = 150.dp)
                             .verticalScroll(rememberScrollState())
                     ) {
                         Spacer(modifier = Modifier.height(8.dp))
@@ -324,13 +328,8 @@ fun LicenseSection(settingsViewModel: SettingsViewModel, context: Context, navCo
                                         "androidx.work:work-runtime-ktx\n" +
                                         "\n" +
                                         "androidx.preference:preference-ktx\n" +
-                                        "Android Developers\n" +
-                                        "Android Developers\n" +
-                                        "+2\n" +
-                                        "Android Developers\n" +
-                                        "+2\n" +
-                                        "Android Developers\n" +
-                                        "+2\n" +
+                                        stringResource(R.string.about_android_developers) +
+                                        "\n" +
                                         "\n" +
                                         stringResource(R.string.about_google_dagger_hilt) +
                                         "\n" +

@@ -21,7 +21,6 @@ data class Settings(
     var sortBy: Int = 0, // 0: CreatedAt, 1: UpdatedAt, 2: Title
     var vaultSettingEnabled: Boolean = false,
     var vaultEnabled: Boolean = false,
-    var editMode: Boolean = false,
     var showOnlyTitle: Boolean = false,
     var termsOfService: Boolean = false,
     var cornerRadius: Int = 32,

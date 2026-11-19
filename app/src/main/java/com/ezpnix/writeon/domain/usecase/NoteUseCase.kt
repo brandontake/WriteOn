@@ -12,6 +12,7 @@ import com.ezpnix.writeon.core.attachment.LegacyAudioSyntax
 import com.ezpnix.writeon.domain.model.Attachment
 import com.ezpnix.writeon.domain.model.Note
 import com.ezpnix.writeon.domain.repository.NoteRepository
+import com.ezpnix.writeon.core.security.DecryptFailureRegistry
 import com.ezpnix.writeon.core.security.DecryptionResult
 import com.ezpnix.writeon.core.security.EncryptionHelper
 import com.ezpnix.writeon.core.widget.WidgetRefresher
@@ -26,7 +27,11 @@ import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.firstOrNull
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.shareIn
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import javax.inject.Inject
@@ -49,8 +54,44 @@ class NoteUseCase @Inject constructor(
     var tags: List<String> by mutableStateOf(emptyList())
         private set
     var decryptionResult: DecryptionResult by mutableStateOf(DecryptionResult.LOADING)
+    /**
+     * How many vault rows are present in the database but could not be decrypted into [notes].
+     *
+     * Without this number the home screen had no way to say "some notes are locked" - a vault row
+     * that fails to decrypt was simply absent, which read as data loss rather than a locked vault.
+     */
+    var hiddenVaultCount: Int by mutableStateOf(0)
+
+    /**
+     * Ids of the notes whose stored text this process could not decrypt.
+     *
+     * Keystore failures are degraded per row by `EncryptedNoteDao` (the row survives with a
+     * placeholder body), and this flow is how the home screen learns how many rows are affected
+     * while the editor and every write path learn which rows must never be written back.
+     */
+    val decryptFailedIds: StateFlow<Set<Int>> get() = DecryptFailureRegistry.failedIds
+
+    /** [decryptFailedIds] as a count, for the "N notes could not be decrypted" banner. */
+    val decryptFailedCount: StateFlow<Int> get() = DecryptFailureRegistry.failedCount
+
     private var observeKeysJob: Job? = null
     private var observeTagsJob: Job? = null
+
+    /**
+     * P-5: one table stream shared by the note list and the tag index.
+     *
+     * Both observers used to call `getAllNotes()` independently, so every save made Room read the
+     * whole notes table twice - and [EncryptedNoteDao] decrypted every row on each copy. `shareIn`
+     * keeps one upstream query and one decryption pass; the tag observer only derives a small list
+     * from the same emission. `WhileSubscribed` lets the query stop when no screen is listening.
+     */
+    private val notesSource: SharedFlow<List<Note>> by lazy {
+        noteRepository.getAllNotes().shareIn(
+            scope = coroutineScope,
+            started = SharingStarted.WhileSubscribed(5_000),
+            replay = 1,
+        )
+    }
 
     fun observe() {
         observeNotes()
@@ -109,25 +150,51 @@ class NoteUseCase @Inject constructor(
     }
 
     private fun processNotes(sourceNotes: List<Note>): List<Note> {
+        // A genuinely empty library is loaded, not loading: the home screen uses LOADING below to
+        // decide whether to show its first-frame spinner, and this state used to survive forever.
+        if (sourceNotes.isEmpty()) {
+            this.decryptionResult = DecryptionResult.EMPTY
+            this.hiddenVaultCount = 0
+            return emptyList()
+        }
         val hasUnencryptedNotes = sourceNotes.any { !it.encrypted }
-        if (!hasUnencryptedNotes && sourceNotes.isNotEmpty()) {
+        if (!hasUnencryptedNotes) {
             this.decryptionResult = DecryptionResult.EMPTY
         }
-        return sourceNotes.mapNotNull { note ->
+        var hiddenVault = 0
+        var sawPlainNote = false
+        val processed = sourceNotes.mapNotNull { note ->
             if (note.encrypted) {
                 val (decryptedNote, status) = decryptNote(note)
                 this.decryptionResult = status
-                if (status == DecryptionResult.SUCCESS) decryptedNote else null
+                if (status == DecryptionResult.SUCCESS) decryptedNote else {
+                    hiddenVault++
+                    null
+                }
             } else {
+                // Only the encrypted branch used to assign a result, so a library of plain notes
+                // stayed on LOADING forever - which a first-frame progress indicator would turn
+                // into a permanent spinner.
+                sawPlainNote = true
                 note
             }
         }
+        // Keep a vault failure (BAD_PASSWORD / LOADING) visible even when plain notes also loaded;
+        // only promote the state to SUCCESS when every row that had work to do succeeded.
+        if (sawPlainNote &&
+            this.decryptionResult == DecryptionResult.LOADING &&
+            hiddenVault == 0
+        ) {
+            this.decryptionResult = DecryptionResult.SUCCESS
+        }
+        this.hiddenVaultCount = hiddenVault
+        return processed
     }
 
     private fun observeNotes() {
         observeKeysJob?.cancel()
         observeKeysJob = coroutineScope.launch {
-            getAllNotes().collectLatest { sourceNotes ->
+            notesSource.collectLatest { sourceNotes ->
                 // Decrypting every note touches the Keystore, so it must stay off the main thread.
                 val processedNotes = withContext(Dispatchers.Default) { processNotes(sourceNotes) }
                 val previousIds = notes.map { it.id }
@@ -143,12 +210,19 @@ class NoteUseCase @Inject constructor(
     private fun observeTags() {
         observeTagsJob?.cancel()
         observeTagsJob = coroutineScope.launch {
-            noteRepository.getAllNotes().collectLatest { notes ->
-                val newTags = notes.flatMap { it.tags }
-                    .map { it.trim().lowercase() }
-                    .distinct()
-                    .sorted()
-                    .filter { it.isNotBlank() }
+            notesSource.collectLatest { notes ->
+                // P-5: the injected scope runs on Dispatchers.Main, so this collectLatest body -
+                // a flatten + trim + lowercase + distinct + sort over every tag in the library -
+                // used to run on the UI thread on *every* database emission. `observeNotes` above
+                // already hops to Default for the same reason; the assignment stays on Main so the
+                // Compose state write is not observed from a background thread.
+                val newTags = withContext(Dispatchers.Default) {
+                    notes.flatMap { it.tags }
+                        .map { it.trim().lowercase() }
+                        .distinct()
+                        .sorted()
+                        .filter { it.isNotBlank() }
+                }
                 tags = newTags
             }
         }
@@ -166,11 +240,68 @@ class NoteUseCase @Inject constructor(
         check(!encryptionHelper.isPasswordEmpty()) {
             "Refusing to save a vault note while the vault is locked"
         }
+        // This is also the vault's lazy upgrade point (A4): decrypt() reads the pre-PBKDF2 layout
+        // without rewriting it, so a legacy note keeps the weak single-SHA-256 format until the
+        // user saves it. encrypt() always seals with the current v2/PBKDF2 layout, which upgrades
+        // the row here - on a real save, never on a list read.
         return note.copy(
             name = encryptionHelper.encrypt(note.name),
             description = encryptionHelper.encrypt(note.description),
             encrypted = true
         )
+    }
+
+    /**
+     * A4: re-seals every vault row still written in the pre-PBKDF2 layout.
+     *
+     * The legacy layout derived its key with a single SHA-256 pass over the passphrase, which is
+     * the one part of the vault a stolen database file could brute-force. It used to be upgraded
+     * only when the user happened to open *and save* that exact note, so a library the user
+     * restored or never edited again could keep the weak format indefinitely. This sweep runs once
+     * per unlock - the only moment the passphrase is in memory - and rewrites the rows it can
+     * positively authenticate.
+     *
+     * A row where a legacy field does not authenticate (wrong passphrase, or a row that was never
+     * really vault-sealed) is left byte-for-byte untouched, and an unsealed field is never
+     * rewritten either: the Keystore-sealed layout has nothing to do with the vault's.
+     *
+     * @return how many rows were rewritten; 0 when the vault is locked or everything is current.
+     */
+    suspend fun upgradeLegacyVaultRows(): Int = withContext(Dispatchers.IO) {
+        if (encryptionHelper.isPasswordEmpty()) return@withContext 0
+        // Raw rows: `EncryptedNoteDao` deliberately passes vault rows through verbatim, so these
+        // are exactly the sealed columns this method has to inspect.
+        val vaultRows = noteRepository.getAllNotes().first().filter { it.encrypted }
+        var upgraded = 0
+        vaultRows.forEach { row ->
+            val nameIsLegacy = encryptionHelper.isLegacyFormat(row.name)
+            val bodyIsLegacy = encryptionHelper.isLegacyFormat(row.description)
+            if (!nameIsLegacy && !bodyIsLegacy) return@forEach
+
+            val sealedName = if (nameIsLegacy) resealVaultValueOrNull(row.name, row.id) else row.name
+            val sealedBody =
+                if (bodyIsLegacy) resealVaultValueOrNull(row.description, row.id) else row.description
+            // Nothing is written unless every legacy field authenticated.
+            if (sealedName == null || sealedBody == null) return@forEach
+
+            if (noteRepository.updateVaultFields(row.id, sealedName, sealedBody) > 0) upgraded++
+        }
+        upgraded
+    }
+
+    /**
+     * Reads one legacy sealed value and re-seals it with the current layout.
+     *
+     * @return the new ciphertext, or null when the value does not authenticate - in which case the
+     *   caller must leave the row exactly as it is rather than overwrite a readable note.
+     */
+    private fun resealVaultValueOrNull(stored: String, noteId: Int): String? {
+        val (plain, result) = encryptionHelper.decrypt(stored)
+        if (result != DecryptionResult.SUCCESS || plain == null) {
+            Log.w("NoteUseCase", "Vault row $noteId did not authenticate; leaving it untouched")
+            return null
+        }
+        return encryptionHelper.encrypt(plain)
     }
 
     private fun decryptNote(note: Note): Pair<Note, DecryptionResult> {
@@ -207,6 +338,21 @@ class NoteUseCase @Inject constructor(
     }
 
     /**
+     * True when [id] belongs to a row whose stored text could not be decrypted.
+     *
+     * The list shows such a row as a placeholder, so writing it back - a full row, a restored
+     * undo snapshot, an appended attachment line - would replace the only ciphertext that exists
+     * with display text: permanent, silent data loss. Every full-row write path checks this
+     * first and skips the row with a log line instead; single-column updates (pin, trash, tags)
+     * never touch the body and stay allowed.
+     */
+    private fun refusesUndecryptable(id: Int, action: String): Boolean {
+        if (id == 0 || !DecryptFailureRegistry.isFailed(id)) return false
+        Log.w("NoteUseCase", "Skipping $action for note $id: its stored text could not be decrypted")
+        return true
+    }
+
+    /**
      * Writes [note] back exactly as it was stored.
      *
      * [addNote] is the ordinary write path: it seals a vault note again and stamps nothing, but it is
@@ -215,10 +361,12 @@ class NoteUseCase @Inject constructor(
      * makes a vault note, a plain note with tags, and a trashed flag all come back unchanged.
      */
     suspend fun restoreNote(note: Note) {
+        if (refusesUndecryptable(note.id, "restore")) return
         noteRepository.updateNote(note)
     }
 
     suspend fun addNote(note: Note) {
+        if (refusesUndecryptable(note.id, "save")) return
         val noteToSave = if (note.encrypted) {
             encryptNote(note.copy(tags = note.tags.map { it.trim().lowercase() }.distinct()))
         } else {
@@ -248,6 +396,10 @@ class NoteUseCase @Inject constructor(
         reviveAttachmentIds: List<String> = emptyList(),
         deleteAttachmentIds: List<String> = emptyList(),
     ): Int {
+        // No row write for an undecryptable note - the placeholder the editor is showing must
+        // never become the stored body. The editor refuses even earlier (EditViewModel.saveNote)
+        // so the user is told why nothing happened; this is the last line of defence.
+        if (refusesUndecryptable(note.id, "save")) return note.id
         val noteToSave = if (note.encrypted) {
             encryptNote(note.copy(tags = note.tags.map { it.trim().lowercase() }.distinct()))
         } else {
@@ -262,7 +414,11 @@ class NoteUseCase @Inject constructor(
     }
 
     suspend fun batchUpdateNotes(notes: List<Note>) {
-        val notesToSave = notes.map { note ->
+        // Partition instead of a blanket skip: one unreadable row must not silently cancel the
+        // tag/pin changes the caller asked for on every other note.
+        val writable = notes.filterNot { refusesUndecryptable(it.id, "batch update") }
+        if (writable.isEmpty()) return
+        val notesToSave = writable.map { note ->
             if (note.encrypted) encryptNote(note.copy(tags = note.tags.map { it.trim().lowercase() }.distinct())) else note
         }
         noteRepository.batchUpdateNotes(notesToSave)
@@ -335,15 +491,6 @@ class NoteUseCase @Inject constructor(
 
     fun getNoteById(id: Int): Flow<Note> {
         return noteRepository.getNoteById(id)
-    }
-
-    fun getLastNoteId(onResult: (Long?) -> Unit) {
-        coroutineScope.launch(NonCancellable + Dispatchers.IO) {
-            val lastNoteId = noteRepository.getLastNoteId()
-            withContext(Dispatchers.Main) {
-                onResult(lastNoteId)
-            }
-        }
     }
 
     suspend fun updatePinStatus(noteId: Int, pinned: Boolean) {
@@ -456,7 +603,9 @@ class NoteUseCase @Inject constructor(
             val note = noteRepository.getNoteById(attachment.noteId).firstOrNull()
             if (note?.encrypted == true) return@withContext
             noteRepository.setAttachmentTrashed(listOf(id), System.currentTimeMillis())
-            if (rewriteBody && note != null) {
+            if (rewriteBody && note != null &&
+                !refusesUndecryptable(note.id, "body rewrite for a trashed attachment")
+            ) {
                 val updated = AttachmentSyntax.removeId(note.description, id)
                 if (updated != note.description) {
                     // Body-only update: the note may have gained new text since this row was read,
@@ -488,6 +637,9 @@ class NoteUseCase @Inject constructor(
             noteRepository.setAttachmentTrashed(listOf(id), null)
             if (note == null) return@withContext
             if (id in AttachmentSyntax.idsIn(note.description)) return@withContext
+            // The description read above is the placeholder for an undecryptable row: appending
+            // the line would store that placeholder plus one attachment line as the new body.
+            if (refusesUndecryptable(note.id, "body rewrite for a restored attachment")) return@withContext
             val line = AttachmentSyntax.lineFor(attachment.id, attachment.type, attachment.caption)
             val separator = if (note.description.isEmpty() || note.description.endsWith("\n")) "" else "\n"
             noteRepository.updatePlainDescription(note.id, note.description + separator + line)

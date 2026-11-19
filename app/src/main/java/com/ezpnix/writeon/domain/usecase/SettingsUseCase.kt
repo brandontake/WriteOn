@@ -6,10 +6,18 @@ import com.ezpnix.writeon.domain.model.Settings
 import com.ezpnix.writeon.domain.repository.SettingsRepository
 import javax.inject.Inject
 
+/**
+ * Reads and writes every setting by name.
+ *
+ * This used to walk `Settings::class.java.declaredFields` with `isAccessible = true`, which broke
+ * as soon as the class gained a synthetic field (Kotlin adds one for `var` properties in some
+ * configurations) and made a typo in a field name silently read the wrong key. The explicit list
+ * below is the schema: adding a setting means adding it here, and the compiler checks the type.
+ * T9.
+ */
 class SettingsUseCase @Inject constructor(
     private val settingsRepository: SettingsRepository,
-
-    ) {
+) {
 
     private companion object {
         const val TAG = "SettingsUseCase"
@@ -23,16 +31,65 @@ class SettingsUseCase @Inject constructor(
     }
 
     suspend fun loadSettingsFromRepository(): Settings {
-        val settings = Settings().apply {
-            Settings::class.java.declaredFields.forEach { field ->
-                field.isAccessible = true
-                val settingName = field.name
-                val defaultValue = field.get(this)
-                val settingValue = getSettingValue(field.type, settingName, defaultValue)
-                field.set(this, settingValue)
-            }
-        }
+        val defaults = Settings()
+        val settings = Settings(
+            viewMode = readBoolean("viewMode", defaults.viewMode),
+            automaticTheme = readBoolean("automaticTheme", defaults.automaticTheme),
+            darkTheme = readBoolean("darkTheme", defaults.darkTheme),
+            dynamicTheme = readBoolean("dynamicTheme", defaults.dynamicTheme),
+            amoledTheme = readBoolean("amoledTheme", defaults.amoledTheme),
+            minimalisticMode = readBoolean("minimalisticMode", defaults.minimalisticMode),
+            extremeAmoledMode = readBoolean("extremeAmoledMode", defaults.extremeAmoledMode),
+            isMarkdownEnabled = readBoolean("isMarkdownEnabled", defaults.isMarkdownEnabled),
+            renderLatex = readBoolean("renderLatex", defaults.renderLatex),
+            liveAttachmentPreview = readBoolean(
+                "liveAttachmentPreview",
+                defaults.liveAttachmentPreview
+            ),
+            screenProtection = readBoolean("screenProtection", defaults.screenProtection),
+            encryptBackup = readBoolean("encryptBackup", defaults.encryptBackup),
+            sortDescending = readBoolean("sortDescending", defaults.sortDescending),
+            sortBy = readInt("sortBy", defaults.sortBy),
+            vaultSettingEnabled = readBoolean("vaultSettingEnabled", defaults.vaultSettingEnabled),
+            vaultEnabled = readBoolean("vaultEnabled", defaults.vaultEnabled),
+            showOnlyTitle = readBoolean("showOnlyTitle", defaults.showOnlyTitle),
+            termsOfService = readBoolean("termsOfService", defaults.termsOfService),
+            cornerRadius = readInt("cornerRadius", defaults.cornerRadius),
+            predictiveBackEnabled = readBoolean(
+                "predictiveBackEnabled",
+                defaults.predictiveBackEnabled
+            ),
+            isBiometricEnabled = readBoolean("isBiometricEnabled", defaults.isBiometricEnabled),
+            autoBackupEnabled = readBoolean("autoBackupEnabled", defaults.autoBackupEnabled),
+            fontSize = readFloat("fontSize", defaults.fontSize),
+            columnsCount = readInt("columnsCount", defaults.columnsCount),
+            hideVisibilityButtonWhenKeyboard = readBoolean(
+                "hideVisibilityButtonWhenKeyboard",
+                defaults.hideVisibilityButtonWhenKeyboard
+            ),
+        )
         return migrateStoredSettings(settings)
+    }
+
+    private suspend fun readBoolean(name: String, fallback: Boolean): Boolean = try {
+        settingsRepository.getBoolean(name) ?: fallback
+    } catch (e: ClassCastException) {
+        handleCorruptedPreference(name, e)
+        fallback
+    }
+
+    private suspend fun readInt(name: String, fallback: Int): Int = try {
+        settingsRepository.getInt(name) ?: fallback
+    } catch (e: ClassCastException) {
+        handleCorruptedPreference(name, e)
+        fallback
+    }
+
+    private suspend fun readFloat(name: String, fallback: Float): Float = try {
+        settingsRepository.getFloat(name) ?: fallback
+    } catch (e: ClassCastException) {
+        handleCorruptedPreference(name, e)
+        fallback
     }
 
     /**
@@ -56,56 +113,41 @@ class SettingsUseCase @Inject constructor(
         return settings
     }
 
-    private suspend fun getSettingValue(fieldType: Class<*>, settingName: String, defaultValue: Any?): Any? {
-        return try {
-            when (fieldType) {
-                Boolean::class.java -> settingsRepository.getBoolean(settingName) ?: defaultValue
-                String::class.java -> settingsRepository.getString(settingName) ?: defaultValue
-                Int::class.java -> settingsRepository.getInt(settingName) ?: defaultValue
-                Float::class.java -> settingsRepository.getFloat(settingName) ?: defaultValue
-                else -> {
-                    handleCorruptedPreference(
-                        settingName,
-                        IllegalArgumentException("Unsupported setting type: $fieldType")
-                    )
-                    defaultValue
-                }
-            }
-        } catch (e: ClassCastException) {
-            handleCorruptedPreference(settingName, e)
-            defaultValue
-        }
-    }
-
     private fun handleCorruptedPreference(settingName: String, e: Exception) {
-        // These used to be println, which wrote to stdout on release builds too — on Android that
+        // These used to be println, which wrote to stdout on release builds too - on Android that
         // lands in the system log, where any app with READ_LOGS (or an adb session) can read it. The
         // setting name is not user data, but the stack trace is noise that never needed to ship.
         Log.w(TAG, "Could not read setting '$settingName', using default. Contact support: ${ConnectionConst.SUPPORT_MAIL}", e)
     }
 
     suspend fun saveSettingsToRepository(settings: Settings) {
-        Settings::class.java.declaredFields.forEach { field ->
-            field.isAccessible = true
-            val settingName = field.name
-            val settingValue = field.get(settings)
-            saveSettingValue(settingName, settingValue)
-        }
+        settingsRepository.putBoolean("viewMode", settings.viewMode)
+        settingsRepository.putBoolean("automaticTheme", settings.automaticTheme)
+        settingsRepository.putBoolean("darkTheme", settings.darkTheme)
+        settingsRepository.putBoolean("dynamicTheme", settings.dynamicTheme)
+        settingsRepository.putBoolean("amoledTheme", settings.amoledTheme)
+        settingsRepository.putBoolean("minimalisticMode", settings.minimalisticMode)
+        settingsRepository.putBoolean("extremeAmoledMode", settings.extremeAmoledMode)
+        settingsRepository.putBoolean("isMarkdownEnabled", settings.isMarkdownEnabled)
+        settingsRepository.putBoolean("renderLatex", settings.renderLatex)
+        settingsRepository.putBoolean("liveAttachmentPreview", settings.liveAttachmentPreview)
+        settingsRepository.putBoolean("screenProtection", settings.screenProtection)
+        settingsRepository.putBoolean("encryptBackup", settings.encryptBackup)
+        settingsRepository.putBoolean("sortDescending", settings.sortDescending)
+        settingsRepository.putInt("sortBy", settings.sortBy)
+        settingsRepository.putBoolean("vaultSettingEnabled", settings.vaultSettingEnabled)
+        settingsRepository.putBoolean("vaultEnabled", settings.vaultEnabled)
+        settingsRepository.putBoolean("showOnlyTitle", settings.showOnlyTitle)
+        settingsRepository.putBoolean("termsOfService", settings.termsOfService)
+        settingsRepository.putInt("cornerRadius", settings.cornerRadius)
+        settingsRepository.putBoolean("predictiveBackEnabled", settings.predictiveBackEnabled)
+        settingsRepository.putBoolean("isBiometricEnabled", settings.isBiometricEnabled)
+        settingsRepository.putBoolean("autoBackupEnabled", settings.autoBackupEnabled)
+        settingsRepository.putFloat("fontSize", settings.fontSize)
+        settingsRepository.putInt("columnsCount", settings.columnsCount)
+        settingsRepository.putBoolean(
+            "hideVisibilityButtonWhenKeyboard",
+            settings.hideVisibilityButtonWhenKeyboard
+        )
     }
-
-    private suspend fun saveSettingValue(settingName: String, settingValue: Any?) {
-        when (settingValue) {
-            is Boolean -> settingsRepository.putBoolean(settingName, settingValue)
-            is String -> settingsRepository.putString(settingName, settingValue)
-            is Int -> settingsRepository.putInt(settingName, settingValue)
-            is Float -> settingsRepository.putFloat(settingName, settingValue)
-            // Throwing here used to abort the whole write, so one field the repository cannot store
-            // silently dropped every setting that would have been saved after it. Skip and report.
-            else -> handleCorruptedPreference(
-                settingName,
-                IllegalArgumentException("Unsupported setting type: ${settingValue?.javaClass}")
-            )
-        }
-    }
-
 }

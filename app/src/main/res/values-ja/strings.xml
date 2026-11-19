@@ -110,7 +110,7 @@
     <string name="backup">バックアップ</string>
     <string name="restore">復元</string>
     <string name="auto_backup">自動バックアップ</string>
-    <string name="auto_backup_description">ノートの暗号化コピーを毎日アプリのプライベートストレージに保存し、最新 7 件のみを保持します。設定 → クラウド からこの端末でのみ復元できます。暗号化鍵は端末から出ません</string>
+    <string name="auto_backup_description">ノートの暗号化コピーを毎日アプリのプライベートストレージに保存し、最新 7 件かつ合計 200 MB まで保持します（超過分は古い順に削除し、最低 3 件は常に保持）。設定 → クラウド からこの端末でのみ復元できます。暗号化鍵は端末から出ません</string>
     <string name="backup_dropdown">バックアップ</string>
     <string name="backup_description">すべてのノートを zip ファイルに保存、または zip ファイルから復元します。なお、この操作は既存のノートをすべて置き換え、ゴミ箱も空になります。</string>
     <string name="restore_description">zip ファイルからノートを復元します</string>
@@ -123,9 +123,10 @@
     <string name="file_import_partial_error">一部のファイルをインポートできませんでした</string>
 
     <!-- Markdown / Extras -->
-    <string name="markdown">追加のカスタマイズ</string>
-    <string name="markdown_description">箇条書き • チェックリスト • 画像</string>
+    <string name="markdown">Markdown 形式</string>
+    <string name="markdown_description">オフにすると分割プレビューも非表示になります</string>
     <string name="description_markdown">サポート • 画像</string>
+    <string name="description_behavior">Markdown • LaTeX • ライブプレビュー • リスト表示</string>
     <string name="images_support">画像のサポート</string>
     <string name="description_widgets">ウィジェット • Markdown</string>
 
@@ -139,11 +140,16 @@
 
     <!-- Security / Vault -->
     <string name="security">セキュリティ</string>
+    <!-- A7: shown when the encrypted app-lock store was unreadable and had to be reset. -->
+    <string name="lock_reset_warning">アプリロックを読み取れなかったため、ロックを解除しました。ノートを保護するため、再度設定してください。</string>
     <string name="encrypt_database">データベースを暗号化</string>
     <string name="encrypt_database_description">バックアップ時にデータベースを保護します</string>
     <string name="database_restore_error">パスワードが正しくないか、データベースが暗号化されていません</string>
     <string name="password_prompt">パスワードを入力</string>
     <string name="password_continue">続行</string>
+    <string name="vault_locked_notes">ロックされた保管庫ノート：%1$d</string>
+    <string name="vault_unlock">ロック解除</string>
+    <string name="vault_wrong_password">パスワードが違います</string>
     <string name="invalid_password">パスワードが正しくありません</string>
     <string name="password_delete">パスワードを削除</string>
     <string name="screen_protection">画面保護</string>
@@ -152,6 +158,9 @@
     <string name="biometric_authentication_description">指紋または顔認証で WriteOn のロックを解除します</string>
     <string name="vault_description">保護レイヤーを追加します</string>
     <string name="vault_locked_cannot_save">このノートを保存する前に保管庫のロックを解除してください</string>
+    <string name="decrypt_failed_placeholder">⚠️ 復号できません</string>
+    <string name="decrypt_failed_notes">復号できないノートが %1$d 件あります</string>
+    <string name="decrypt_failed_cannot_save">このノートは復号できないため保存できません</string>
 
     <!-- General -->
     <string name="database">データベース</string>
@@ -174,8 +183,6 @@
 
     <!-- Behavior -->
     <string name="Behavior">動作</string>
-    <string name="always_edit">ノートを開いたときの動作</string>
-    <string name="always_edit_description">無効 - 閲覧モードを優先\n有効 - 編集モードを優先</string>
     <string name="show_only_title">ホーム画面にタイトルのみ表示</string>
     <string name="show_only_title_description">内容を隠して表示スペースを広げます</string>
 
@@ -268,6 +275,7 @@
     <string name="cloud_backup_as_txt">TXT としてバックアップ</string>
     <string name="cloud_backup_as_txt_desc">ノートを暗号化なしのプレーンな TXT ファイルとして書き出し、1 つの zip ファイルにまとめます</string>
     <string name="cloud_backup_options">バックアップのオプション</string>
+    <string name="cloud_backup_local_section">この端末内のみ（アップロードされません）</string>
     <string name="cloud_backup_passphrase">バックアップのパスフレーズ</string>
     <string name="cloud_backup_passphrase_desc">WebDAV にアップロードするアーカイブを暗号化します。クラウドからの復元には同じパスフレーズが必要になるため、安全な場所に控えを保管してください。</string>
     <string name="cloud_backup_passphrase_missing">WebDAV のバックアップまたは復元を使用する前に、バックアップのパスフレーズを設定してください</string>
@@ -302,8 +310,20 @@
     <string name="auto_backup_none">この端末に自動バックアップはまだありません。自動バックアップを有効にし、翌日以降に確認してください。</string>
     <string name="auto_backup_decrypt_failed">この自動バックアップを復号できません。別のインストールまたは端末で作成されたか、ファイルが破損しています。</string>
     <string name="cloud_webdav_saved">WebDAV の認証情報を保存しました</string>
-    <string name="cloud_webdav_cleartext_warning">このサーバーは平文の http を使用しています。ユーザー名とパスワードは暗号化されずに送信されます。可能であれば https を使用してください。</string>
+    <string name="cloud_backup_completed">WebDAV バックアップが完了しました</string>
+    <string name="cloud_backup_failed">WebDAV バックアップに失敗しました</string>
+    <string name="cloud_backup_no_validator">サーバーが検証情報（ETag/Last-Modified）を提供しないため、データ損失を防ぐため上書きを拒否しました</string>
+    <string name="cloud_restore_manifest_freshness">%1$s のバックアップ・%2$d 件のノート</string>
+    <string name="cloud_restore_manifest_unknown">年代不明：このアーカイブにはバックアップ時刻が記録されていません</string>
+    <string name="cloud_restore_manifest_loading">バックアップ情報を読み取っています…</string>
+    <string name="cloud_conflict_kept">リモートのバックアップが変更されていたため、この端末のコピーを競合用コピーとして保存しました。</string>
+    <string name="cloud_webdav_restore_failed">WebDAV 復元に失敗しました</string>
+    <string name="cloud_credentials_unreadable">保存された WebDAV 認証情報を読み取れませんでした。設定で再入力してください。</string>
+    <string name="cloud_restore_newer_version">このバックアップは新しいバージョンの WriteOn で作成されました。アプリを更新してから再度復元してください。</string>
+    <string name="cloud_restore_incompatible_db">このバックアップは現在インストールされている WriteOn のデータベースと一致しないため、復元を中止しました。</string>
     <string name="cloud_webdav_settings">WebDAV 設定</string>
+    <string name="cloud_work_in_progress">WebDAV 転送中…</string>
+    <string name="cloud_local_work_in_progress">バックアップまたは復元を実行中…</string>
     <string name="cloud_webdav_url">WebDAV URL</string>
     <string name="columns_dialog_count">%1$d 列</string>
     <string name="columns_dialog_title">列数を選択</string>
@@ -413,8 +433,8 @@
     <string name="msg_link_copied">リンクをクリップボードにコピーしました</string>
     <string name="msg_no_browser_found">ブラウザが見つかりません</string>
     <string name="msg_note_saved">ノートを保存しました</string>
+    <string name="msg_note_moved_to_trash">ノートをごみ箱に移動しました</string>
     <string name="msg_opening_browser">既定のブラウザを開いています…</string>
-    <string name="msg_storage_permission_required">画像の読み込み/保存にはストレージの権限が必要です</string>
     <string name="msg_text_saved">テキストを保存しました</string>
     <string name="nav_all_notes">すべてのノート</string>
     <string name="nav_homepage">ホーム</string>
@@ -473,16 +493,10 @@
     <string name="tagged_note">タグ付きノート</string>
     <string name="tools_autohide_desc">ノートの編集中にキーボードが表示されているとき、ボタンを非表示にします。</string>
     <string name="tools_autohide_title">表示ボタンを自動で隠す</string>
-    <string name="tools_disabled">無効</string>
-    <string name="tools_edit_mode">&lt;編集モード></string>
-    <string name="tools_enabled_recommended">有効（推奨）</string>
     <string name="tools_example_text">例: こんにちは！</string>
     <string name="tools_saved_exclaim">保存しました</string>
     <string name="tools_text_not_updated">テキストは更新されませんでした</string>
     <string name="tools_text_updated">テキストを更新しました</string>
-    <string name="tools_title_only">&lt;タイトルのみ></string>
-    <string name="tools_title_with_desc">&lt;タイトルと説明></string>
-    <string name="tools_view_mode">&lt;閲覧モード></string>
     <string name="unknown">不明</string>
     <string name="unsaved_changes_message">未保存の変更があります。保存してから移動しますか？</string>
     <string name="unsaved_changes_title">変更を保存しますか？</string>
@@ -541,4 +555,23 @@
     <string name="cloud_conflict_dismiss">OK</string>
     <string name="msg_image_export_blank">書き出した画像が空だったため、保存していません。もう一度お試しいただくか、テキストで書き出してください。</string>
     <string name="msg_image_saved_pages">%1$d ページを保存しました。1 枚目: %2$s</string>
+
+    <!-- ホームのノートカード: カード全体がひとつのタップ対象なので、タップと長押しの動作は
+         ここでしか読み上げに伝えられません。 -->
+    <string name="cd_note_open_note">ノートを開く</string>
+    <string name="cd_note_select_note">ノートを選択</string>
+    <!-- ピン留め・タグ・削除は左スワイプで表示されますが、読み上げではこの操作ができないため、
+         同じ 3 つの操作をカード自身のカスタム操作としても用意します。 -->
+    <string name="cd_note_action_pin">ノートをピン留め</string>
+    <string name="cd_note_action_unpin">ピン留めを解除</string>
+    <string name="cd_note_action_tags">タグを編集</string>
+    <string name="cd_note_action_delete">ノートを削除</string>
+
+    <!-- オープンソースライセンス画面: この開発者名は Kotlin 側に英語で直書きされていました。 -->
+    <string name="about_android_developers">Android デベロッパー</string>
+
+    <!-- WebDAV バックアップ / 復元の失敗メッセージ。 -->
+    <string name="cloud_webdav_redirect_refused">サーバーがリクエストをリダイレクトしました。WebDAV バックアップはリダイレクトを追跡しません。設定のアドレスを確認してください。</string>
+    <string name="cloud_restore_too_large">サーバー上のファイルが大きすぎるため、WriteOn のバックアップではありません。何も復元されていません。</string>
+    <string name="cloud_restore_no_space">バックアップをダウンロードする空き容量が不足しています。何も復元されていません。</string>
 </resources>

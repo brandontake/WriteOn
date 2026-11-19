@@ -28,8 +28,6 @@ import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.CopyAll
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.RemoveRedEye
-import androidx.compose.material.icons.rounded.Search
-import androidx.compose.material.icons.rounded.Translate
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -50,15 +48,12 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.ezpnix.writeon.presentation.screens.edit.model.EditViewModel
-import com.ezpnix.writeon.presentation.screens.settings.widgets.copyToClipboard
 import com.maxkeppeker.sheets.core.models.base.rememberUseCaseState
 import com.maxkeppeler.sheets.calendar.CalendarDialog
 import com.maxkeppeler.sheets.calendar.models.CalendarConfig
@@ -132,8 +127,6 @@ fun PreviewButton(
 fun TxtButton(currentText: String) {
     val context = LocalContext.current
 
-    val clipboardManager = LocalClipboardManager.current
-
     val saveToFileLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.CreateDocument("text/plain"),
         onResult = { uri ->
@@ -153,33 +146,21 @@ fun TxtButton(currentText: String) {
     IconButton(
         modifier = Modifier.size(56.dp),
         onClick = {
-            clipboardManager.setText(AnnotatedString(currentText))
+            // A6: the same path CopyButton uses - copyToClipboard() flags the clip
+            // EXTRA_IS_SENSITIVE on API 33+ so the whole note is not previewed on the clipboard
+            // surface or in the suggestion strip. The Compose setText() API has no such flag;
+            // API 26-32 has no EXTRA_IS_SENSITIVE at all and keeps the original behaviour
+            // inside copyToClipboard(). Note the file previously also imported the unflagged
+            // copyToClipboard from settings.widgets: an explicit import beats a same-file
+            // top-level declaration, so that import silently routed every call here through the
+            // unflagged copy - it was removed so all three call sites bind to the flagged one.
+            copyToClipboard(context, currentText)
             Toast.makeText(context, context.getString(R.string.msg_exporting), Toast.LENGTH_SHORT).show()
 
             saveToFileLauncher.launch("rename.txt")
         }
     ) {
         Icon(Icons.Rounded.AddComment, contentDescription = context.getString(R.string.cd_copy_and_save))
-    }
-}
-
-@Composable
-fun BrowserButton() {
-    val context = LocalContext.current
-
-    IconButton(
-        modifier = Modifier.size(56.dp),
-        onClick = {
-            val url = "https://www.startpage.com"
-
-            val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
-
-            context.startActivity(intent)
-            Toast.makeText(context, context.getString(R.string.msg_opening_browser), Toast.LENGTH_SHORT).show()
-        }
-    )
-    {
-        Icon(Icons.Rounded.Search, null)
     }
 }
 
@@ -217,30 +198,6 @@ fun CalButton() {
             selectedDates.value = newDates
         }
     )
-}
-
-@Composable
-fun TranslateButton(viewModel: EditViewModel, onClick: () -> Unit) {
-    val context = LocalContext.current
-
-    IconButton(
-        modifier = Modifier.size(56.dp),
-        onClick = {
-            // The text goes to the clipboard, not into the URL: putting the whole note in a
-            // translate.google.com query string handed the note's content to a third party (and
-            // into the browser history) with no confirmation. The translator opens empty and the
-            // user pastes what they actually want translated.
-            copyToClipboard(context, viewModel.noteDescription.value.text)
-            openTranslateApp(context)
-            Toast.makeText(
-                context,
-                context.getString(R.string.translate_copied_hint),
-                Toast.LENGTH_SHORT
-            ).show()
-        }
-    ) {
-        Icon(Icons.Rounded.Translate, null)
-    }
 }
 
 @Composable

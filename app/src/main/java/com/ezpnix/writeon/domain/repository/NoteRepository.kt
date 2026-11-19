@@ -41,8 +41,18 @@ interface NoteRepository {
     suspend fun updateTags(id: Int, tags: List<String>)
     suspend fun updateTrashed(id: Int, trashed: Boolean)
     suspend fun updatePlainDescription(id: Int, description: String)
+
+    /**
+     * A4: replaces both already-sealed columns of a vault row.
+     *
+     * Only the vault upgrade path uses this; the values are sealed with the user's password
+     * before they arrive, so no Keystore wrapping may be applied on top.
+     *
+     * @return the number of rows changed (0 when the row is gone or is not a vault row).
+     */
+    suspend fun updateVaultFields(id: Int, name: String, description: String): Int
+
     fun getNoteById(id: Int): Flow<Note>
-    fun getLastNoteId(): Long?
     fun getTrashedNotes(): Flow<List<Note>>
     fun getNotesByTag(tag: String): Flow<List<Note>>
     suspend fun getAllTags(): List<String>

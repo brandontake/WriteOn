@@ -43,10 +43,40 @@ object ShareIntake {
     var navigationRequest by mutableIntStateOf(0)
         private set
 
+    /**
+     * A5: any installed app can fire ACTION_SEND at WriteOn without user interaction.
+     *
+     * A confirmation screen for every share would tax the ordinary one-share flow, so the abuse
+     * case is throttled instead: one accepted share per [MIN_INTERVAL_MS], and at most
+     * [MAX_SHARES_PER_WINDOW] per minute. A person sharing two articles in a row still fits; a
+     * background app trying to inject hundreds of notes gets dropped with a log line and no
+     * visible editor. The payload is never logged.
+     */
+    private var lastAcceptedAt = 0L
+    private var windowStartedAt = 0L
+    private var acceptedInWindow = 0
+
     fun offer(payload: SharePayload, navigate: Boolean) {
         if (payload.isEmpty) return
+        if (!allowShare()) {
+            Log.w(TAG, "Dropped an ACTION_SEND payload: share rate limit exceeded")
+            return
+        }
         pending = payload
         if (navigate) navigationRequest++
+    }
+
+    private fun allowShare(): Boolean {
+        val now = android.os.SystemClock.elapsedRealtime()
+        if (now - windowStartedAt >= SHARE_WINDOW_MS) {
+            windowStartedAt = now
+            acceptedInWindow = 0
+        }
+        if (acceptedInWindow >= MAX_SHARES_PER_WINDOW) return false
+        if (lastAcceptedAt != 0L && now - lastAcceptedAt < MIN_INTERVAL_MS) return false
+        lastAcceptedAt = now
+        acceptedInWindow++
+        return true
     }
 
     fun consume(): SharePayload? {
@@ -54,6 +84,11 @@ object ShareIntake {
         pending = null
         return payload
     }
+
+    private const val TAG = "ShareIntake"
+    private const val MIN_INTERVAL_MS = 1_500L
+    private const val SHARE_WINDOW_MS = 60_000L
+    private const val MAX_SHARES_PER_WINDOW = 5
 }
 
 /**

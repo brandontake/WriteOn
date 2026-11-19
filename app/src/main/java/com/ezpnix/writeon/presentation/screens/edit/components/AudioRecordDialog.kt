@@ -52,6 +52,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -66,6 +67,10 @@ import androidx.core.content.ContextCompat
 import com.ezpnix.writeon.R
 import java.io.File
 import java.util.Locale
+import java.util.concurrent.Executors
+import kotlinx.coroutines.asCoroutineDispatcher
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -78,17 +83,35 @@ fun AudioRecordDialog(
     var isRecording by remember { mutableStateOf(false) }
     var elapsedSeconds by remember { mutableIntStateOf(0) }
 
-    val permissionLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.RequestPermission()
-    ) { isGranted ->
-        if (isGranted) {
-            val started = recorderManager.startRecording()
+    // `MediaRecorder.prepare/start/stop` are blocking driver calls: running them on the main thread
+    // stalled the dialog and could ANR on a slow device. They are also not thread-safe, so they
+    // cannot simply be handed to the shared IO pool - `start` and `stop` would then run on
+    // different threads. One dedicated single-thread executor owns the recorder for the life of
+    // this dialog, and the cancel paths are queued on that same thread so they can never race a
+    // start or a stop that is still in flight.
+    val recorderExecutor = remember {
+        Executors.newSingleThreadExecutor { runnable -> Thread(runnable, "writeon-audio-recorder") }
+    }
+    val recorderDispatcher = remember(recorderExecutor) { recorderExecutor.asCoroutineDispatcher() }
+    val scope = rememberCoroutineScope()
+
+    fun beginRecording() {
+        scope.launch {
+            val started = withContext(recorderDispatcher) { recorderManager.startRecording() }
             if (started) {
                 isRecording = true
             } else {
                 Toast.makeText(context, context.getString(R.string.record_audio_failed), Toast.LENGTH_SHORT).show()
                 onDismiss()
             }
+        }
+    }
+
+    val permissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { isGranted ->
+        if (isGranted) {
+            beginRecording()
         } else {
             Toast.makeText(context, context.getString(R.string.record_audio_permission_denied), Toast.LENGTH_SHORT).show()
             onDismiss()
@@ -102,13 +125,7 @@ fun AudioRecordDialog(
         ) == PackageManager.PERMISSION_GRANTED
 
         if (hasPermission) {
-            val started = recorderManager.startRecording()
-            if (started) {
-                isRecording = true
-            } else {
-                Toast.makeText(context, context.getString(R.string.record_audio_failed), Toast.LENGTH_SHORT).show()
-                onDismiss()
-            }
+            beginRecording()
         } else {
             permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
         }
@@ -116,9 +133,10 @@ fun AudioRecordDialog(
 
     DisposableEffect(Unit) {
         onDispose {
-            if (recorderManager.isRecording) {
-                recorderManager.cancelRecording()
-            }
+            // Queued rather than called inline, so an in-flight start/stop finishes first.
+            // `shutdown` still runs what is already queued, so the recorder is released either way.
+            runCatching { recorderExecutor.execute { recorderManager.cancelRecording() } }
+            recorderExecutor.shutdown()
         }
     }
 
@@ -158,7 +176,7 @@ fun AudioRecordDialog(
 
     BasicAlertDialog(
         onDismissRequest = {
-            recorderManager.cancelRecording()
+            runCatching { recorderExecutor.execute { recorderManager.cancelRecording() } }
             onDismiss()
         }
     ) {
@@ -249,7 +267,7 @@ fun AudioRecordDialog(
                 ) {
                     TextButton(
                         onClick = {
-                            recorderManager.cancelRecording()
+                            runCatching { recorderExecutor.execute { recorderManager.cancelRecording() } }
                             onDismiss()
                         }
                     ) {
@@ -260,13 +278,17 @@ fun AudioRecordDialog(
 
                     Button(
                         onClick = {
-                            val file = recorderManager.stopRecording()
-                            if (file != null && file.exists() && file.length() > 0) {
-                                onAudioRecorded(file)
-                            } else {
-                                Toast.makeText(context, context.getString(R.string.record_audio_failed), Toast.LENGTH_SHORT).show()
+                            // `stop` finalises the MP4 container and can take a moment; it runs on
+                            // the recorder thread, and the dialog only leaves once the file exists.
+                            scope.launch {
+                                val file = withContext(recorderDispatcher) { recorderManager.stopRecording() }
+                                if (file != null && file.exists() && file.length() > 0) {
+                                    onAudioRecorded(file)
+                                } else {
+                                    Toast.makeText(context, context.getString(R.string.record_audio_failed), Toast.LENGTH_SHORT).show()
+                                }
+                                onDismiss()
                             }
-                            onDismiss()
                         },
                         enabled = isRecording && elapsedSeconds > 0,
                         colors = ButtonDefaults.buttonColors(

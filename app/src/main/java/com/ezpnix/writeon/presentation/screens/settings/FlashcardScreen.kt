@@ -313,7 +313,10 @@ fun FlashcardScreen(
                 } else {
                     Text(stringResource(R.string.flashcard_test_complete), style = MaterialTheme.typography.headlineSmall)
                     Spacer(Modifier.height(8.dp))
-                    Text(stringResource(R.string.flashcard_correct_answers, correctAnswers), color = MaterialTheme.colorScheme.tertiary)
+                    // U5: `tertiary` (#FFD54F) on the light surface measured 1.41:1 - effectively
+                    // unreadable. The result summary takes the brand `primary` (#004D40, ~9.8:1);
+                    // the wrong-answer line keeps `error`.
+                    Text(stringResource(R.string.flashcard_correct_answers, correctAnswers), color = MaterialTheme.colorScheme.primary)
                     Text(stringResource(R.string.flashcard_wrong_answers, wrongAnswers), color = MaterialTheme.colorScheme.error)
                     Spacer(Modifier.height(16.dp))
                     Button(onClick = {

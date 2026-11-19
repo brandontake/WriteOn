@@ -9,17 +9,25 @@
     <!-- WorkManager reschedules the daily automatic backup after a reboot; without this permission
          the periodic work silently never runs again. -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <!-- W16: the WebDAV backup and restore work is enqueued with a `NetworkType.CONNECTED`
+         constraint, so a run waits for connectivity instead of spending its retry budget while the
+         device is offline. WorkManager needs this permission to evaluate that constraint; it had
+         been removed as "unused" back when nothing in the app ever read network state. -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 
     <!-- Removed ones -->
-    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" tools:node="remove"/>
     <uses-permission android:name="android.permission.WAKE_LOCK" tools:node="remove"/>
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" tools:node="remove"/>
 
+    <!-- Cleartext http is accepted on purpose: self-hosted LAN WebDAV servers usually have no TLS.
+         Without `usesCleartextTraffic` targetSdk 36 rejects the socket before any bytes are sent, so
+         the WebDAV feature would still fail even though the code no longer rejects http:// URLs. -->
     <application
         android:name=".App"
         android:allowBackup="true"
         android:fullBackupContent="@xml/backup_rules"
         android:grantUriPermissions="true"
+        android:usesCleartextTraffic="true"
         android:enableOnBackInvokedCallback="true"
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:localeConfig="@xml/locales_config"

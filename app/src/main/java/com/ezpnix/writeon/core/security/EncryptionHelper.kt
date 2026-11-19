@@ -1,6 +1,9 @@
 package com.ezpnix.writeon.core.security
 
-import android.util.Base64
+// java.util.Base64, not android.util.Base64: the encoder/decoder pair behaves identically for
+// the NO_WRAP calls below (standard alphabet, padding, no line breaks) and is what lets this
+// class run under plain JVM unit tests instead of only on a device (T2).
+import java.util.Base64
 import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
 import java.security.SecureRandom
@@ -24,6 +27,12 @@ import javax.crypto.spec.SecretKeySpec
  * practice, so anyone holding the database file could recover it offline. New writes use PBKDF2 with
  * a random per-note salt. Legacy values are still decrypted on read through the old derivation, so
  * upgrading the app does not lock anybody out of notes written by the previous build.
+ *
+ * Legacy rows are upgraded lazily, never on read: [decrypt] only reads the old layout, and no list
+ * emission writes to the database. The next successful save of that note goes through [encrypt],
+ * which always seals with the current `v2` layout, so opening and saving a legacy note is the
+ * upgrade. [isLegacyFormat] exposes the check for callers that need to know whether a row is still
+ * waiting for that save without forcing one.
  */
 class EncryptionHelper(private val mutableVaultPassword: StringBuilder) {
 
@@ -62,9 +71,9 @@ class EncryptionHelper(private val mutableVaultPassword: StringBuilder) {
         val encryptedBytes = cipher.doFinal(data.toByteArray(StandardCharsets.UTF_8))
         return listOf(
             FORMAT_PREFIX,
-            Base64.encodeToString(salt, Base64.NO_WRAP),
-            Base64.encodeToString(ivBytes, Base64.NO_WRAP),
-            Base64.encodeToString(encryptedBytes, Base64.NO_WRAP),
+            Base64.getEncoder().encodeToString(salt),
+            Base64.getEncoder().encodeToString(ivBytes),
+            Base64.getEncoder().encodeToString(encryptedBytes),
         ).joinToString(SEPARATOR)
     }
 
@@ -78,9 +87,9 @@ class EncryptionHelper(private val mutableVaultPassword: StringBuilder) {
 
             if (parts.firstOrNull() == FORMAT_PREFIX) {
                 if (parts.size != 4) return Pair(null, DecryptionResult.INVALID_DATA)
-                val salt = Base64.decode(parts[1], Base64.NO_WRAP)
-                val ivBytes = Base64.decode(parts[2], Base64.NO_WRAP)
-                val encryptedBytes = Base64.decode(parts[3], Base64.NO_WRAP)
+                val salt = Base64.getDecoder().decode(parts[1])
+                val ivBytes = Base64.getDecoder().decode(parts[2])
+                val encryptedBytes = Base64.getDecoder().decode(parts[3])
                 cipher.init(
                     Cipher.DECRYPT_MODE,
                     deriveKey(mutableVaultPassword.toString(), salt),
@@ -91,8 +100,8 @@ class EncryptionHelper(private val mutableVaultPassword: StringBuilder) {
                 // Notes written before the PBKDF2 change. `Base64.DEFAULT` wrapped the original
                 // output across lines, so the surrounding whitespace has to go before decoding.
                 if (parts.size != 2) return Pair(null, DecryptionResult.INVALID_DATA)
-                val ivBytes = Base64.decode(parts[0].filterNot { it.isWhitespace() }, Base64.NO_WRAP)
-                val encryptedBytes = Base64.decode(parts[1].filterNot { it.isWhitespace() }, Base64.NO_WRAP)
+                val ivBytes = Base64.getDecoder().decode(parts[0].filterNot { it.isWhitespace() })
+                val encryptedBytes = Base64.getDecoder().decode(parts[1].filterNot { it.isWhitespace() })
                 cipher.init(
                     Cipher.DECRYPT_MODE,
                     deriveLegacyKey(mutableVaultPassword.toString()),
@@ -103,6 +112,20 @@ class EncryptionHelper(private val mutableVaultPassword: StringBuilder) {
         } catch (e: Exception) {
             Pair(null, DecryptionResult.BAD_PASSWORD)
         }
+    }
+
+    /**
+     * True when [stored] is not in the current `v2:` layout, i.e. it was written by the pre-PBKDF2
+     * build (or is not a sealed vault value at all).
+     *
+     * This is a pure marker check: it does not decrypt, does not touch the key cache and never
+     * writes. A legacy note stays on disk in the weak format until its next successful save, which
+     * re-seals it through [encrypt]. Callers must not use this from a list read to trigger a
+     * re-encryption there: that would write the whole library on every emission.
+     */
+    fun isLegacyFormat(stored: String): Boolean {
+        if (stored.isBlank()) return false
+        return !stored.startsWith("$FORMAT_PREFIX$SEPARATOR")
     }
 
     private fun newSalt(): ByteArray = ByteArray(SALT_BYTES).apply { SecureRandom().nextBytes(this) }
@@ -152,7 +175,17 @@ class EncryptionHelper(private val mutableVaultPassword: StringBuilder) {
                 size > MAX_CACHED_KEYS
         }
 
-        const val MAX_CACHED_KEYS = 64
+        /**
+         * Upper bound on the per-salt derived-key cache.
+         *
+         * Every vault note carries its own salt, so the old 64-entry cap made a library larger than
+         * that pay the full 120k-iteration PBKDF2 derivation again for every note that scrolled out
+         * of the window - the exact cost the cache exists to avoid. 512 entries hold the working set
+         * of a large library; a [SecretKey] is a few dozen bytes plus the boxed salt key, so even a
+         * full cache stays well below a megabyte. The map is access-ordered, so a library beyond
+         * that still evicts the least recently used derivation instead of growing without bound.
+         */
+        const val MAX_CACHED_KEYS = 512
     }
 }
 

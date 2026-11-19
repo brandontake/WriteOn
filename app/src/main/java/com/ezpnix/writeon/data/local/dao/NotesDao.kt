@@ -69,11 +69,37 @@ interface NoteDao {
     @Query("UPDATE `notes-table` SET `note-description` = :description WHERE id = :id AND encrypted = 0")
     suspend fun updatePlainDescription(id: Int, description: String)
 
+    /**
+     * A4: rewrites both sealed columns of a vault row, and only of a vault row.
+     *
+     * Used by the one-time upgrade of notes still written in the pre-PBKDF2 vault layout. The
+     * `encrypted = 1` guard matters in both directions: a plain note must never receive vault
+     * ciphertext (nothing would ever decrypt it), and this write bypasses [EncryptedNoteDao]'s
+     * Keystore sealing on purpose - the values passed in are already sealed with the user's
+     * password.
+     *
+     * @return the number of rows changed (0 when the row is gone or is not a vault row).
+     */
+    @Query(
+        "UPDATE `notes-table` SET `note-name` = :name, `note-description` = :description " +
+            "WHERE id = :id AND encrypted = 1"
+    )
+    suspend fun updateVaultFields(id: Int, name: String, description: String): Int
+
     @Query("SELECT * FROM `notes-table` WHERE id = :id")
     fun getNoteById(id: Int): Flow<Note>
 
-    @Query("SELECT id FROM `notes-table` ORDER BY id DESC LIMIT 1")
-    fun getLastNoteId(): Long?
+    /**
+     * W12: one keyset page of the whole library, trashed notes included, ordered by id.
+     *
+     * The export used to read every row - and therefore every body - into memory before writing a
+     * single one to the portable copy, so a library full of long notes needed as much heap as the
+     * library is big. Paging by primary key keeps exactly one page alive and is a straight index
+     * range scan. Callers start with [Int.MIN_VALUE] as `afterId` (ids are positive) and stop at
+     * the first empty page.
+     */
+    @Query("SELECT * FROM `notes-table` WHERE id > :afterId ORDER BY id ASC LIMIT :limit")
+    suspend fun getNotesPage(afterId: Int, limit: Int): List<Note>
 
     @Query("SELECT * FROM `notes-table` WHERE trashed = 1")
     fun getTrashedNotes(): Flow<List<Note>>

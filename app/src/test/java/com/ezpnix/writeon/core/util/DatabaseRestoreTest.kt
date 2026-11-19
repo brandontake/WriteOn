@@ -1,10 +1,12 @@
 package com.ezpnix.writeon.core.util
 
+import com.ezpnix.writeon.core.constant.DatabaseConst
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.IOException
 import org.junit.Assert.assertArrayEquals
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -206,5 +208,181 @@ class DatabaseRestoreTest {
             rejected = true
         }
         assertTrue("an oversized member must be refused", rejected)
+    }
+
+    // -----------------------------------------------------------------------------------------
+    // D8: an archive may only be installed if its schema is something this build understands
+    // (user_version from the 100-byte header, identity_hash from room_master_table). The rule is
+    // a pure decision, so every branch runs on the JVM; the end-to-end refusal through
+    // replaceDatabaseAtomically needs only the header, which the crafted files below carry.
+    // -----------------------------------------------------------------------------------------
+
+    private fun sqliteBytesWithVersion(version: Int): ByteArray {
+        val bytes = sqliteBytes("schema payload")
+        // user_version lives at offset 60 of the SQLite header and is big-endian.
+        bytes[60] = (version ushr 24).toByte()
+        bytes[61] = (version ushr 16).toByte()
+        bytes[62] = (version ushr 8).toByte()
+        bytes[63] = version.toByte()
+        return bytes
+    }
+
+    @Test
+    fun `replaceDatabaseAtomically refuses a database from a newer app version`() {
+        val target = temporaryFolder.newFile("note-list.db").apply {
+            writeBytes(sqliteBytes("live database"))
+        }
+        val oldBytes = target.readBytes()
+        val replacement = temporaryFolder.newFile("future.db").apply {
+            writeBytes(sqliteBytesWithVersion(DatabaseConst.NOTES_DATABASE_VERSION + 1))
+        }
+
+        var rejected: Throwable? = null
+        try {
+            DatabaseRestore.replaceDatabaseAtomically(target, replacement)
+        } catch (e: IOException) {
+            rejected = e
+        }
+
+        val incompatible = rejected as? DatabaseRestore.IncompatibleArchiveException
+        assertNotNull("a schema this build cannot migrate must be refused", incompatible)
+        assertEquals(
+            DatabaseRestore.Incompatibility.NEWER_VERSION,
+            incompatible!!.incompatibility
+        )
+        assertArrayEquals("the live database must not change", oldBytes, target.readBytes())
+        assertTrue("the staged file must be cleaned up", !File(target.absolutePath + ".new").exists())
+    }
+
+    @Test
+    fun `readUserVersion reads the big-endian header field`() {
+        val versioned = temporaryFolder.newFile("versioned.db").apply {
+            writeBytes(sqliteBytesWithVersion(7))
+        }
+        assertEquals(7, DatabaseRestore.readUserVersion(versioned))
+
+        val tooShort = temporaryFolder.newFile("short.db").apply {
+            writeBytes(ByteArray(50))
+        }
+        assertNull("no header, no version", DatabaseRestore.readUserVersion(tooShort))
+    }
+
+    @Test
+    fun `checkCompatibility accepts this build's own schema`() {
+        DatabaseRestore.checkCompatibility(
+            DatabaseConst.NOTES_DATABASE_VERSION,
+            DatabaseRestore.IdentityHashRead.Found(DatabaseRestore.CURRENT_IDENTITY_HASH)
+        )
+    }
+
+    @Test
+    fun `checkCompatibility accepts an older schema so migrations can run`() {
+        // A v9 backup legitimately carries v9's hash; the registered 1->10 chain upgrades it and
+        // rewrites the hash afterwards, so an older identity must NOT be refused.
+        DatabaseRestore.checkCompatibility(
+            9,
+            DatabaseRestore.IdentityHashRead.Found("an older schema's hash")
+        )
+    }
+
+    @Test
+    fun `checkCompatibility rejects a schema newer than this build`() {
+        var rejected: Throwable? = null
+        try {
+            DatabaseRestore.checkCompatibility(
+                DatabaseConst.NOTES_DATABASE_VERSION + 1,
+                DatabaseRestore.IdentityHashRead.Found(DatabaseRestore.CURRENT_IDENTITY_HASH)
+            )
+        } catch (e: IOException) {
+            rejected = e
+        }
+        val incompatible = rejected as? DatabaseRestore.IncompatibleArchiveException
+        assertNotNull("a future user_version must be refused", incompatible)
+        assertEquals(
+            DatabaseRestore.Incompatibility.NEWER_VERSION,
+            incompatible!!.incompatibility
+        )
+    }
+
+    @Test
+    fun `checkCompatibility rejects a same-version database with a foreign identity`() {
+        var rejected: Throwable? = null
+        try {
+            DatabaseRestore.checkCompatibility(
+                DatabaseConst.NOTES_DATABASE_VERSION,
+                DatabaseRestore.IdentityHashRead.Found("some other app's room hash")
+            )
+        } catch (e: IOException) {
+            rejected = e
+        }
+        val incompatible = rejected as? DatabaseRestore.IncompatibleArchiveException
+        assertNotNull("an identity mismatch at the current version must be refused", incompatible)
+        assertEquals(
+            DatabaseRestore.Incompatibility.SCHEMA_MISMATCH,
+            incompatible!!.incompatibility
+        )
+    }
+
+    @Test
+    fun `checkCompatibility rejects a database without room_master_table`() {
+        var rejected: Throwable? = null
+        try {
+            DatabaseRestore.checkCompatibility(
+                DatabaseConst.NOTES_DATABASE_VERSION,
+                DatabaseRestore.IdentityHashRead.TableMissing
+            )
+        } catch (e: IOException) {
+            rejected = e
+        }
+        val incompatible = rejected as? DatabaseRestore.IncompatibleArchiveException
+        assertNotNull("a database without Room metadata must be refused", incompatible)
+        assertEquals(
+            DatabaseRestore.Incompatibility.NOT_WRITEON_DATABASE,
+            incompatible!!.incompatibility
+        )
+    }
+
+    @Test
+    fun `checkCompatibility leaves unreadable files to quick_check`() {
+        // The file cannot be opened at all - exactly what a plain JVM test of
+        // replaceDatabaseAtomically sees. Readability belongs to quick_check, so this state must
+        // neither throw nor block the swap.
+        DatabaseRestore.checkCompatibility(
+            DatabaseConst.NOTES_DATABASE_VERSION,
+            DatabaseRestore.IdentityHashRead.Unreadable
+        )
+    }
+
+    @Test
+    fun `the frozen identity hash matches the exported Room schema`() {
+        // CURRENT_IDENTITY_HASH is copied out of the schema JSON because the APK cannot read that
+        // file at runtime. Reading the JSON back from the working tree means bumping the schema
+        // version without updating the constant fails here instead of refusing every backup.
+        val version = DatabaseConst.NOTES_DATABASE_VERSION
+        val schema = findSchemaFile(version)
+            ?: error("schema JSON for version $version not found from ${System.getProperty("user.dir")}")
+        val json = schema.readText()
+        val jsonVersion = Regex("\"version\"\\s*:\\s*(\\d+)").find(json)?.groupValues?.get(1)?.toInt()
+        val jsonHash = Regex("\"identityHash\"\\s*:\\s*\"([0-9a-f]+)\"").find(json)?.groupValues?.get(1)
+        assertEquals("schema JSON version must match DatabaseConst", version, jsonVersion)
+        assertEquals(
+            "DatabaseRestore.CURRENT_IDENTITY_HASH must match the exported schema",
+            jsonHash,
+            DatabaseRestore.CURRENT_IDENTITY_HASH
+        )
+    }
+
+    /** Walks up from the test working directory to find `app/schemas` (or `schemas`). */
+    private fun findSchemaFile(version: Int): File? {
+        val relative = "com.ezpnix.writeon.data.local.database.NoteDatabase/$version.json"
+        var dir: File? = File(System.getProperty("user.dir")).absoluteFile
+        while (dir != null) {
+            for (prefix in listOf("app/schemas", "schemas")) {
+                val candidate = File(File(dir, prefix), relative)
+                if (candidate.isFile) return candidate
+            }
+            dir = dir.parentFile
+        }
+        return null
     }
 }

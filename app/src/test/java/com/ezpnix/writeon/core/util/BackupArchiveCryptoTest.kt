@@ -4,11 +4,16 @@ import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
+import java.nio.charset.StandardCharsets
 import java.security.SecureRandom
+import java.util.zip.ZipEntry
+import java.util.zip.ZipInputStream
+import java.util.zip.ZipOutputStream
 import javax.crypto.Cipher
 import javax.crypto.SecretKeyFactory
 import javax.crypto.spec.IvParameterSpec
@@ -136,6 +141,170 @@ class BackupArchiveCryptoTest {
     fun `decrypting an empty file fails instead of returning an empty note set`() {
         val failure = runCatching { BackupArchiveCrypto.decrypt(ByteArray(0), password) }.exceptionOrNull()
         assertNotNull("an empty archive is not a valid backup", failure)
+    }
+
+    @Test
+    fun `WBK2 header layout and KDF cost are frozen`() {
+        val plaintext = byteArrayOf(0x01, 0x02, 0x03)
+        val encrypted = BackupArchiveCrypto.encrypt(plaintext, password)
+
+        // magic(4) || salt(16) || GCM IV(12) || ciphertext || GCM tag(16)
+        assertEquals(
+            "WBK2",
+            encrypted.copyOfRange(0, 4).toString(StandardCharsets.US_ASCII)
+        )
+        assertEquals(4 + 16 + 12 + plaintext.size + 16, encrypted.size)
+        assertEquals(120_000, BackupArchiveCrypto.PBKDF2_ITERATIONS)
+        assertEquals("backup-manifest.txt", BackupArchiveCrypto.MANIFEST_ENTRY_NAME)
+        assertEquals(1, BackupArchiveCrypto.MANIFEST_FORMAT)
+    }
+
+    @Test
+    fun `manifest entry name and text format are frozen`() {
+        val createdAt = 1_700_000_000_000L
+        val zipBytes = ByteArrayOutputStream().also { out ->
+            ZipOutputStream(out).use { zip ->
+                BackupArchiveCrypto.writeManifestEntry(
+                    zip = zip,
+                    noteCount = 3,
+                    attachmentCount = 2,
+                    createdAtMillis = createdAt
+                )
+            }
+        }.toByteArray()
+
+        ZipInputStream(ByteArrayInputStream(zipBytes)).use { zip ->
+            val entry = zip.nextEntry
+            assertEquals(BackupArchiveCrypto.MANIFEST_ENTRY_NAME, entry?.name)
+            assertEquals(
+                "writeon-backup-manifest\n" +
+                    "format=1\n" +
+                    "createdAt=1700000000000\n" +
+                    "notes=3\n" +
+                    "attachments=2\n",
+                zip.readBytes().toString(StandardCharsets.UTF_8)
+            )
+        }
+    }
+
+    @Test
+    fun `a known small plaintext round-trips with its manifest`() {
+        val plaintext = "WriteOn frozen-vector backup\n".toByteArray(StandardCharsets.UTF_8)
+        val createdAt = 1_761_872_400_000L
+        val zipBytes = ByteArrayOutputStream().also { out ->
+            ZipOutputStream(out).use { zip ->
+                BackupArchiveCrypto.writeManifestEntry(
+                    zip = zip,
+                    noteCount = 1,
+                    attachmentCount = 0,
+                    createdAtMillis = createdAt
+                )
+                zip.putNextEntry(ZipEntry("note-list.db"))
+                zip.write(plaintext)
+                zip.closeEntry()
+            }
+        }.toByteArray()
+
+        val encrypted = BackupArchiveCrypto.encrypt(zipBytes, password)
+        ZipInputStream(
+            BackupArchiveCrypto.decryptStream(ByteArrayInputStream(encrypted), password)
+        ).use { zip ->
+            val manifest = requireNotNull(BackupArchiveCrypto.readManifest(zip)) {
+                "the frozen archive must carry its manifest as the first entry"
+            }
+            assertEquals(BackupArchiveCrypto.MANIFEST_FORMAT, manifest.format)
+            assertEquals(createdAt, manifest.createdAtMillis)
+            assertEquals(1, manifest.noteCount)
+            assertEquals(0, manifest.attachmentCount)
+
+            val databaseEntry = zip.nextEntry
+            assertEquals("note-list.db", databaseEntry?.name)
+            assertArrayEquals(plaintext, zip.readBytes())
+        }
+    }
+
+    @Test
+    fun `manifest is the first entry and survives the encrypted round trip`() {
+        val createdAt = 1_761_872_400_000L
+        val dbBytes = "sqlite database bytes".toByteArray()
+
+        // Exactly the layout CloudBackupWorker.writeEncryptedArchive produces (W6).
+        val zipBytes = ByteArrayOutputStream().also { out ->
+            ZipOutputStream(out).use { zip ->
+                BackupArchiveCrypto.writeManifestEntry(
+                    zip = zip,
+                    noteCount = 42,
+                    attachmentCount = 7,
+                    createdAtMillis = createdAt
+                )
+                zip.putNextEntry(ZipEntry("note-list.db"))
+                zip.write(dbBytes)
+                zip.closeEntry()
+            }
+        }.toByteArray()
+
+        val cipherBytes = ByteArrayOutputStream().also { out ->
+            BackupArchiveCrypto.encryptStream(ByteArrayInputStream(zipBytes), out, password)
+        }.toByteArray()
+
+        ZipInputStream(BackupArchiveCrypto.decryptStream(ByteArrayInputStream(cipherBytes), password)).use { zip ->
+            val parsed = requireNotNull(BackupArchiveCrypto.readManifest(zip)) {
+                "a fresh archive must carry a manifest"
+            }
+            assertEquals(BackupArchiveCrypto.MANIFEST_FORMAT, parsed.format)
+            assertEquals(createdAt, parsed.createdAtMillis)
+            assertEquals(42, parsed.noteCount)
+            assertEquals(7, parsed.attachmentCount)
+
+            // The database must still follow the manifest as the very next entry.
+            val entry = zip.nextEntry
+            assertEquals("note-list.db", entry?.name)
+            assertArrayEquals(dbBytes, zip.readBytes())
+        }
+    }
+
+    @Test
+    fun `archive without a manifest is recognized as legacy and still starts with the database`() {
+        // The exact layout every pre-W6 build wrote: the database is the first entry.
+        val dbBytes = "legacy database bytes".toByteArray()
+        val zipBytes = ByteArrayOutputStream().also { out ->
+            ZipOutputStream(out).use { zip ->
+                zip.putNextEntry(ZipEntry("note-list.db"))
+                zip.write(dbBytes)
+                zip.closeEntry()
+            }
+        }.toByteArray()
+
+        ZipInputStream(ByteArrayInputStream(zipBytes)).use { zip ->
+            assertNull(
+                "a pre-manifest archive has no manifest - legal, age unknown",
+                BackupArchiveCrypto.readManifest(zip)
+            )
+            // readManifest opened the first entry without consuming it: the extractor must
+            // still see the database there. This is the hard compatibility promise for old
+            // backups - they must keep restoring after the manifest change.
+            assertArrayEquals(dbBytes, zip.readBytes())
+        }
+    }
+
+    @Test
+    fun `text that is not our manifest parses as no manifest instead of failing`() {
+        assertNull(BackupArchiveCrypto.parseManifest("some random text"))
+        assertNull(BackupArchiveCrypto.parseManifest(""))
+        // Right header, missing field: "no usable manifest" rather than an error.
+        assertNull(
+            BackupArchiveCrypto.parseManifest(
+                "writeon-backup-manifest\nformat=1\ncreatedAt=123\n"
+            )
+        )
+        // Unknown extra keys are ignored so a future format stays readable by this build.
+        val parsed = requireNotNull(
+            BackupArchiveCrypto.parseManifest(
+                "writeon-backup-manifest\nformat=1\ncreatedAt=123\nnotes=5\nattachments=0\nfutureField=x\n"
+            )
+        ) { "a complete manifest must parse" }
+        assertEquals(123L, parsed.createdAtMillis)
+        assertEquals(5, parsed.noteCount)
     }
 
     /** Reproduces the 2.0.2 writer byte for byte: salt||iv||CBC, PBKDF2-HMAC-SHA256 at 65,536. */

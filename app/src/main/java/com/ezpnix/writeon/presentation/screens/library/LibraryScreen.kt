@@ -159,7 +159,10 @@ fun LibraryScreen(
                         if (isImage) R.string.library_empty_images else R.string.library_empty_audio
                     ),
                     style = MaterialTheme.typography.bodyLarge,
-                    color = MaterialTheme.colorScheme.secondary
+                    // U5: `secondary` (#64B5F6) on the light surface measured 2.21:1, far below
+                    // the 4.5:1 AA floor for body text. `onSurfaceVariant` is a text role by
+                    // contract and measures ~6.2:1 on the same background.
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
 

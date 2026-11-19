@@ -6,9 +6,7 @@
 -->
 <data-extraction-rules>
     <cloud-backup>
-        <exclude domain="database" path="note-list.db" />
-        <exclude domain="database" path="note-list.db-wal" />
-        <exclude domain="database" path="note-list.db-shm" />
+        <exclude domain="database" path="." />
         <!-- EncryptedSharedPreferences cannot be decrypted after the Keystore key is lost. -->
         <exclude domain="sharedpref" path="." />
         <exclude domain="file" path="datastore/" />
@@ -17,16 +15,21 @@
         <exclude domain="file" path="audios/" />
         <exclude domain="file" path="attachments/" />
         <exclude domain="file" path="BackupFolder/" />
+        <!-- Glance widget state (files/glance/widget-state/) maps appWidgetId -> note id and holds
+             no note text today, but this is a negative list: any new files/ subdirectory travels
+             with a backup by default. Keep it out before widget state starts holding note content. -->
+        <exclude domain="file" path="glance/" />
     </cloud-backup>
     <device-transfer>
-        <exclude domain="database" path="note-list.db" />
-        <exclude domain="database" path="note-list.db-wal" />
-        <exclude domain="database" path="note-list.db-shm" />
+        <exclude domain="database" path="." />
         <!-- A device transfer also moves to new hardware, where the Keystore key is unavailable. -->
         <exclude domain="sharedpref" path="." />
         <exclude domain="file" path="datastore/" />
         <exclude domain="file" path="audios/" />
         <exclude domain="file" path="attachments/" />
         <exclude domain="file" path="BackupFolder/" />
+        <!-- Same negative-list reasoning as above: widget state must not ride along to a new
+             device either. -->
+        <exclude domain="file" path="glance/" />
     </device-transfer>
 </data-extraction-rules>

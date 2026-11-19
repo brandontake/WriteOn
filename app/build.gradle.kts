@@ -1,3 +1,5 @@
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
 import java.util.Properties
 
 plugins {
@@ -32,8 +34,8 @@ android {
         minSdk = 26
         // Google Play requires new submissions to target API 36 from 2026-08-31.
         targetSdk = 36
-        versionCode = 15
-        versionName = "2.0.3"
+        versionCode = 16
+        versionName = "2.0.4"
         // The segmented editor (attachment lines rendered as blocks) is still experimental. The
         // user-facing switch in Settings > Behaviour must be on as well; this flag is the
         // compile-time kill switch that lets a build ship without the code path at all.
@@ -145,6 +147,57 @@ android {
             enableSplit = true
         }
     }
+
+    testOptions {
+        unitTests {
+            // Robolectric reads the merged resources/assets instead of a device's. Required by
+            // the Room migration tests in both directions: MigrationTestHelper serves the
+            // exported schema JSON from assets, and Robolectric needs the merged config to boot.
+            isIncludeAndroidResources = true
+            // Robolectric on JDK 17+ (this build runs on 21) needs these opened up to reach
+            // internal JDK APIs; without them the sandbox fails before any test runs.
+            all { test ->
+                test.jvmArgs(
+                    "--add-opens=java.base/java.lang=ALL-UNNAMED",
+                    "--add-opens=java.base/java.util=ALL-UNNAMED",
+                    "--add-opens=java.base/java.io=ALL-UNNAMED",
+                    "--add-opens=java.base/java.net=ALL-UNNAMED",
+                    "--add-opens=java.base/java.security=ALL-UNNAMED",
+                    "--add-opens=java.base/java.text=ALL-UNNAMED",
+                    "--add-opens=java.base/jdk.internal.access=ALL-UNNAMED",
+                    "--add-opens=java.desktop/java.awt.font=ALL-UNNAMED",
+                    "--add-opens=jdk.compiler/com.sun.tools.javac.api=ALL-UNNAMED",
+                )
+            }
+        }
+    }
+}
+
+// Room's MigrationTestHelper reads "<database canonical name>/<version>.json" out of the assets
+// Robolectric serves. For local tests AGP points those at the *main* merged assets and never
+// merges unit-test source sets (there is no mergeDebugUnitTestAssets task - a test source set
+// assets.srcDir is simply ignored), so app/schemas has to be staged into that directory from
+// here. Hooking mergeDebugAssets keeps the JSON out of every shipped APK: release builds merge
+// their own directory and never run this task. The schemas directory is declared as an input so
+// the merge (and with it the staging) re-runs whenever the JSON changes; afterwards the staged
+// files are part of the task's own output snapshot. AGP creates its variant tasks after the
+// build script is evaluated, hence configureEach, and the action captures only plain Files
+// because task actions may not reference the Project under the configuration cache.
+tasks.configureEach {
+    if (name == "mergeDebugAssets") {
+        val schemasDir = file("$projectDir/schemas")
+        val stagedAssetsDir = layout.buildDirectory
+            .dir("intermediates/assets/debug/mergeDebugAssets").get().asFile
+        inputs.dir(schemasDir).withPropertyName("migrationSchemaJson")
+        doLast {
+            val schemaRoot = schemasDir.toPath()
+            schemasDir.walkTopDown().filter { it.isFile }.forEach { source ->
+                val target = stagedAssetsDir.toPath().resolve(schemaRoot.relativize(source.toPath()))
+                Files.createDirectories(target.parent)
+                Files.copy(source.toPath(), target, StandardCopyOption.REPLACE_EXISTING)
+            }
+        }
+    }
 }
 
 // Room writes the generated schema DDL here instead of under build/. The location has to sit
@@ -187,4 +240,9 @@ dependencies {
     implementation(libs.process.phoenix)
     implementation(libs.tink)
     testImplementation(libs.junit)
+    // Room migration tests: schema fixtures (MigrationTestHelper), the Robolectric runtime that
+    // hosts them, and androidx.test's InstrumentationRegistry the helper needs for its assets.
+    testImplementation(libs.androidx.room.testing)
+    testImplementation(libs.robolectric)
+    testImplementation(libs.androidx.test.core)
 }

@@ -33,10 +33,14 @@ class NoteCrypto @Inject constructor() {
         if (plaintext.isEmpty()) return plaintext
 
         return try {
-            val cipher = Cipher.getInstance(TRANSFORMATION)
-            cipher.init(Cipher.ENCRYPT_MODE, secretKey())
-            val encrypted = cipher.doFinal(plaintext.toByteArray(Charsets.UTF_8))
-            MARKER + Base64.encodeToString(cipher.iv + encrypted, Base64.NO_WRAP)
+            // A seal is a write, so creating the key when the Keystore has none is allowed here;
+            // the read path below never does that.
+            withSecretKey(createIfMissing = true) { key ->
+                val cipher = Cipher.getInstance(TRANSFORMATION)
+                cipher.init(Cipher.ENCRYPT_MODE, key)
+                val encrypted = cipher.doFinal(plaintext.toByteArray(Charsets.UTF_8))
+                MARKER + Base64.encodeToString(cipher.iv + encrypted, Base64.NO_WRAP)
+            }
         } catch (e: Exception) {
             Log.e(TAG, "Could not encrypt note text; refusing to store it", e)
             throw IllegalStateException("Could not encrypt note text", e)
@@ -49,12 +53,8 @@ class NoteCrypto @Inject constructor() {
 
         cache[stored]?.let { return it }
 
-        val plaintext = decrypt(stored)
-        // Never hand ciphertext back as if it were text. The old `return stored` made a note with
-        // an unreadable payload show base64 garbage, and the next save re-sealed that garbage -
-        // silently destroying whatever the row had held. An empty string is at least honest: the
-        // text is gone, and nothing pretends otherwise.
-        if (plaintext == stored && isSealed(stored)) return ""
+        val plaintext = openOrNull(stored)
+            ?: throw IllegalStateException("Could not decrypt stored note text; refusing to replace it")
         cache[stored] = plaintext
         return plaintext
     }
@@ -73,41 +73,50 @@ class NoteCrypto @Inject constructor() {
         cache[stored]?.let { return it }
 
         return try {
-            val payload = Base64.decode(stored.substring(MARKER.length), Base64.NO_WRAP)
-            require(payload.size > IV_BYTES) { "ciphertext is too short" }
-
-            val iv = payload.copyOfRange(0, IV_BYTES)
-            val ciphertext = payload.copyOfRange(IV_BYTES, payload.size)
-
-            val cipher = Cipher.getInstance(TRANSFORMATION)
-            cipher.init(Cipher.DECRYPT_MODE, secretKey(), GCMParameterSpec(TAG_BITS, iv))
-            String(cipher.doFinal(ciphertext), Charsets.UTF_8).also { cache[stored] = it }
+            withSecretKey { key -> decryptPayload(stored, key) }
+                .also { cache[stored] = it }
         } catch (e: Exception) {
             Log.e(TAG, "Could not decrypt note text, leaving the row untouched", e)
             null
         }
     }
 
-    private fun decrypt(stored: String): String {
-        return try {
-            val payload = Base64.decode(stored.substring(MARKER.length), Base64.NO_WRAP)
-            require(payload.size > IV_BYTES) { "ciphertext is too short" }
+    /** Decrypts one `w1:` payload with [key]; shared by the read paths so they cannot drift. */
+    private fun decryptPayload(stored: String, key: SecretKey): String {
+        val payload = Base64.decode(stored.substring(MARKER.length), Base64.NO_WRAP)
+        require(payload.size > IV_BYTES) { "ciphertext is too short" }
 
-            val iv = payload.copyOfRange(0, IV_BYTES)
-            val ciphertext = payload.copyOfRange(IV_BYTES, payload.size)
+        val iv = payload.copyOfRange(0, IV_BYTES)
+        val ciphertext = payload.copyOfRange(IV_BYTES, payload.size)
 
-            val cipher = Cipher.getInstance(TRANSFORMATION)
-            cipher.init(Cipher.DECRYPT_MODE, secretKey(), GCMParameterSpec(TAG_BITS, iv))
-            String(cipher.doFinal(ciphertext), Charsets.UTF_8)
-        } catch (e: Exception) {
-            Log.e(TAG, "Could not decrypt note text, showing the stored value", e)
-            stored
+        val cipher = Cipher.getInstance(TRANSFORMATION)
+        cipher.init(Cipher.DECRYPT_MODE, key, GCMParameterSpec(TAG_BITS, iv))
+        return String(cipher.doFinal(ciphertext), Charsets.UTF_8)
+    }
+
+    /**
+     * Loads the AES key, keeping it in memory after the first successful Keystore read.
+     *
+     * [KeyStore.load] and the provider round trip are the expensive part of every seal/open, and
+     * before this cache each cache miss paid for them again. The key itself never changes unless
+     * the Keystore invalidates it, which [withSecretKey] handles by dropping the cache and reloading
+     * once. The D3 contract stays intact: when the key is missing, only a write
+     * (`createIfMissing = true`) may generate a replacement; a read throws instead.
+     */
+    private fun secretKey(createIfMissing: Boolean = false): SecretKey {
+        cachedKey?.let { return it }
+        synchronized(keyLock) {
+            cachedKey?.let { return it }
+            val key = loadKey(createIfMissing)
+            cachedKey = key
+            return key
         }
     }
 
-    private fun secretKey(): SecretKey {
+    private fun loadKey(createIfMissing: Boolean): SecretKey {
         val keyStore = KeyStore.getInstance(KEYSTORE_PROVIDER).apply { load(null) }
         (keyStore.getEntry(KEY_ALIAS, null) as? KeyStore.SecretKeyEntry)?.let { return it.secretKey }
+        check(createIfMissing) { "The note encryption key is missing; refusing to create a replacement" }
 
         val generator = KeyGenerator.getInstance(KEY_ALGORITHM, KEYSTORE_PROVIDER)
         generator.init(
@@ -123,6 +132,43 @@ class NoteCrypto @Inject constructor() {
         )
         return generator.generateKey()
     }
+
+    /**
+     * Runs [block] with the cached key and, if the cipher rejects it, reloads from the Keystore once.
+     *
+     * A key that was valid when cached can be invalidated later (the lock screen changes, the
+     * Keystore is reset, a restored backup belongs to another device). Retrying with the same
+     * cached object would fail forever, so the cache is dropped first. The retry keeps
+     * [createIfMissing] as the caller passed it: a read still throws when the entry is gone rather
+     * than silently minting a new key that cannot open the existing rows.
+     */
+    private fun <T> withSecretKey(createIfMissing: Boolean = false, block: (SecretKey) -> T): T {
+        val key = secretKey(createIfMissing)
+        return try {
+            block(key)
+        } catch (first: Exception) {
+            synchronized(keyLock) {
+                if (cachedKey === key) cachedKey = null
+            }
+            try {
+                block(secretKey(createIfMissing))
+            } catch (second: Exception) {
+                second.addSuppressed(first)
+                throw second
+            }
+        }
+    }
+
+    /**
+     * The Keystore key, kept after the first successful load so the list does not re-open the
+     * provider for every row. Volatile because the decrypting DAO maps flows on IO while a save can
+     * seal on another thread.
+     */
+    @Volatile
+    private var cachedKey: SecretKey? = null
+
+    /** Guards the one-time load and the invalidation path; never held while a cipher runs. */
+    private val keyLock = Any()
 
     /**
      * Recently read values, so re-reading an unchanged note is not a Keystore round trip. Sealing

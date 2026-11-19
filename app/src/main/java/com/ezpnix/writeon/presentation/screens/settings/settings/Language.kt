@@ -44,6 +44,7 @@ import com.ezpnix.writeon.presentation.screens.settings.widgets.ActionType
 import com.ezpnix.writeon.presentation.screens.settings.widgets.ListDialog
 import com.ezpnix.writeon.presentation.screens.settings.widgets.SettingsBox
 import com.ezpnix.writeon.presentation.theme.NoteFontManager
+import java.util.Locale
 
 /**
  * MIME types accepted by the SAF font picker.
@@ -181,9 +182,9 @@ fun LanguageScreen(navController: NavController, settingsViewModel: SettingsView
                 confirmButton = {
                     TextButton(onClick = {
                         showFontSizeDialog = false
-                        repeat(2) {
-                            navController.popBackStack(NavRoutes.Home.route, inclusive = false)
-                        }
+                        // Same pattern as the Tools dialog: X2 fixed the double-Home push, so a
+                        // single pop back to Home is enough.
+                        navController.popBackStack(NavRoutes.Home.route, inclusive = false)
                         Toast.makeText(context, context.getString(R.string.tools_saved_exclaim), Toast.LENGTH_SHORT)
                             .show()
                     }) {
@@ -269,6 +270,25 @@ fun LanguageScreen(navController: NavController, settingsViewModel: SettingsView
     }
 }
 
+/**
+ * Whether the app is currently locked to [tag].
+ *
+ * The picker stores full BCP-47 tags (`en`, `zh-CN`, `ja`), but the check used to compare the tag
+ * against `Locale.language`, which is only the primary subtag (`zh`). A tag never equals a language,
+ * so the Simplified Chinese entry could never match and its radio button stayed dark (U4).
+ *
+ * Comparing whole tags fixes that without letting `zh-TW` / `zh-Hant` light up as Simplified: a tag
+ * that names a region or a script has to match exactly, while a bare language tag (`en`, `ja`)
+ * still accepts whatever region the system resolved for it.
+ */
+private fun isAppLanguageSelected(tag: String): Boolean {
+    val current = AppCompatDelegate.getApplicationLocales()[0] ?: return false
+    if (current.toLanguageTag().equals(tag, ignoreCase = true)) return true
+    val target = Locale.forLanguageTag(tag)
+    if (target.country.isNotEmpty() || target.script.isNotEmpty()) return false
+    return current.language.equals(target.language, ignoreCase = true)
+}
+
 @Composable
 private fun OnLanguageClicked(settingsViewModel: SettingsViewModel, onExit: () -> Unit) {
     val context = LocalContext.current
@@ -287,7 +307,7 @@ private fun OnLanguageClicked(settingsViewModel: SettingsViewModel, onExit: () -
                 radius = shapeManager(isFirst = isFirstItem, isLast = isLastItem, radius = settingsViewModel.settings.value.cornerRadius),
                 actionType = ActionType.RADIOBUTTON,
                 variable = if (displayData.second.isNotBlank()) {
-                    AppCompatDelegate.getApplicationLocales()[0]?.language == displayData.second
+                    isAppLanguageSelected(displayData.second)
                 } else {
                     AppCompatDelegate.getApplicationLocales().isEmpty
                 },

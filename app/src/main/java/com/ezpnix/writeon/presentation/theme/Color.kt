@@ -22,7 +22,11 @@ val onBackgroundLight = Color(0xFF000000) // Black for readability
 val surfaceLight = Color(0xFFFFFFFF) // Pure white
 val onSurfaceLight = Color(0xFF000000) // Black for readability
 val surfaceVariantLight = Color(0xFFF5F5F5) // Very light gray
-val onSurfaceVariantLight = Color(0xFF757575) // Medium gray
+// #757575 is 4.23:1 on surfaceVariantLight (#F5F5F5) and 3.5:1 on surfaceContainerHighest:
+// secondary text in the light theme was below the 4.5:1 AA floor everywhere it appeared. This
+// value is Material grey 700 and measures 5.7:1 on #F5F5F5, 4.7:1 on #E0E0E0 and 6.2:1 on white,
+// so it passes AA on every light surface the theme actually paints (U5).
+val onSurfaceVariantLight = Color(0xFF616161) // Dark grey, AA on every light surface
 val outlineLight = Color(0xFFBDBDBD) // Light gray
 val outlineVariantLight = Color(0xFFE0E0E0) // Very light gray
 val scrimLight = Color(0xFF000000) // Black for overlays

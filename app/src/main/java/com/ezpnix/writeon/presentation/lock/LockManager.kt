@@ -7,15 +7,20 @@ package com.ezpnix.writeon.presentation.lock
 
 import android.content.Context
 import android.content.SharedPreferences
+import android.os.Handler
+import android.os.Looper
 import android.os.SystemClock
 import android.util.Base64
 import android.util.Log
+import android.widget.Toast
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
+import com.ezpnix.writeon.R
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import java.io.File
 import java.security.MessageDigest
 import java.security.SecureRandom
 import javax.crypto.SecretKeyFactory
@@ -45,18 +50,59 @@ class LockManager @Inject constructor(@ApplicationContext private val context: C
      * ViewModel construction the app crashed on every launch. The unreadable file is deleted and
      * recreated first; if even that fails, a separate plain-preferences file keeps the app usable.
      * That fallback still stores only PBKDF2 hashes and salts, never the PIN or pattern itself.
+     * When that reset destroys a stored lock it is no longer silent: the user is told (see
+     * [notifyLockReset]), because a lock that vanishes without a word leaves them believing the
+     * notes are still protected.
      */
     private val prefs: SharedPreferences by lazy {
         encryptedPreferences() ?: fallbackPreferences()
     }
 
     private fun encryptedPreferences(): SharedPreferences? {
-        createEncryptedPreferences()?.let { return it }
+        val store = createEncryptedPreferences()
+        // Only stat the file when the store failed, so the happy path pays nothing extra.
+        val storedLockFileExists = store == null && lockStoreFileExists()
 
-        Log.e(TAG, "Lock preferences could not be decrypted; resetting them")
+        // A7: this branch used to delete the stored credential with only a logcat line, so a
+        // Keystore hiccup switched the app lock off while the user still thought it was on.
+        //
+        // Trade-off - why delete rather than keep the unreadable file: the credential in there
+        // can never be verified again (every read goes through the fallback store, which holds
+        // nothing), so "keeping" it would at best be the same silent switch-off with a stale
+        // file, and at worst - if anything ever treated the file's existence as "a lock is
+        // configured" - a lock screen whose PIN can never match, which would lock the user out
+        // of the app for good (this class intentionally has no recovery path). Deleting and
+        // telling the user loses the lock but visibly, and it can be set up again.
+        val action = planLockReset(
+            encryptedStoreAvailable = store != null,
+            storedLockFileExists = storedLockFileExists,
+        )
+        if (action == LockResetAction.KEEP) return store
+
+        Log.w(TAG, "Lock preferences could not be decrypted; resetting them (storedState=$storedLockFileExists)")
         context.deleteSharedPreferences(PREFS_NAME)
+        if (action == LockResetAction.DELETE_AND_NOTIFY) notifyLockReset()
         return createEncryptedPreferences().also {
             if (it == null) Log.e(TAG, "Encrypted lock storage unavailable; using fallback prefs")
+        }
+    }
+
+    /** Whether lock state exists on disk, i.e. whether resetting it destroys something. */
+    private fun lockStoreFileExists(): Boolean =
+        File(context.applicationInfo.dataDir, "shared_prefs/$PREFS_NAME.xml").exists()
+
+    /**
+     * A7: makes the reset visible instead of silent - a trilingual Toast plus [Log.w].
+     *
+     * Posted to the main looper because [prefs] is initialized lazily and may be first touched
+     * from any thread; Toast must be created on a thread with a Looper. [prefs] is a lazy on a
+     * singleton, so this fires at most once per process - and only when a file was actually
+     * discarded: after the first reset the file is gone, so a persistent Keystore fault stays
+     * quiet instead of toasting on every launch.
+     */
+    private fun notifyLockReset() {
+        Handler(Looper.getMainLooper()).post {
+            Toast.makeText(context, context.getString(R.string.lock_reset_warning), Toast.LENGTH_LONG).show()
         }
     }
 
@@ -374,4 +420,32 @@ class LockManager @Inject constructor(@ApplicationContext private val context: C
         fun parsePattern(serialized: String): List<Int> =
             serialized.split(PATTERN_SEPARATOR).mapNotNull { it.toIntOrNull() }
     }
+}
+
+/** What to do when the encrypted lock store cannot be opened (A7). */
+enum class LockResetAction {
+    /** The store opened fine; nothing is deleted and nobody is told. */
+    KEEP,
+
+    /** Reset with no stored file to lose - nothing to announce, log only. */
+    DELETE_QUIETLY,
+
+    /** A stored lock file is about to be discarded; the user must be told. */
+    DELETE_AND_NOTIFY,
+}
+
+/**
+ * A7 decision: what happens when [LockManager] cannot open its encrypted store.
+ *
+ * Pure so the policy is testable without a device (see LockResetPolicyTest). The three cases:
+ * an available store is simply kept; a failed open with no file on disk deletes a nothing and
+ * stays quiet (fresh install, Keystore unavailable before anything was written); a failed open
+ * that would destroy an existing lock file deletes it *and* announces it - that combination is
+ * the whole point of A7, which existed because the third case used to look exactly like the
+ * second in logcat and nowhere else.
+ */
+fun planLockReset(encryptedStoreAvailable: Boolean, storedLockFileExists: Boolean): LockResetAction = when {
+    encryptedStoreAvailable -> LockResetAction.KEEP
+    storedLockFileExists -> LockResetAction.DELETE_AND_NOTIFY
+    else -> LockResetAction.DELETE_QUIETLY
 }

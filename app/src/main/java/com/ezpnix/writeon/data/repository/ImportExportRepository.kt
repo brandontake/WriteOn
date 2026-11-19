@@ -218,19 +218,26 @@ class ImportExportRepository(
             }
             // Rewrite the staged database's attachment paths before it becomes live, so a
             // restore on another device no longer leaves every image and recording pointing
-            // at the previous device's file system.
-            AttachmentArchive.restore(context, tempDir, restored)
+            // at the previous device's file system. The staged copy carries the archive's
+            // own compatibility header, so this also runs the D8 version/identity check
+            // before a single file lands in filesDir.
             val dbFile = context.getDatabasePath(DatabaseConst.NOTES_DATABASE_FILE_NAME)
-            // A truncated or corrupt archive can still carry a valid 100-byte header. quick_check
-            // walks the real pages, so a database that would open but lose rows is rejected here -
-            // while the live file is still untouched, so a failed check means "nothing changed".
+            // quick_check walks the real pages while the live file is still untouched: a
+            // database that would open but lose rows is rejected here, before any attachment
+            // file is moved over the live ones (the old order overwrote files for a restore
+            // that then failed).
             if (!DatabaseRestore.quickCheckPasses(restored)) {
                 throw IOException(context.getString(R.string.import_failed, "backup database failed integrity check"))
             }
+            AttachmentArchive.restore(context, tempDir, restored)
             // Room holds the old file open; it must be closed before the rename. This is
             // deliberately the only remaining close() on the export/import path.
             provider.close()
             DatabaseRestore.replaceDatabaseAtomically(dbFile, restored)
+            // Same post-swap reconciliation as the cloud path: rows without files are
+            // reported, files without rows go to quarantine (no-op for archives that
+            // predate the attachments table).
+            AttachmentArchive.reconcileAfterRestore(context, dbFile)
         } finally {
             tempDir.deleteRecursively()
         }

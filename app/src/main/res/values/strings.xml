@@ -109,7 +109,7 @@
     <string name="backup">Backup</string>
     <string name="restore">Restore</string>
     <string name="auto_backup">Automatic Backup</string>
-    <string name="auto_backup_description">Saves an encrypted copy of your notes in the app\'s private storage every day, keeping the newest seven. They can be restored from Settings → Cloud on this device only - the encryption key never leaves the phone</string>
+    <string name="auto_backup_description">Saves an encrypted copy of your notes in the app\'s private storage every day, keeping the newest seven but never more than 200 MB in total (oldest copies are deleted first; at least three are always kept). They can be restored from Settings → Cloud on this device only - the encryption key never leaves the phone</string>
     <string name="backup_dropdown">Backup</string>
     <string name="backup_description">Store or restore all notes to/from a zip file. Note that this replaces your entire existing notes as well as clearing the recycle bin.</string>
     <string name="restore_description">Restore notes from a zip file</string>
@@ -122,9 +122,10 @@
     <string name="file_import_partial_error">Import of some files failed</string>
 
     <!-- Markdown / Extras -->
-    <string name="markdown">Additional Customizations</string>
-    <string name="markdown_description">Bulletin • Checklist • Image</string>
+    <string name="markdown">Markdown formatting</string>
+    <string name="markdown_description">Turn off to also hide split preview</string>
     <string name="description_markdown">Support • Images</string>
+    <string name="description_behavior">Markdown • LaTeX • Live preview • List layout</string>
     <string name="images_support">Images Support</string>
     <string name="description_widgets">Widgets • Markdown</string>
 
@@ -138,11 +139,16 @@
 
     <!-- Security / Vault -->
     <string name="security">Secure</string>
+    <!-- A7: shown when the encrypted app-lock store was unreadable and had to be reset. -->
+    <string name="lock_reset_warning">Your app lock could not be read, so it was turned off. Please set it up again to keep your notes protected.</string>
     <string name="encrypt_database">Encrypt Database</string>
     <string name="encrypt_database_description">Safeguard database during backup</string>
     <string name="database_restore_error">Password is invalid or the database isn\'t encrypted</string>
     <string name="password_prompt">Enter password</string>
     <string name="password_continue">continue</string>
+    <string name="vault_locked_notes">Locked vault notes: %1$d</string>
+    <string name="vault_unlock">Unlock</string>
+    <string name="vault_wrong_password">Wrong password</string>
     <string name="invalid_password">Invalid Password</string>
     <string name="password_delete">Delete Password</string>
     <string name="screen_protection">Screen Protection</string>
@@ -151,6 +157,9 @@
     <string name="biometric_authentication_description">Unlock WriteOn with your fingerprint or face</string>
     <string name="vault_description">Enable extra layer of protection</string>
     <string name="vault_locked_cannot_save">Unlock the vault before saving this note</string>
+    <string name="decrypt_failed_placeholder">⚠️ Cannot decrypt</string>
+    <string name="decrypt_failed_notes">%1$d notes could not be decrypted</string>
+    <string name="decrypt_failed_cannot_save">This note cannot be decrypted, so it cannot be saved</string>
 
     <!-- General -->
     <string name="database">Database</string>
@@ -173,8 +182,6 @@
 
     <!-- Behavior -->
     <string name="Behavior">Behavior</string>
-    <string name="always_edit">Opening notes by default</string>
-    <string name="always_edit_description">Disabled - Prioritize View Mode\nEnabled - Prioritize Edit Mode</string>
     <string name="show_only_title">Show only title in home screen</string>
     <string name="show_only_title_description">Hide content thus giving more space</string>
 
@@ -266,6 +273,7 @@
     <string name="cloud_backup_as_txt">Backup as TXT</string>
     <string name="cloud_backup_as_txt_desc">Export notes as plain TXT files without encryption all compiled into one zip file</string>
     <string name="cloud_backup_options">Backup Options</string>
+    <string name="cloud_backup_local_section">On this device (never uploaded)</string>
     <string name="cloud_backup_passphrase">Backup passphrase</string>
     <string name="cloud_backup_passphrase_desc">Encrypts the archive uploaded to WebDAV. Cloud restore needs the same passphrase, so keep a copy of it somewhere safe.</string>
     <string name="cloud_backup_passphrase_missing">Set a backup passphrase before using WebDAV backup or restore</string>
@@ -300,8 +308,20 @@
     <string name="auto_backup_none">No automatic backups on this device yet. Turn on automatic backup and check back after the next daily run.</string>
     <string name="auto_backup_decrypt_failed">This automatic backup could not be decrypted. It was made by a different install or device, or the file is damaged.</string>
     <string name="cloud_webdav_saved">WebDAV credentials saved!</string>
-    <string name="cloud_webdav_cleartext_warning">This server uses plain http, so your username and password travel unencrypted. Use https where possible.</string>
+    <string name="cloud_backup_completed">WebDAV backup completed</string>
+    <string name="cloud_backup_failed">WebDAV backup failed</string>
+    <string name="cloud_backup_no_validator">The server provides no validation information (ETag or Last-Modified), so the overwrite was refused to avoid data loss.</string>
+    <string name="cloud_restore_manifest_freshness">Backed up on %1$s · %2$d notes</string>
+    <string name="cloud_restore_manifest_unknown">Age unknown: this archive does not record when it was backed up.</string>
+    <string name="cloud_restore_manifest_loading">Reading backup info…</string>
+    <string name="cloud_conflict_kept">The remote backup had changed; this device\'s copy was kept as a conflict copy.</string>
+    <string name="cloud_webdav_restore_failed">WebDAV restore failed</string>
+    <string name="cloud_credentials_unreadable">The stored WebDAV credentials could not be read. Re-enter them in Settings.</string>
+    <string name="cloud_restore_newer_version">This backup was created by a newer version of WriteOn. Update the app, then restore again.</string>
+    <string name="cloud_restore_incompatible_db">This backup does not match the installed WriteOn database, so it was not restored.</string>
     <string name="cloud_webdav_settings">WebDAV Settings</string>
+    <string name="cloud_work_in_progress">WebDAV transfer in progress…</string>
+    <string name="cloud_local_work_in_progress">Backup or restore in progress…</string>
     <string name="cloud_webdav_url">WebDAV URL</string>
     <string name="columns_dialog_count">%1$d columns</string>
     <string name="columns_dialog_title">Select number of columns</string>
@@ -409,8 +429,8 @@
     <string name="msg_link_copied">Link copied to clipboard!</string>
     <string name="msg_no_browser_found">No browser found!</string>
     <string name="msg_note_saved">Note Saved!</string>
+    <string name="msg_note_moved_to_trash">Note moved to the recycle bin</string>
     <string name="msg_opening_browser">Opening Default Browser…</string>
-    <string name="msg_storage_permission_required">Storage permissions required to load/save images</string>
     <string name="msg_text_saved">Text saved successfully</string>
     <string name="nav_all_notes">All Notes</string>
     <string name="nav_homepage">Homepage</string>
@@ -469,16 +489,10 @@
     <string name="tagged_note">Tagged Note</string>
     <string name="tools_autohide_desc">Hides the button when the keyboard is visible while editing a note.</string>
     <string name="tools_autohide_title">Auto-hide visibility button</string>
-    <string name="tools_disabled">Disabled</string>
-    <string name="tools_edit_mode">&lt;Edit Mode></string>
-    <string name="tools_enabled_recommended">Enabled (Recommended)</string>
     <string name="tools_example_text">Example: Hello!</string>
     <string name="tools_saved_exclaim">Saved!</string>
     <string name="tools_text_not_updated">Text Not Updated!</string>
     <string name="tools_text_updated">Text Updated!</string>
-    <string name="tools_title_only">&lt;Title Only></string>
-    <string name="tools_title_with_desc">&lt;Title With Description></string>
-    <string name="tools_view_mode">&lt;View Mode></string>
     <string name="unknown">Unknown</string>
     <string name="unsaved_changes_message">You have unsaved changes. Save before leaving?</string>
     <string name="unsaved_changes_title">Save Changes?</string>
@@ -537,4 +551,24 @@
     <string name="cloud_conflict_dismiss">Got it</string>
     <string name="msg_image_export_blank">The export came out empty, so nothing was saved. Try again, or export the note as text.</string>
     <string name="msg_image_saved_pages">Saved %1$d pages. First one: %2$s</string>
+
+    <!-- Home note cards: the card is one combined-clickable target, so these labels are the only
+         place TalkBack can learn what a tap or a long press does. -->
+    <string name="cd_note_open_note">Open note</string>
+    <string name="cd_note_select_note">Select note</string>
+    <!-- Pin / tags / delete on a home card are revealed by a left swipe, a gesture screen readers
+         cannot perform, so the same three actions are also offered as custom accessibility actions
+         on the card itself. -->
+    <string name="cd_note_action_pin">Pin note</string>
+    <string name="cd_note_action_unpin">Unpin note</string>
+    <string name="cd_note_action_tags">Edit tags</string>
+    <string name="cd_note_action_delete">Delete note</string>
+
+    <!-- Open-source licences page: this vendor line used to be hard-coded English in Kotlin. -->
+    <string name="about_android_developers">Android Developers</string>
+
+    <!-- WebDAV backup / restore failure messages. -->
+    <string name="cloud_webdav_redirect_refused">The server redirected the request. WebDAV backups are never followed through a redirect — check the address in Settings.</string>
+    <string name="cloud_restore_too_large">The file on the server is too large to be a WriteOn backup; nothing was restored.</string>
+    <string name="cloud_restore_no_space">Not enough free storage to download the backup; nothing was restored.</string>
 </resources>

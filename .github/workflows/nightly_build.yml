@@ -2,6 +2,10 @@ name: Nightly Build
 
 on:
   workflow_dispatch:
+  # T10: the workflow existed but never ran on its own, so "nightly" only meant "when someone
+  # remembered". 03:17 UTC keeps it clear of the top-of-hour GitHub Actions queue spike.
+  schedule:
+    - cron: '17 3 * * *'
 
 concurrency:
   group: ${{ github.workflow }}

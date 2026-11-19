@@ -1,0 +1,17 @@
+v2.0.4 - Acceptance-audit fixes and interaction/data-layer follow-up:
+- Deleting a note no longer crashes its open editor; undo can no longer write the title into the body.
+- Undo history is bounded and coalesced; one app-level snackbar offers Undo after saving and deleting,
+  and it survives leaving the editor.
+- A new note claims the id its own transaction returned instead of guessing the highest id in the table.
+- Keystore failures refuse to overwrite note text; rows that cannot be decrypted stay visible behind a
+  banner and are excluded from every write. The note vault is visible and unlockable again.
+- Backups carry a manifest, a restore refuses a database from a newer app version, and the database is
+  swapped in with a single atomic move.
+- WebDAV uploads stage to a temporary name and MOVE into place with Content-MD5 verification; retries have
+  an attempt ceiling, redirects and plain http are refused, and progress plus outcomes are shown.
+- Schema v11 indexes the attachment library; settings no longer use reflection; backup workers moved to the
+  data layer with compatibility shims so queued jobs still run.
+- Auto backup excludes the whole database directory, app-lock screenshots are blocked, the TXT export flags
+  its clipboard entry as sensitive, and repeated share injections are rate-limited.
+- Accessibility: AA contrast, 48 dp touch targets, screen-reader labels, correct zh-CN language selection.
+- 138 unit tests across 18 suites; lint 0 errors.

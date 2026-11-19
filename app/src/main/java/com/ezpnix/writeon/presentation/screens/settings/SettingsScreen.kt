@@ -24,6 +24,7 @@ import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material.icons.rounded.Palette
 import androidx.compose.material.icons.rounded.TextFields
 import androidx.compose.material.icons.rounded.Translate
+import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material.icons.rounded.Verified
 import androidx.compose.material.icons.rounded.VolunteerActivism
 import androidx.compose.material3.AlertDialog
@@ -154,6 +155,21 @@ fun MainSettings(settingsViewModel: SettingsViewModel, navController: NavControl
                         isFirst = false
                     ),
                     action = { navController.navigate(NavRoutes.Language.route) }
+                )
+            }
+            item {
+                // The editor-behaviour screen (Markdown, LaTeX, live attachment preview, edit
+                // mode, show-only-title) was registered as a route but had no menu entry, so it
+                // was unreachable: the LaTeX and live-preview switches had no way to be toggled.
+                SettingCategory(
+                    title = stringResource(id = R.string.Behavior),
+                    subTitle = stringResource(id = R.string.description_behavior),
+                    icon = Icons.Rounded.Tune,
+                    shape = shapeManager(
+                        radius = settingsViewModel.settings.value.cornerRadius,
+                        isFirst = false
+                    ),
+                    action = { navController.navigate(NavRoutes.Markdown.route) }
                 )
             }
             item {

@@ -11,8 +11,10 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.sizeIn
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -179,7 +181,7 @@ fun AudioPlayerCard(
                     containerColor = MaterialTheme.colorScheme.primary,
                     contentColor = MaterialTheme.colorScheme.onPrimary
                 ),
-                modifier = Modifier.size(44.dp)
+                modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp)
             ) {
                 Icon(
                     imageVector = if (isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
@@ -251,7 +253,10 @@ fun AudioPlayerCard(
                         enabled = isCurrent && durationMs > 0,
                         modifier = Modifier
                             .weight(1f)
-                            .height(28.dp),
+                            // A 28dp-tall track is a 28dp touch target; Material's 48dp minimum is
+                            // restored here so the seek bar can be found and dragged without
+                            // precision aiming. The track itself stays centred and thin.
+                            .heightIn(min = 48.dp),
                         colors = SliderDefaults.colors(
                             thumbColor = MaterialTheme.colorScheme.primary,
                             activeTrackColor = MaterialTheme.colorScheme.primary,
@@ -262,7 +267,7 @@ fun AudioPlayerCard(
                     TextButton(
                         onClick = { GlobalAudioPlayer.setPlaybackSpeed(nextSpeed(speed)) },
                         contentPadding = PaddingValues(horizontal = 6.dp, vertical = 0.dp),
-                        modifier = Modifier.height(32.dp)
+                        modifier = Modifier.heightIn(min = 48.dp)
                     ) {
                         Text(
                             text = formatSpeed(speed),
@@ -274,7 +279,7 @@ fun AudioPlayerCard(
                     Box {
                         IconButton(
                             onClick = { showMenu = true },
-                            modifier = Modifier.size(32.dp)
+                            modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp)
                         ) {
                             Icon(
                                 imageVector = Icons.Rounded.MoreVert,

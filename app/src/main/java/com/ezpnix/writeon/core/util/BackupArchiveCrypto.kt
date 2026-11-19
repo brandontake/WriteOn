@@ -5,6 +5,9 @@ import java.security.SecureRandom
 import java.security.spec.KeySpec
 import java.io.InputStream
 import java.io.OutputStream
+import java.util.zip.ZipEntry
+import java.util.zip.ZipInputStream
+import java.util.zip.ZipOutputStream
 import javax.crypto.Cipher
 import javax.crypto.CipherInputStream
 import javax.crypto.CipherOutputStream
@@ -45,6 +48,96 @@ object BackupArchiveCrypto {
 
     /** Copy buffer for the streaming APIs; 256 KiB keeps the per-read cost negligible. */
     private const val STREAM_BUFFER_BYTES = 256 * 1024
+
+    /**
+     * Name of the archive's first zip entry when it carries freshness metadata (W6).
+     *
+     * Archives written before this existed start with the database entry instead; those are
+     * perfectly legal and restore exactly as before, they simply have no recorded age.
+     */
+    const val MANIFEST_ENTRY_NAME = "backup-manifest.txt"
+
+    /** Manifest layout version. Bumped only when an older build could not read a new manifest. */
+    const val MANIFEST_FORMAT = 1
+
+    private const val MANIFEST_HEADER = "writeon-backup-manifest"
+
+    /**
+     * What an archive says about itself: when it was written and what it holds. Shown before a
+     * restore so the user can see how old the backup they are about to install actually is,
+     * instead of silently rolling the whole library back to an unknown point in time.
+     */
+    data class ArchiveManifest(
+        val format: Int,
+        val createdAtMillis: Long,
+        val noteCount: Int,
+        val attachmentCount: Int
+    )
+
+    /**
+     * Writes [manifest data][ArchiveManifest] as the archive's first zip entry.
+     *
+     * The layout is a header line followed by `key=value` lines so it stays readable (and
+     * parseable with the JDK alone - the unit tests run on the JVM, where `org.json` does not
+     * exist). Unknown keys are ignored on read, so a future format can add fields without
+     * breaking this build.
+     */
+    fun writeManifestEntry(
+        zip: ZipOutputStream,
+        noteCount: Int,
+        attachmentCount: Int,
+        createdAtMillis: Long = System.currentTimeMillis()
+    ) {
+        val body = buildString {
+            append(MANIFEST_HEADER).append('\n')
+            append("format=").append(MANIFEST_FORMAT).append('\n')
+            append("createdAt=").append(createdAtMillis).append('\n')
+            append("notes=").append(noteCount).append('\n')
+            append("attachments=").append(attachmentCount).append('\n')
+        }
+        zip.putNextEntry(ZipEntry(MANIFEST_ENTRY_NAME))
+        zip.write(body.toByteArray(StandardCharsets.UTF_8))
+        zip.closeEntry()
+    }
+
+    /**
+     * Parses manifest text, returning null for anything that is not a manifest this build
+     * understands: wrong header line, missing field or an unparseable number all mean "no
+     * usable manifest" rather than an error, because a backup must never fail to restore over
+     * missing metadata.
+     */
+    fun parseManifest(text: String): ArchiveManifest? {
+        val lines = text.lineSequence().map { it.trim() }.filter { it.isNotEmpty() }.toList()
+        if (lines.firstOrNull() != MANIFEST_HEADER) return null
+        val fields = HashMap<String, String>()
+        lines.drop(1).forEach { line ->
+            val separator = line.indexOf('=')
+            if (separator > 0) fields[line.substring(0, separator)] = line.substring(separator + 1)
+        }
+        val format = fields["format"]?.toIntOrNull() ?: return null
+        val createdAt = fields["createdAt"]?.toLongOrNull() ?: return null
+        val notes = fields["notes"]?.toIntOrNull() ?: return null
+        val attachments = fields["attachments"]?.toIntOrNull() ?: return null
+        return ArchiveManifest(format, createdAt, notes, attachments)
+    }
+
+    /**
+     * Probes the first entry of [zip] for the manifest.
+     *
+     * This is a probe API for callers that only want the archive's age (the restore preview,
+     * the restore worker's log) and then close the stream:
+     *
+     *  - manifest present and readable -> the parsed manifest; the entry is consumed.
+     *  - manifest present but unparseable -> null; the entry is consumed.
+     *  - first entry is not the manifest (a legacy archive - legal, age unknown) -> null, and
+     *    the first entry has been *opened but not consumed*: read it directly, or close the
+     *    stream. Calling `nextEntry` again would skip it.
+     */
+    fun readManifest(zip: ZipInputStream): ArchiveManifest? {
+        val entry = zip.nextEntry ?: return null
+        if (entry.name != MANIFEST_ENTRY_NAME) return null
+        return parseManifest(zip.readBytes().toString(StandardCharsets.UTF_8))
+    }
 
     fun encrypt(data: ByteArray, password: String): ByteArray {
         val salt = ByteArray(SALT_BYTES).apply { SecureRandom().nextBytes(this) }

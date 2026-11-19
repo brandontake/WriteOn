@@ -6,7 +6,9 @@ import android.net.Uri
 import android.util.Log
 import android.widget.Toast
 import androidx.compose.runtime.State
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.core.os.LocaleListCompat
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -24,7 +26,7 @@ import com.ezpnix.writeon.domain.usecase.ImportExportUseCase
 import com.ezpnix.writeon.domain.usecase.ImportResult
 import com.ezpnix.writeon.domain.usecase.NoteUseCase
 import com.ezpnix.writeon.domain.usecase.SettingsUseCase
-import com.ezpnix.writeon.presentation.screens.settings.BackupWorker
+import com.ezpnix.writeon.data.backup.BackupWorker
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -46,7 +48,7 @@ import androidx.compose.ui.res.stringResource
 class SettingsViewModel @Inject constructor(
     private val backup: ImportExportRepository,
     private val settingsUseCase: SettingsUseCase,
-    val noteUseCase: NoteUseCase,
+    private val noteUseCase: NoteUseCase,
     private val importExportUseCase: ImportExportUseCase,
     private val settingsRepository: SettingsRepositoryImpl,
     @ApplicationContext private val context: Context,
@@ -63,6 +65,15 @@ class SettingsViewModel @Inject constructor(
 
     val databaseUpdate = mutableStateOf(false)
     var password: String? = null
+
+    /** U10: local zip export/import is long enough to need a visible in-progress state. */
+    var localBackupRunning by mutableStateOf(false)
+        private set
+
+    /** T4: Tools only needs the note side-effects of opening settings, not the use case itself. */
+    fun refreshNotes() {
+        noteUseCase.observe()
+    }
 
     private val _dynamicPlaceholder = MutableStateFlow(context.getString(R.string.app_subtitle))
     val dynamicPlaceholder: StateFlow<String> = _dynamicPlaceholder.asStateFlow()
@@ -207,17 +218,27 @@ class SettingsViewModel @Inject constructor(
 
     fun onExportBackup(uri: Uri, context: Context) {
         viewModelScope.launch {
-            val result = backup.exportBackup(uri, password)
-            handleBackupResult(result, context)
-            databaseUpdate.value = true
+            localBackupRunning = true
+            try {
+                val result = backup.exportBackup(uri, password)
+                handleBackupResult(result, context)
+                databaseUpdate.value = true
+            } finally {
+                localBackupRunning = false
+            }
         }
     }
 
     fun onImportBackup(uri: Uri, context: Context) {
         viewModelScope.launch {
-            val result = backup.importBackup(uri, password)
-            handleBackupResult(result, context)
-            databaseUpdate.value = true
+            localBackupRunning = true
+            try {
+                val result = backup.importBackup(uri, password)
+                handleBackupResult(result, context)
+                databaseUpdate.value = true
+            } finally {
+                localBackupRunning = false
+            }
         }
     }
 
@@ -231,7 +252,12 @@ class SettingsViewModel @Inject constructor(
      * database without its attachments. The caller uses this to restart only on a real success.
      */
     suspend fun importBackupAndWait(uri: Uri, context: Context): Boolean {
-        val result = backup.importBackup(uri, password)
+        localBackupRunning = true
+        val result = try {
+            backup.importBackup(uri, password)
+        } finally {
+            localBackupRunning = false
+        }
         handleBackupResult(result, context)
         databaseUpdate.value = true
         return result is BackupResult.Success

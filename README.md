@@ -109,7 +109,7 @@ The project produces **APK files only** — there is no App Bundle task in the r
 Release signing is optional for local builds: create `keystore.properties` in the repository root with
 `storeFile`, `storePassword`, `keyAlias` and `keyPassword`, and the release build type picks it up.
 Without that file the release APK is signed with the debug keystore so that local builds stay
-installable — that fallback is still there, but **v2.0.3 is signed with the project's upload key**
+installable — that fallback is still there, but **v2.0.4 is signed with the project's upload key**
 (`CN=Brandontake, OU=WriteOn, O=WriteOn`).
 
 Two things to get right when you create that file:
@@ -167,38 +167,69 @@ Play deadlines: new apps and updates must target API 36 since 2026-08-31 (extens
 
 ### How the build is verified
 
-Both variants were built on **2026-10-30** with `:app:testDebugUnitTest`, `:app:lintDebug`,
+Both variants were built on **2026-10-31** with `:app:testDebugUnitTest`, `:app:lintDebug`,
 `:app:assembleDebug` and `:app:assembleRelease` (offline, JDK 21.0.12.1, Gradle 8.9). The figures below
-are from the **latest** release build, which carries the 2.0.3 release-audit fixes (database restore no
+are from the **latest** release build, which carries the 2.0.4 fixes (global save/delete undo,
+off-main-thread media copies, attachment indices in schema v11, reflection-free settings, and the
+presentation/data split for the backup workers) plus the earlier acceptance fixes (database restore no
 longer truncates the restored file, pin/tag writes can no longer overwrite unsaved text, backups now
 include attachments and are encrypted end to end, WebDAV first uploads refuse to overwrite another
 device's copy, restore asks for confirmation, picked images live in internal storage) plus the
 second-round follow-up (streaming backup/restore with size budgets, an automatic-backup restore
-entry, exponential app-lock backoff on a monotonic clock, and restored recordings are deletable again):
+entry, exponential app-lock backoff on a monotonic clock, and restored recordings are deletable again)
+plus the sixth-round acceptance fixes (undo can no longer cross-write the title into the body, the
+undo history is bounded and coalesced, deleting a note no longer crashes its open editor, new notes
+claim the id their own transaction returned, Keystore failures refuse to overwrite ciphertext, the
+note vault is visible and unlockable again, cleartext `http://` WebDAV is allowed for self-hosted
+LAN servers (the Basic-auth trade-off is documented in `Cloud.kt`), backup/restore outcomes are
+surfaced, and Android auto backup excludes the whole
+database directory), and the release-gate follow-up (rows that fail to decrypt now degrade in place
+behind a home-screen banner instead of crashing the list, WebDAV uploads stage to a temporary name
+and MOVE into place with Content-MD5 verification, no-ETag servers fall back to Last-Modified
+preconditions or refuse to overwrite silently, backup archives carry a manifest the restore dialog
+shows before anything is replaced, and the Room 6→11 migration chain is covered by Robolectric
+tests), plus the seventh-round WebDAV and accessibility pass (retry classification with an attempt
+ceiling, redirects refused instead of being replayed as a `GET`, stale-ETag 412 loops broken, conflict
+copies created conditionally, whole-call timeouts with a download ceiling and a free-space check,
+network-constrained work, a paged instead of all-in-memory export, legacy vault notes re-sealed on
+unlock, and the AA-contrast / 48 dp / screen-reader fixes the accessibility audit listed):
 
 | Variant | Size | applicationId | Notes |
 | --- | --- | --- | --- |
-| Release | **3.86 MB** (4,046,303 bytes) | `com.ezpnix.writeon` | full R8 optimisation + obfuscation; ships two baseline profiles (API 28–30, 31+); signed with the project's upload key (`CN=Brandontake, OU=WriteOn, O=WriteOn, C=US`) |
+| Release | **3.91 MB** (4,102,355 bytes) | `com.ezpnix.writeon` | full R8 optimisation + obfuscation; carries the baseline profiles its dependencies ship (AGP merges the AAR `baseline-prof.txt` files into `app/release/baselineProfiles/{0,1}` — the app has no hand-authored profile of its own); signed with the project's upload key (`CN=Brandontake, OU=WriteOn, O=WriteOn, C=US`) |
 
-SHA-256 (Release): `92718CB8EDE688BF4B9EADB61694699AAF6A025042E9349DCE535280C8FF0ACB`.
+SHA-256 (Release): `6E164D7D4DAAE5CBE3361E5702CD0926A15FBB7966059986F6642540DE6768D1`.
 
-Both report `versionCode 15` / `versionName 2.0.3`, `minSdk 26`, `targetSdk 36`, the default + `ja` + `zh`
-locales, and four ABIs. The database moved to **v10** (`MIGRATION_9_10`), which indexes the `trashed`,
-`pinned` and `updated_at` columns the list screens filter and sort on; `app/schemas/.../10.json` is
-checked in, so the migration is testable offline instead of only on a device.
+Both report `versionCode 16` / `versionName 2.0.4`, `minSdk 26`, `targetSdk 36`, the default + `ja` + `zh`
+locales, and four ABIs. The database moved to **v11** (`MIGRATION_10_11`), which indexes the
+`attachments.trashed_at` and `attachments.type` columns the library and recycle bin filter on;
+`app/schemas/.../11.json` is checked in, so the migration is testable offline instead of only on a
+device.
 
 Beyond the build: `aapt2 dump badging` on both APKs, `apksigner verify` on both, `aapt2 dump resources`
 to confirm the new strings actually landed in the packaged resources, and the R8 mapping files in
-`app/build/outputs/mapping/{debug,release}/mapping.txt`.
+`app/build/outputs/mapping/{debug,release}/mapping.txt`. The release APK declares five permissions
+(`INTERNET`, `POST_NOTIFICATIONS`, `RECORD_AUDIO`, `RECEIVE_BOOT_COMPLETED`, `ACCESS_NETWORK_STATE` —
+the last one is what lets WorkManager evaluate the `NetworkType.CONNECTED` constraint on the backup
+work) plus the two biometric permissions the library merges in; `WAKE_LOCK` and `FOREGROUND_SERVICE`
+are still removed.
 
-`lintVitalRelease` and `:app:lintDebug` both ran; `testDebugUnitTest` covers **61 tests** including the
+`lintVitalRelease` and `:app:lintDebug` both ran (0 errors; 75 warnings on `lintDebug`);
+`testDebugUnitTest` covers **138 tests** in 18 suites — including the
 `DatabaseRestoreTest` restore regressions (bytes preserved + `.bak` kept, corrupt archive rejected,
 zip-slip members refused, oversized members refused), `BackupArchiveCryptoTest` (current format +
 streaming round-trip, **legacy 2.0.2 CBC archives still readable**, wrong passphrase rejected,
-truncated/tampered archives leak no plaintext) and `LegacyBodyMigrationTest` (1.x token rewrite,
-dedup, idempotence, fenced code left alone).
+truncated/tampered archives leak no plaintext, manifest round-trip and legacy archives recognised),
+`NoteDatabaseMigrationTest` (Robolectric + `MigrationTestHelper`: the 6→11 chain validates against
+the exported schema, legacy body syntax becomes attachment rows, vault and sealed rows stay byte for
+byte untouched, and the v11 attachment indices exist), `SettingsUseCaseTest` (all 25 settings
+round-trip through the explicit schema), `LegacyBodyMigrationTest` (1.x token rewrite,
+dedup, idempotence, fenced code left alone), `UndoRedoStateTest` (undo/redo restore the caret,
+history stays bounded), `WebDavRetryTest` (which HTTP outcomes may ask WorkManager for another run,
+and that redirects never do) and `EncryptionHelperTest` (vault passphrase round-trip, wrong passphrase
+and malformed ciphertext rejected, **legacy single-SHA-256 vault notes still readable**).
 
-**Release v2.0.3** (tag `v2.0.3`) will carry exactly this release APK once it is published.
+**Release v2.0.4** (tag `v2.0.4`) will carry exactly this release APK once it is published.
 
 ---
 
@@ -218,6 +249,7 @@ See GitHub Releases for historical changes and release assets.
 
 ## 📢 Announcements
 
+- *2026-10-31:* v2.0.4 is out — the acceptance-audit fixes plus the interaction/data-layer follow-up: deleting a note no longer crashes its open editor, undo can no longer write the title into the body and its history is bounded, new notes claim the id their own transaction returned, Keystore failures refuse to overwrite ciphertext, rows that fail to decrypt degrade behind a banner instead of vanishing, the note vault is visible and unlockable again, backup archives carry a manifest and refuse to restore a database from a newer app version, restores swap in one atomic move, WebDAV uploads stage and MOVE with Content-MD5, retries are classified with an attempt ceiling, redirects are refused, and cleartext http is allowed for LAN WebDAV; one app-level snackbar now offers Undo after both saving and deleting (including after leaving the editor), preview checkboxes keep the caret, the first note-list frame shows a loading state, WebDAV and local backups show progress, every conflict copy is listed, the attachment library gained indices in schema v11, settings no longer use reflection, the backup workers moved to the data layer, repeated external share injections are rate-limited, and the accessibility pass fixed contrast, 48 dp touch targets and screen-reader labels.
 - *2026-10-30:* v2.0.3 is out — fixes from the release audit: restoring a backup no longer truncates the database, pinning or tagging a note can no longer overwrite text you were still typing, backups now carry their attachments and the daily automatic backup is encrypted and rotated, WebDAV uploads refuse to overwrite another device's backup, restore asks for confirmation first, and picked/shared images now live in private internal storage.
 - *2026-10-22:* v2.0.2 is out — tag deletion from the drawer asks for confirmation, paged image exports no longer lose the first page's content, a Library section lists every image and recording, deleting attachments moves them to the recycle bin, rendered attachments can be saved or deleted, and live attachment blocks are on by default.
 - *2026-10-22:* v2.0.1 is out — experimental live attachment blocks in the editor, a keyboard/caret fix, and a preview selection crash fix.

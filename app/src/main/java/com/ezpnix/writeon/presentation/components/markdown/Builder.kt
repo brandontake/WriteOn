@@ -10,6 +10,30 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.withStyle
 
+/**
+ * `[text](url)`, compiled once for the life of the process.
+ *
+ * This used to be a `Regex(...)` built inside [buildLinkedString], so every line that carried any
+ * inline styling paid a `Pattern.compile` - the expensive half of the match - before looking for
+ * its first link. On a long note that is one compilation per rendered line, per recomposition.
+ */
+private val MARKDOWN_LINK_REGEX = Regex("\\[([^\\]]+)\\]\\(([^\\)]+)\\)")
+
+/**
+ * The inline markers, in merge order (later markers win where they overlap).
+ *
+ * Every segment is a stateless data class, so one shared list replaces the six allocations the
+ * builder used to make for each line it styled.
+ */
+private val INLINE_SEGMENTS: List<TextStyleSegment> = listOf(
+    BoldSegment(),
+    ItalicSegment(),
+    HighlightSegment(),
+    Strikethrough(),
+    Underline(),
+    InlineCode()
+)
+
 class MarkdownBuilder(internal val lines: List<String>, private var lineProcessors: List<MarkdownLineProcessor>) {
     var lineIndex = -1
 
@@ -116,8 +140,7 @@ private fun buildLinkedString(
     // Check for markdown links: [text](url). A backslash in front of the opening bracket marks it as
     // an escaped literal (see protectEscapes), so those matches are left to the styled-run builder
     // and render as text instead of turning into a tappable link.
-    val linkRegex = Regex("\\[([^\\]]+)\\]\\(([^\\)]+)\\)")
-    val linkMatches = linkRegex.findAll(input)
+    val linkMatches = MARKDOWN_LINK_REGEX.findAll(input)
         .filterNot { match -> match.range.first > 0 && input[match.range.first - 1] == '\\' }
         .toList()
 
@@ -193,14 +216,7 @@ private fun buildStyledRunString(rawInput: String, defaultFontWeight: FontWeight
     // delimiter. The sentinel is a private-use code point, which no delimiter can match.
     val input = protectEscapes(rawInput)
 
-    val segments: List<TextStyleSegment> = listOf(
-        BoldSegment(),
-        ItalicSegment(),
-        HighlightSegment(),
-        Strikethrough(),
-        Underline(),
-        InlineCode()
-    )
+    val segments: List<TextStyleSegment> = INLINE_SEGMENTS
 
     val covered = Array(segments.size) { BooleanArray(input.length) }
     val delimiterChars = HashSet<Char>()

@@ -1,39 +1,79 @@
 package com.ezpnix.writeon.data.repository
 
 import android.content.Context
+import android.util.Log
 import androidx.datastore.core.DataStore
+import androidx.datastore.core.handlers.ReplaceFileCorruptionHandler
 import androidx.datastore.preferences.SharedPreferencesMigration
+import androidx.datastore.preferences.core.MutablePreferences
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.emptyPreferences
 import androidx.datastore.preferences.core.floatPreferencesKey
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.ezpnix.writeon.domain.repository.SettingsRepository
 import com.ezpnix.writeon.widget.NotesWidgetReceiver
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 
+private const val TAG = "SettingsRepository"
 private const val PREFERENCES_NAME = "settings updated"
 private val TERMS_OF_SERVICE_KEY = booleanPreferencesKey("termsOfService")
+
+/**
+ * D11: a preferences file that fails its checksum (the process was killed mid-write) used to make
+ * every read throw [androidx.datastore.core.CorruptionException] forever - SettingsViewModel.init
+ * failed on first collection and the settings screen never recovered without clearing app data.
+ * The corruption handler runs instead: it resets the store to [emptyPreferences] (every setting
+ * falls back to its documented default) and records why. The handler is a factory parameter of
+ * [preferencesDataStore], so it is bound before the singleton DataStore is ever constructed and
+ * the one-DataStore-per-property semantics are unchanged.
+ */
 private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(
     name = PREFERENCES_NAME,
+    corruptionHandler = ReplaceFileCorruptionHandler { error ->
+        Log.e(TAG, "Settings DataStore was corrupted; resetting to defaults", error)
+        emptyPreferences()
+    },
     produceMigrations = { context -> listOf(SharedPreferencesMigration(context, PREFERENCES_NAME)) }
 )
 
 class SettingsRepositoryImpl (private val context: Context) : SettingsRepository {
+
+    /**
+     * D11: one [edit] that cannot take the app down with it.
+     *
+     * `DataStore.edit` hits the disk: a full or read-only volume makes it throw
+     * [java.io.IOException], which used to travel up through `saveSettingsToRepository` into an
+     * unhandled `viewModelScope.launch` and crash the app - over a font size. The write is now
+     * logged and dropped; the setting keeps its previous persisted value and the caller carries on.
+     * Cancellation still propagates so structured shutdown is not swallowed by the catch.
+     */
+    private suspend fun editPreferences(label: String, transform: suspend (MutablePreferences) -> Unit) {
+        try {
+            context.dataStore.edit(transform)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.e(TAG, "Could not persist '$label'; keeping the previous value", e)
+        }
+    }
+
     override suspend fun putString(key: String, value: String) {
         val preferencesKey = stringPreferencesKey(key)
-        context.dataStore.edit { preferences ->
+        editPreferences(key) { preferences ->
             preferences[preferencesKey] = value
         }
     }
 
     override suspend fun putInt(key: String, value: Int) {
         val preferencesKey = intPreferencesKey(key)
-        context.dataStore.edit { preferences ->
+        editPreferences(key) { preferences ->
             preferences[preferencesKey] = value
         }
     }
@@ -52,7 +92,7 @@ class SettingsRepositoryImpl (private val context: Context) : SettingsRepository
 
     override suspend fun putBoolean(key: String, value: Boolean) {
         val preferencesKey = booleanPreferencesKey(key)
-        context.dataStore.edit { preferences ->
+        editPreferences(key) { preferences ->
             preferences[preferencesKey] = value
         }
     }
@@ -64,7 +104,7 @@ class SettingsRepositoryImpl (private val context: Context) : SettingsRepository
     }
 
     suspend fun saveTermsOfService(accepted: Boolean) {
-        context.dataStore.edit { preferences ->
+        editPreferences(TERMS_OF_SERVICE_KEY.name) { preferences ->
             preferences[TERMS_OF_SERVICE_KEY] = accepted
         }
     }
@@ -77,7 +117,7 @@ class SettingsRepositoryImpl (private val context: Context) : SettingsRepository
 
     override suspend fun putFloat(key: String, value: Float) {
         val preferencesKey = floatPreferencesKey(key)
-        context.dataStore.edit { preferences ->
+        editPreferences(key) { preferences ->
             preferences[preferencesKey] = value
         }
     }
@@ -101,7 +141,7 @@ class SettingsRepositoryImpl (private val context: Context) : SettingsRepository
         transform: suspend (List<Pair<Int, Int>>) -> List<Pair<Int, Int>>
     ): List<Pair<Int, Int>> {
         var updated = emptyList<Pair<Int, Int>>()
-        context.dataStore.edit { preferences ->
+        editPreferences(NotesWidgetReceiver.WIDGET_PREFERENCE) { preferences ->
             updated = transform(preferences.widgetNotes())
             preferences.asMap().keys
                 .filter { it.name.startsWith(NotesWidgetReceiver.WIDGET_PREFERENCE) }

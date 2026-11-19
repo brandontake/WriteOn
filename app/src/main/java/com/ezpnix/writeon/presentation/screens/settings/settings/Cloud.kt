@@ -2,6 +2,7 @@ package com.ezpnix.writeon.presentation.screens.settings.settings
 
 import android.content.Context
 import android.net.Uri
+import android.util.Log
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -30,6 +31,7 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -46,6 +48,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -61,25 +64,37 @@ import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.navigation.NavController
+import androidx.work.Constraints
 import androidx.work.ExistingWorkPolicy
+import androidx.work.NetworkType
 import androidx.work.OneTimeWorkRequestBuilder
+import androidx.work.WorkInfo
 import androidx.work.WorkManager
 import com.ezpnix.writeon.R
 import com.ezpnix.writeon.core.constant.DatabaseConst
+import com.ezpnix.writeon.core.util.BackupArchiveCrypto
 import com.ezpnix.writeon.presentation.screens.edit.components.CustomTextField
 import com.ezpnix.writeon.presentation.screens.settings.SettingsScaffold
-import com.ezpnix.writeon.presentation.screens.settings.TxtBackupHelper
-import com.ezpnix.writeon.presentation.screens.settings.WebDavBackupState
-import com.ezpnix.writeon.presentation.screens.settings.WebDavPrefs
-import com.ezpnix.writeon.presentation.screens.settings.WebDavPrefsCipher
-import com.ezpnix.writeon.presentation.screens.settings.DATA_RESTORE_URL
-import com.ezpnix.writeon.presentation.screens.settings.DATA_FORCE_OVERWRITE
+import com.ezpnix.writeon.data.backup.TxtBackupHelper
+import com.ezpnix.writeon.data.backup.WebDavBackupState
+import com.ezpnix.writeon.data.backup.WebDavHttp
+import com.ezpnix.writeon.data.backup.WebDavPrefs
+import com.ezpnix.writeon.data.backup.WebDavPrefsCipher
+import com.ezpnix.writeon.data.backup.DATA_RESTORE_URL
+import com.ezpnix.writeon.data.backup.DATA_FORCE_OVERWRITE
 import com.ezpnix.writeon.presentation.screens.settings.model.SettingsViewModel
-import com.ezpnix.writeon.presentation.screens.settings.webDavDataStore
+import com.ezpnix.writeon.data.backup.webDavDataStore
 import com.ezpnix.writeon.presentation.theme.appCornerShape
 import com.jakewharton.processphoenix.ProcessPhoenix
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import okhttp3.Credentials
+import okhttp3.Request
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 /**
  * Unique work name shared by the WebDAV upload and download workers.
@@ -95,12 +110,87 @@ import kotlinx.coroutines.launch
  */
 private const val WEBDAV_SYNC_WORK = "WebDAVSync"
 
+private const val TAG = "CloudScreen"
+
+/**
+ * W16: every WebDAV transfer needs connectivity before it may start.
+ *
+ * Without a constraint a backup enqueued while the device was offline ran immediately, threw an
+ * `IOException` before opening a socket, and WorkManager counted that as a retryable attempt - so
+ * a user who tapped "back up" on a plane could burn the whole attempt budget of the shared chain
+ * before the network ever came back. With this constraint the request simply waits, and
+ * `ACCESS_NETWORK_STATE` is what lets WorkManager evaluate it.
+ */
+private val webDavNetworkConstraints: Constraints = Constraints.Builder()
+    .setRequiredNetworkType(NetworkType.CONNECTED)
+    .build()
+
+/**
+ * Result of the restore dialog's freshness preview (W6): what the archive on the server said
+ * about itself while the confirmation dialog was open.
+ */
+private sealed interface RestoreManifestState {
+    /** No preview is being shown (dialog closed). */
+    object Idle : RestoreManifestState
+
+    /** The archive is being read far enough to reach its first zip entry. */
+    object Loading : RestoreManifestState
+
+    /** The archive carries a manifest: show when it was written and how much it holds. */
+    data class Loaded(val manifest: BackupArchiveCrypto.ArchiveManifest) : RestoreManifestState
+
+    /** A pre-manifest archive: legal, but its age is unknown. */
+    object Legacy : RestoreManifestState
+
+    /** The preview could not be read (offline, bad credentials, undecryptable): show no line. */
+    object Unavailable : RestoreManifestState
+}
+
+/** Formats a manifest timestamp the same way the automatic-backup confirmation does. */
+private fun formatArchiveTime(epochMillis: Long): String =
+    SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).format(Date(epochMillis))
+
+/**
+ * The freshness line under the restore confirmation warning (W6): "backed up on X, N notes",
+ * "age unknown" for pre-manifest archives, a loading hint while the preview runs, and nothing
+ * at all when there is nothing to say - the static warning always stands on its own.
+ */
+@Composable
+private fun RestoreManifestLine(state: RestoreManifestState) {
+    val line = when (state) {
+        RestoreManifestState.Idle, RestoreManifestState.Unavailable -> null
+        RestoreManifestState.Loading -> stringResource(R.string.cloud_restore_manifest_loading)
+        RestoreManifestState.Legacy -> stringResource(R.string.cloud_restore_manifest_unknown)
+        is RestoreManifestState.Loaded -> stringResource(
+            R.string.cloud_restore_manifest_freshness,
+            formatArchiveTime(state.manifest.createdAtMillis),
+            state.manifest.noteCount
+        )
+    }
+    if (line != null) {
+        Spacer(Modifier.height(8.dp))
+        Text(text = line, style = MaterialTheme.typography.bodySmall)
+    }
+}
+
 @Composable
 @Suppress("DEPRECATION")
 fun CloudScreen(navController: NavController, settingsViewModel: SettingsViewModel) {
     val context = LocalContext.current
     val workManager = remember { WorkManager.getInstance(context) }
     val coroutineScope = rememberCoroutineScope()
+
+    // U10/W3: WorkManager is the only place that knows whether a transfer is still running. This
+    // observation is what turns "backup started" into a visible in-progress state and makes the
+    // worker's finish/failure toast line up with the screen instead of arriving out of nowhere.
+    val workInfos by remember(workManager) {
+        workManager.getWorkInfosForUniqueWorkFlow(WEBDAV_SYNC_WORK)
+    }.collectAsStateWithLifecycle(initialValue = emptyList())
+    val transferRunning = workInfos.any { info ->
+        info.state == WorkInfo.State.ENQUEUED ||
+            info.state == WorkInfo.State.RUNNING ||
+            info.state == WorkInfo.State.BLOCKED
+    }
 
     val aead = remember {
         WebDavPrefsCipher.aead(context)
@@ -114,6 +204,13 @@ fun CloudScreen(navController: NavController, settingsViewModel: SettingsViewMod
     var webdavUrl by remember { mutableStateOf("") }
     var webdavUsername by remember { mutableStateOf("") }
     var webdavPassword by remember { mutableStateOf("") }
+    /**
+     * True once the user actually edited the password field. The field is populated from storage
+     * on open, but if the stored value cannot be decrypted it shows blank - saving that blank used
+     * to delete the stored password, after which every archive already on the server became
+     * unreadable. Blank + untouched now means "keep what is stored"; blank + touched means "clear".
+     */
+    var webdavPasswordTouched by remember { mutableStateOf(false) }
 
     /**
      * The URL the stored ETag / "we wrote the remote" flags belong to.
@@ -136,7 +233,16 @@ fun CloudScreen(navController: NavController, settingsViewModel: SettingsViewMod
     // had to at all. The worker writes it in the background, so it is read when the screen opens and
     // again whenever the app comes back to the foreground: the upload usually finishes while the
     // user is in another app, and a one-shot read would miss the copy it just kept.
-    var conflictBackupUrl by remember { mutableStateOf(WebDavBackupState.conflictUrl(context)) }
+    var conflictBackupUrls by remember { mutableStateOf(WebDavBackupState.conflicts(context)) }
+
+    // A backup that finishes while this screen is open can park a conflict copy. The WorkManager
+    // observation above is the only signal for that moment; ON_RESUME covers the background case.
+    val finishedWorkCount = workInfos.count { it.state.isFinished }
+    LaunchedEffect(finishedWorkCount) {
+        if (finishedWorkCount > 0) {
+            conflictBackupUrls = WebDavBackupState.conflicts(context)
+        }
+    }
 
     LaunchedEffect(Unit) {
         context.webDavDataStore.data.first().let { prefs ->
@@ -148,11 +254,11 @@ fun CloudScreen(navController: NavController, settingsViewModel: SettingsViewMod
             } ?: ""
             hasBackupPassphrase = !prefs[backupPassphraseKey].isNullOrBlank()
         }
-        conflictBackupUrl = WebDavBackupState.conflictUrl(context)
+        conflictBackupUrls = WebDavBackupState.conflicts(context)
     }
 
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
-        conflictBackupUrl = WebDavBackupState.conflictUrl(context)
+        conflictBackupUrls = WebDavBackupState.conflicts(context)
     }
 
     var txtBackupUri by remember { mutableStateOf<Uri?>(null) }
@@ -243,21 +349,19 @@ fun CloudScreen(navController: NavController, settingsViewModel: SettingsViewMod
     var conflictRestoreUrl by remember { mutableStateOf<String?>(null) }
     /** "Take over the remote" awaiting confirmation. */
     var showForceOverwriteConfirm by remember { mutableStateOf(false) }
+    /** Freshness of the archive the restore dialog is about to confirm (W6); Idle while closed. */
+    var restoreManifestState by remember { mutableStateOf<RestoreManifestState>(RestoreManifestState.Idle) }
 
-    /**
-     * Warns when the WebDAV server is reached over cleartext `http`.
-     *
-     * The Basic-auth header carries the username and password, so on `http` they cross the network
-     * readable by anyone listening. Many self-hosted servers run on a LAN over plain http, so this
-     * warns rather than blocks - but the user should know the trade-off they are making. Called from
-     * [persistWebDavConfig], the single point every path writes the URL through.
-     */
-    fun warnIfCleartext(url: String) {
-        val scheme = url.trim().substringBefore("://").lowercase()
-        if (scheme == "http") {
-            Toast.makeText(context, context.getString(R.string.cloud_webdav_cleartext_warning), Toast.LENGTH_LONG).show()
-        }
-    }
+    // Cleartext http is DELIBERATELY accepted - do not reintroduce a rejection here.
+    //
+    // A self-hosted WebDAV server on a LAN commonly has no TLS, and the product owner asked for the
+    // earlier "plain http is not allowed" restriction to be removed. Two consequences to keep in
+    // mind if this is ever revisited:
+    //   1. `android:usesCleartextTraffic="true"` is declared in the manifest. Without it targetSdk 36
+    //      rejects the socket and OkHttp throws UnknownServiceException before a byte is sent, so
+    //      removing only this check would leave http silently broken rather than working.
+    //   2. Basic-auth credentials therefore cross the network in the clear on such a server. That is
+    //      a conscious trade-off for the LAN case, not an oversight.
 
     /**
      * Writes the URL/credentials the workers read, clearing the remote validator when the server
@@ -269,23 +373,30 @@ fun CloudScreen(navController: NavController, settingsViewModel: SettingsViewMod
      * silent overwrite on a server that reports no ETag. One function, one rule: a new URL means a
      * new file, so nothing about the old one carries over.
      */
-    suspend fun persistWebDavConfig() {
-        warnIfCleartext(webdavUrl)
+    suspend fun persistWebDavConfig(): Boolean {
         context.webDavDataStore.edit { prefs ->
             val previousUrl = prefs[webdavUrlKey]
             val serverChanged = previousUrl != null && previousUrl != webdavUrl
             prefs[webdavUrlKey] = webdavUrl
             prefs[webdavUsernameKey] = webdavUsername
-            if (webdavPassword.isNotBlank()) {
-                prefs[webdavPasswordKey] = WebDavPrefsCipher.encrypt(aead, webdavPassword)
-            } else {
-                prefs.remove(webdavPasswordKey)
+            when {
+                webdavPassword.isNotBlank() -> {
+                    prefs[webdavPasswordKey] = WebDavPrefsCipher.encrypt(aead, webdavPassword)
+                    webdavPasswordTouched = false
+                }
+                // Blank + untouched: the stored password could not be decrypted into the field
+                // (or the user never typed one). Keep it - deleting it here made every older
+                // archive on the server permanently unreadable.
+                webdavPasswordTouched -> prefs.remove(webdavPasswordKey)
+                else -> Unit
             }
             if (serverChanged) {
                 prefs.remove(stringPreferencesKey(WebDavPrefs.ETAG))
+                prefs.remove(stringPreferencesKey(WebDavPrefs.LAST_MODIFIED))
                 prefs.remove(booleanPreferencesKey(WebDavPrefs.REMOTE_WRITTEN))
             }
         }
+        return true
     }
 
     /**
@@ -296,13 +407,14 @@ fun CloudScreen(navController: NavController, settingsViewModel: SettingsViewMod
      */
     fun startWebDavRestore() {
         coroutineScope.launch {
-            persistWebDavConfig()
+            if (!persistWebDavConfig()) return@launch
             workManager.enqueueUniqueWork(
                 WEBDAV_SYNC_WORK,
                 // APPEND_OR_REPLACE, not KEEP: KEEP dropped this restore outright whenever a
                 // backup was still running - the user saw "restore started" and nothing happened.
                 ExistingWorkPolicy.APPEND_OR_REPLACE,
-                OneTimeWorkRequestBuilder<com.ezpnix.writeon.presentation.screens.settings.WebDAVRestoreWorker>()
+                OneTimeWorkRequestBuilder<com.ezpnix.writeon.data.backup.WebDAVRestoreWorker>()
+                    .setConstraints(webDavNetworkConstraints)
                     .build()
             )
             Toast.makeText(context, context.getString(R.string.cloud_webdav_restore_started), Toast.LENGTH_SHORT).show()
@@ -318,16 +430,87 @@ fun CloudScreen(navController: NavController, settingsViewModel: SettingsViewMod
      */
     fun startConflictRestore(url: String) {
         coroutineScope.launch {
-            persistWebDavConfig()
+            if (!persistWebDavConfig()) return@launch
             workManager.enqueueUniqueWork(
                 WEBDAV_SYNC_WORK,
                 ExistingWorkPolicy.APPEND_OR_REPLACE,
-                OneTimeWorkRequestBuilder<com.ezpnix.writeon.presentation.screens.settings.WebDAVRestoreWorker>()
+                OneTimeWorkRequestBuilder<com.ezpnix.writeon.data.backup.WebDAVRestoreWorker>()
                     .setInputData(androidx.work.Data.Builder().putString(DATA_RESTORE_URL, url).build())
+                    .setConstraints(webDavNetworkConstraints)
                     .build()
             )
             Toast.makeText(context, context.getString(R.string.cloud_webdav_restore_started), Toast.LENGTH_SHORT).show()
         }
+    }
+
+    /**
+     * W6: reads just enough of the archive at [url] to say how old it is before the user
+     * confirms the restore.
+     *
+     * Only the first zip entry is decrypted and read, then the connection is dropped - restoring
+     * a library full of recordings must not download hundreds of megabytes to show one line of
+     * text. A failure is never fatal: the dialog keeps its static warning and the restore worker
+     * still logs whatever the archive says when it runs.
+     */
+    suspend fun fetchRestoreManifestPreview(url: String): RestoreManifestState = withContext(Dispatchers.IO) {
+        try {
+            val prefs = context.webDavDataStore.data.first()
+            // Prefer what the user is looking at right now (it is what the confirm button
+            // persists), falling back to what is stored.
+            val target = url.ifBlank { prefs[webdavUrlKey].orEmpty() }
+            val username = webdavUsername.ifBlank { prefs[webdavUsernameKey].orEmpty() }
+            val password = webdavPassword.ifBlank {
+                prefs[webdavPasswordKey]?.let { WebDavPrefsCipher.decryptOrNull(aead, it) }.orEmpty()
+            }
+            val passphrase = backupPassphrase.ifBlank {
+                prefs[backupPassphraseKey]?.let { WebDavPrefsCipher.decryptOrNull(aead, it) }.orEmpty()
+            }
+            if (target.isBlank() || username.isBlank() || password.isBlank() || passphrase.isBlank()) {
+                return@withContext RestoreManifestState.Unavailable
+            }
+            val request = Request.Builder()
+                .url(target)
+                .header("Authorization", Credentials.basic(username, password))
+                .get()
+                .build()
+            // W10/W11: the shared client, so this preview gets the call timeout and does not
+            // follow a redirect into an HTML login page that would then be parsed as an archive.
+            WebDavHttp.client().newCall(request).execute().use { response ->
+                if (!response.isSuccessful) return@withContext RestoreManifestState.Unavailable
+                val body = response.body ?: return@withContext RestoreManifestState.Unavailable
+                body.byteStream().use { input ->
+                    BackupArchiveCrypto.decryptStream(input, passphrase).use { plain ->
+                        java.util.zip.ZipInputStream(plain).use { zip ->
+                            val manifest = BackupArchiveCrypto.readManifest(zip)
+                            if (manifest == null) RestoreManifestState.Legacy
+                            else RestoreManifestState.Loaded(manifest)
+                        }
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            // Offline, wrong credentials, a passphrase that no longer matches: the preview is a
+            // nicety, so log it and let the dialog fall back to its static warning.
+            Log.w(TAG, "Could not preview the restore archive manifest", e)
+            RestoreManifestState.Unavailable
+        }
+    }
+
+    /**
+     * Drives the confirmation dialog's freshness line (W6): while either restore dialog is open
+     * the archive is read far enough to expose its manifest. Closing the dialog resets the line.
+     */
+    LaunchedEffect(showWebDavRestoreConfirm, conflictRestoreUrl) {
+        val url = when {
+            showWebDavRestoreConfirm -> webdavUrl
+            conflictRestoreUrl != null -> conflictRestoreUrl.orEmpty()
+            else -> {
+                restoreManifestState = RestoreManifestState.Idle
+                return@LaunchedEffect
+            }
+        }
+        restoreManifestState = RestoreManifestState.Loading
+        restoreManifestState = fetchRestoreManifestPreview(url)
     }
 
     SettingsScaffold(
@@ -361,6 +544,38 @@ fun CloudScreen(navController: NavController, settingsViewModel: SettingsViewMod
                 }
             }
 
+            if (transferRunning || settingsViewModel.localBackupRunning) {
+                Spacer(Modifier.height(16.dp))
+                Card(
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.secondaryContainer
+                    ),
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = appCornerShape()
+                ) {
+                    Row(
+                        modifier = Modifier.padding(12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        CircularProgressIndicator(
+                            modifier = Modifier
+                                .width(20.dp)
+                                .height(20.dp),
+                            strokeWidth = 2.dp,
+                        )
+                        Spacer(Modifier.width(12.dp))
+                        Text(
+                            text = stringResource(
+                                if (transferRunning) R.string.cloud_work_in_progress
+                                else R.string.cloud_local_work_in_progress
+                            ),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSecondaryContainer,
+                        )
+                    }
+                }
+            }
+
             Spacer(Modifier.height(16.dp))
 
             Text(stringResource(R.string.cloud_webdav_settings), style = MaterialTheme.typography.titleMedium)
@@ -379,7 +594,10 @@ fun CloudScreen(navController: NavController, settingsViewModel: SettingsViewMod
             )
             OutlinedTextField(
                 value = webdavPassword,
-                onValueChange = { webdavPassword = it },
+                onValueChange = {
+                    webdavPassword = it
+                    webdavPasswordTouched = true
+                },
                 label = { Text(context.getString(R.string.cloud_password)) },
                 visualTransformation = PasswordVisualTransformation(),
                 modifier = Modifier.fillMaxWidth()
@@ -395,18 +613,19 @@ fun CloudScreen(navController: NavController, settingsViewModel: SettingsViewMod
             Spacer(Modifier.height(8.dp))
             Button(onClick = {
                 coroutineScope.launch {
-                    // URL, username and password go through the shared helper, which clears the
-                    // stored validator when the server address changed.
-                    persistWebDavConfig()
+                    // URL, username and password go through the shared helper, which rejects
+                    // cleartext addresses and clears the stored validator when the server changed.
+                    if (!persistWebDavConfig()) return@launch
                     // The archive passphrase is written here because only this button can change it
                     // (the operation paths reuse whatever is already saved).
                     context.webDavDataStore.edit { prefs ->
+                        // This field is never populated from storage, so blank means "unchanged",
+                        // not "clear": removing here wiped the stored passphrase on every save and
+                        // made all archives already on the server unreadable. Typing a new value
+                        // overwrites it; there is deliberately no blank-to-clear affordance.
                         if (backupPassphrase.isNotBlank()) {
                             prefs[backupPassphraseKey] = WebDavPrefsCipher.encrypt(aead, backupPassphrase)
                             hasBackupPassphrase = true
-                        } else {
-                            prefs.remove(backupPassphraseKey)
-                            hasBackupPassphrase = false
                         }
                     }
                     savedWebDavUrl = webdavUrl
@@ -420,7 +639,7 @@ fun CloudScreen(navController: NavController, settingsViewModel: SettingsViewMod
             // The conflict copy only exists as a file on the server, so nothing in the app would
             // ever mention it: this card is the only place the user learns a backup did not
             // replace the remote one, and where the copy they can download lives.
-            conflictBackupUrl?.let { conflictUrl ->
+            conflictBackupUrls.forEach { conflictUrl ->
                 Spacer(Modifier.height(16.dp))
                 Card(
                     colors = CardDefaults.cardColors(
@@ -490,8 +709,10 @@ fun CloudScreen(navController: NavController, settingsViewModel: SettingsViewMod
                                 Text(stringResource(R.string.cloud_conflict_take_over))
                             }
                             TextButton(onClick = {
-                                WebDavBackupState.clearConflict(context)
-                                conflictBackupUrl = null
+                                // W18: dismiss only this copy; a second parked archive stays listed
+                                // instead of being forgotten along with the older notice.
+                                WebDavBackupState.dismissConflict(context, conflictUrl)
+                                conflictBackupUrls = WebDavBackupState.conflicts(context)
                             }) {
                                 Text(stringResource(R.string.cloud_conflict_dismiss))
                             }
@@ -520,11 +741,12 @@ fun CloudScreen(navController: NavController, settingsViewModel: SettingsViewMod
                         }
                         else -> {
                             coroutineScope.launch {
-                                persistWebDavConfig()
+                                if (!persistWebDavConfig()) return@launch
                                 workManager.enqueueUniqueWork(
                                     WEBDAV_SYNC_WORK,
                                     ExistingWorkPolicy.APPEND_OR_REPLACE,
-                                    OneTimeWorkRequestBuilder<com.ezpnix.writeon.presentation.screens.settings.WebDAVBackupWorker>()
+                                    OneTimeWorkRequestBuilder<com.ezpnix.writeon.data.backup.WebDAVBackupWorker>()
+                                        .setConstraints(webDavNetworkConstraints)
                                         .build()
                                 )
                                 Toast.makeText(context, context.getString(R.string.cloud_webdav_backup_started), Toast.LENGTH_SHORT).show()
@@ -546,6 +768,17 @@ fun CloudScreen(navController: NavController, settingsViewModel: SettingsViewMod
             )
 
             Spacer(Modifier.height(16.dp))
+
+            // W17: everything below this line stays on the phone - the local zip, the TXT export
+            // and the daily automatic backup never touch the network. The page is reached through
+            // Settings -> Cloud, so without an explicit divider the daily backup (which only ever
+            // writes to private internal storage) read as if it were uploaded somewhere.
+            Text(
+                text = stringResource(R.string.cloud_backup_local_section),
+                style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(Modifier.height(8.dp))
 
             BackupOptionCard(
                 icon = Icons.Rounded.ArrowCircleUp,
@@ -644,7 +877,12 @@ fun CloudScreen(navController: NavController, settingsViewModel: SettingsViewMod
         AlertDialog(
             onDismissRequest = { conflictRestoreUrl = null },
             title = { Text(stringResource(R.string.cloud_webdav_restore_confirm_title)) },
-            text = { Text(stringResource(R.string.cloud_webdav_restore_confirm_message)) },
+            text = {
+                Column {
+                    Text(stringResource(R.string.cloud_webdav_restore_confirm_message))
+                    RestoreManifestLine(restoreManifestState)
+                }
+            },
             confirmButton = {
                 TextButton(onClick = {
                     val url = conflictRestoreUrl
@@ -673,8 +911,9 @@ fun CloudScreen(navController: NavController, settingsViewModel: SettingsViewMod
                     workManager.enqueueUniqueWork(
                         WEBDAV_SYNC_WORK,
                         ExistingWorkPolicy.APPEND_OR_REPLACE,
-                        OneTimeWorkRequestBuilder<com.ezpnix.writeon.presentation.screens.settings.WebDAVBackupWorker>()
+                        OneTimeWorkRequestBuilder<com.ezpnix.writeon.data.backup.WebDAVBackupWorker>()
                             .setInputData(androidx.work.Data.Builder().putBoolean(DATA_FORCE_OVERWRITE, true).build())
+                            .setConstraints(webDavNetworkConstraints)
                             .build()
                     )
                     Toast.makeText(context, context.getString(R.string.cloud_webdav_backup_started), Toast.LENGTH_SHORT).show()
@@ -694,7 +933,14 @@ fun CloudScreen(navController: NavController, settingsViewModel: SettingsViewMod
         AlertDialog(
             onDismissRequest = { showWebDavRestoreConfirm = false },
             title = { Text(stringResource(R.string.cloud_webdav_restore_confirm_title)) },
-            text = { Text(stringResource(R.string.cloud_webdav_restore_confirm_message)) },
+            text = {
+                Column {
+                    Text(stringResource(R.string.cloud_webdav_restore_confirm_message))
+                    // W6: how old the backup on the server actually is, read while the dialog
+                    // is open - the user sees it before confirming an irreversible restore.
+                    RestoreManifestLine(restoreManifestState)
+                }
+            },
             confirmButton = {
                 TextButton(onClick = {
                     showWebDavRestoreConfirm = false

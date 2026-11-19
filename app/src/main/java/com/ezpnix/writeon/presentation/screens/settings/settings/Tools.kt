@@ -28,6 +28,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TextField
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -49,7 +50,7 @@ import com.ezpnix.writeon.presentation.screens.settings.widgets.SettingsBox
 @Composable
 fun ToolsScreen(navController: NavController, settingsViewModel: SettingsViewModel) {
     val context = LocalContext.current
-    settingsViewModel.noteUseCase.observe()
+    LaunchedEffect(Unit) { settingsViewModel.refreshNotes() }
     var showSearchDialog by remember { mutableStateOf(false) }
     var showSortByDialog by remember { mutableStateOf(false) }
     var dynamicPlaceholderInput by remember { mutableStateOf(context.getString(R.string.app_subtitle)) }
@@ -159,79 +160,6 @@ fun ToolsScreen(navController: NavController, settingsViewModel: SettingsViewMod
             }
             item {
                 SettingsBox(
-                    title = stringResource(id = R.string.always_edit),
-                    description = stringResource(id = R.string.always_edit_description),
-                    icon = Icons.Rounded.Edit,
-                    actionType = ActionType.SWITCH,
-                    radius = shapeManager(
-                        radius = settingsViewModel.settings.value.cornerRadius,
-                        isFirst = true
-                    ),
-                    variable = settingsViewModel.settings.value.editMode,
-                    switchEnabled = { isEnabled ->
-                        settingsViewModel.update(settingsViewModel.settings.value.copy(editMode = isEnabled))
-
-                        val message = if (isEnabled) {
-                            context.getString(R.string.tools_edit_mode)
-                        } else {
-                            context.getString(R.string.tools_view_mode)
-                        }
-                        Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
-                    }
-                )
-            }
-            item {
-                SettingsBox(
-                    title = stringResource(id = R.string.markdown),
-                    description = stringResource(id = R.string.markdown_description),
-                    icon = Icons.Rounded.Style,
-                    actionType = ActionType.SWITCH,
-                    radius = shapeManager(radius = settingsViewModel.settings.value.cornerRadius),
-                    variable = settingsViewModel.settings.value.isMarkdownEnabled,
-                    switchEnabled = { isEnabled ->
-                        settingsViewModel.update(
-                            settingsViewModel.settings.value.copy(
-                                isMarkdownEnabled = isEnabled
-                            )
-                        )
-                        val message = if (isEnabled) {
-                            context.getString(R.string.tools_enabled_recommended)
-                        } else {
-                            context.getString(R.string.tools_disabled)
-                        }
-                        Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
-                    }
-                )
-            }
-            item {
-                SettingsBox(
-                    title = stringResource(id = R.string.show_only_title),
-                    description = stringResource(id = R.string.show_only_title_description),
-                    icon = Icons.Rounded.Architecture,
-                    actionType = ActionType.SWITCH,
-                    radius = shapeManager(
-                        radius = settingsViewModel.settings.value.cornerRadius,
-                        isLast = true
-                    ),
-                    variable = settingsViewModel.settings.value.showOnlyTitle,
-                    switchEnabled = { isEnabled ->
-                        settingsViewModel.update(
-                            settingsViewModel.settings.value.copy(
-                                showOnlyTitle = isEnabled
-                            )
-                        )
-                        val message = if (isEnabled) {
-                            context.getString(R.string.tools_title_only)
-                        } else {
-                            context.getString(R.string.tools_title_with_desc)
-                        }
-                        Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
-                    }
-                )
-                Spacer(modifier = Modifier.height(18.dp))
-            }
-            item {
-                SettingsBox(
                     title = stringResource(id = R.string.enter_placeholder),
                     description = stringResource(id = R.string.enter_placeholder_description),
                     icon = Icons.Rounded.AutoFixHigh,
@@ -298,9 +226,8 @@ fun ToolsScreen(navController: NavController, settingsViewModel: SettingsViewMod
                 confirmButton = {
                     TextButton(onClick = {
                         settingsViewModel.updatePlaceholder(dynamicPlaceholderInput)
-                        repeat(2) {
-                            navController.popBackStack(NavRoutes.Home.route, inclusive = false)
-                        }
+                        // X2 fixed the double-Home push; one pop back to Home is enough now.
+                        navController.popBackStack(NavRoutes.Home.route, inclusive = false)
                         Toast.makeText(context, context.getString(R.string.tools_text_updated), Toast.LENGTH_SHORT)
                             .show()
                     }) {
@@ -309,9 +236,7 @@ fun ToolsScreen(navController: NavController, settingsViewModel: SettingsViewMod
                 },
                 dismissButton = {
                     TextButton(onClick = {
-                        repeat(2) {
-                            navController.popBackStack(NavRoutes.Home.route, inclusive = false)
-                        }
+                        navController.popBackStack(NavRoutes.Home.route, inclusive = false)
                         Toast.makeText(context, context.getString(R.string.tools_text_not_updated), Toast.LENGTH_SHORT)
                             .show()
                     }) {

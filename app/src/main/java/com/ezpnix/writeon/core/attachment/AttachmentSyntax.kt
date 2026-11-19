@@ -24,8 +24,22 @@ object AttachmentSyntax {
     /** A whole line that is nothing but a recording attachment. */
     val AUDIO_LINE = Regex("""^\[([^\]]*)]\(attachment://([A-Za-z0-9_-]+)\)$""")
 
-    /** Eight lowercase hex characters: short enough to keep the raw body readable. */
-    fun newId(): String = UUID.randomUUID().toString().replace("-", "").take(8)
+    /**
+     * A random 128-bit id as 32 lowercase hex characters (D13).
+     *
+     * The old id was eight hex characters - 32 bits - which the birthday paradox turns into a
+     * ~25% collision chance once a heavy user reaches 50k attachments. `attachments.attachment-id`
+     * is the primary key with `OnConflictStrategy.REPLACE`, so a collision does not fail loudly:
+     * the later row silently overwrites the earlier one, both note bodies then point at the same
+     * id, and deleting one "attachment" deletes the other's file. 128 bits pushes that probability
+     * down to ~10^-21 at the same library size.
+     *
+     * The format stays a subset of what every consumer already accepts: `[A-Za-z0-9_-]` in
+     * [ID_IN_BODY], [IMAGE_LINE] and [AUDIO_LINE], a plain filename segment for
+     * `attachments/<id>.<ext>`, and TEXT in SQLite - so ids minted before this change (8 hex
+     * chars) still parse and render exactly as they did, and no migration is needed.
+     */
+    fun newId(): String = UUID.randomUUID().toString().replace("-", "")
 
     fun isAttachment(target: String): Boolean = target.startsWith(SCHEME)
 

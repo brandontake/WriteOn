@@ -1,4 +1,4 @@
-﻿package com.ezpnix.writeon.presentation.components.markdown
+package com.ezpnix.writeon.presentation.components.markdown
 
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -120,7 +120,9 @@ fun MarkdownQuote(
         )
         Spacer(modifier = Modifier.width(6.dp))
         Text(
-            text = buildString(" $content", latexEnabled = latexEnabled),
+            text = remember(content, latexEnabled) {
+                buildString(" $content", latexEnabled = latexEnabled)
+            },
             fontSize = fontSize,
             fontFamily = customFont
         )
@@ -413,11 +415,13 @@ fun TableBlock(
                         // Cells share the row's width evenly; the header row is the only one set
                         // in a heavier weight. Use the inline builder again so bold, italics and
                         // escapes inside a cell render exactly as they did before the extraction.
-                        text = buildString(
-                            cell,
-                            if (rowIndex == 0) FontWeight.SemiBold else weight,
-                            latexEnabled = latexEnabled
-                        ),
+                        text = remember(cell, rowIndex, weight, latexEnabled) {
+                            buildString(
+                                cell,
+                                if (rowIndex == 0) FontWeight.SemiBold else weight,
+                                latexEnabled = latexEnabled
+                            )
+                        },
                         fontSize = fontSize,
                         fontFamily = customFont,
                         modifier = Modifier.weight(1f),
@@ -633,7 +637,9 @@ fun RenderMarkdownElement(
         when (element) {
             is Heading -> {
                 Text(
-                    text = buildString(element.text, weight, latexEnabled = latexEnabled),
+                    text = remember(element.text, weight, latexEnabled) {
+                        buildString(element.text, weight, latexEnabled = latexEnabled)
+                    },
                     // Two steps, not six: the toolbar only offers one heading button (`##`), and a
                     // note that carries `#` or `###` asks for a section break rather than a smaller
                     // heading. Scaling also stops overriding the reader's own text size.
@@ -649,7 +655,9 @@ fun RenderMarkdownElement(
                 MarkdownCheck(
                     content = {
                         Text(
-                            text = buildString(element.text, weight, latexEnabled = latexEnabled),
+                            text = remember(element.text, weight, latexEnabled) {
+                                buildString(element.text, weight, latexEnabled = latexEnabled)
+                            },
                             fontSize = fontSize,
                             fontWeight = weight,
                             fontFamily = customFont,
@@ -669,7 +677,9 @@ fun RenderMarkdownElement(
             }
             is ListItem -> {
                 Text(
-                    text = buildString("• ${element.text}", weight, latexEnabled = latexEnabled),
+                    text = remember(element.text, weight, latexEnabled) {
+                        buildString("• ${element.text}", weight, latexEnabled = latexEnabled)
+                    },
                     fontSize = fontSize,
                     fontWeight = weight,
                     fontFamily = customFont,
@@ -766,7 +776,9 @@ fun RenderMarkdownElement(
             }
             is NormalText -> {
                 Text(
-                    text = buildString(element.text, weight, latexEnabled = latexEnabled),
+                    text = remember(element.text, weight, latexEnabled) {
+                        buildString(element.text, weight, latexEnabled = latexEnabled)
+                    },
                     fontSize = fontSize,
                     fontFamily = customFont,
                     maxLines = maxLines,

@@ -90,7 +90,7 @@
     <string name="backup">备份</string>
     <string name="restore">恢复</string>
     <string name="auto_backup">自动备份</string>
-    <string name="auto_backup_description">每天将笔记的加密副本保存到应用私有存储，仅保留最新 7 份。可在 设置 → 云端 中恢复，且只能在本设备恢复——加密密钥永不离开手机</string>
+    <string name="auto_backup_description">每天将笔记的加密副本保存到应用私有存储，最多保留最新 7 份且总计不超过 200 MB（超出时从最旧开始删除，至少保留 3 份）。可在 设置 → 云端 中恢复，且只能在本设备恢复——加密密钥永不离开手机</string>
     <string name="backup_dropdown">备份</string>
     <string name="backup_description">将全部笔记存入或恢复到 zip 文件。注意：此操作会替换现有全部笔记并清空回收站。</string>
     <string name="restore_description">从 zip 文件恢复笔记</string>
@@ -99,9 +99,10 @@
     <string name="file_import_success">导入成功</string>
     <string name="file_import_error">无法导入</string>
     <string name="file_import_partial_error">部分文件导入失败</string>
-    <string name="markdown">更多自定义</string>
-    <string name="markdown_description">项目符号 • 清单 • 图片</string>
+    <string name="markdown">Markdown 格式</string>
+    <string name="markdown_description">关闭后也会隐藏分栏预览</string>
     <string name="description_markdown">支持 • 图片</string>
+    <string name="description_behavior">Markdown • LaTeX • 即时预览 • 列表布局</string>
     <string name="images_support">图片支持</string>
     <string name="description_widgets">小组件 • Markdown</string>
     <string name="tools">工具</string>
@@ -109,11 +110,16 @@
     <string name="history">历史记录</string>
     <string name="description_history">历史 • 还原</string>
     <string name="security">安全</string>
+    <!-- A7: shown when the encrypted app-lock store was unreadable and had to be reset. -->
+    <string name="lock_reset_warning">无法读取应用锁，应用锁已关闭。请重新设置以继续保护你的笔记。</string>
     <string name="encrypt_database">加密数据库</string>
     <string name="encrypt_database_description">备份时保护数据库安全</string>
     <string name="database_restore_error">密码无效，或该数据库未加密</string>
     <string name="password_prompt">请输入密码</string>
     <string name="password_continue">继续</string>
+    <string name="vault_locked_notes">已锁定的保险箱笔记：%1$d</string>
+    <string name="vault_unlock">解锁</string>
+    <string name="vault_wrong_password">密码错误</string>
     <string name="invalid_password">密码无效</string>
     <string name="password_delete">删除密码</string>
     <string name="screen_protection">屏幕保护</string>
@@ -122,6 +128,9 @@
     <string name="biometric_authentication_description">使用指纹或面容解锁 WriteOn</string>
     <string name="vault_description">启用额外的保护层</string>
     <string name="vault_locked_cannot_save">保存此笔记前请先解锁保险箱</string>
+    <string name="decrypt_failed_placeholder">⚠️ 无法解密</string>
+    <string name="decrypt_failed_notes">有 %1$d 条笔记无法解密</string>
+    <string name="decrypt_failed_cannot_save">该笔记无法解密，因此无法保存</string>
     <string name="database">数据库</string>
     <string name="not_supported">暂不支持</string>
     <string name="note_details">笔记详情</string>
@@ -140,8 +149,6 @@
     <string name="invalid_input">输入无效</string>
     <string name="save_and_exit">保存并退出</string>
     <string name="Behavior">行为</string>
-    <string name="always_edit">默认打开笔记的方式</string>
-    <string name="always_edit_description">关闭 — 优先使用阅读模式\n开启 — 优先使用编辑模式</string>
     <string name="show_only_title">首页仅显示标题</string>
     <string name="show_only_title_description">隐藏内容以获得更多空间</string>
     <string name="terms_of_service">服务条款</string>
@@ -227,6 +234,7 @@
     <string name="cloud_backup_as_txt">备份为 TXT</string>
     <string name="cloud_backup_as_txt_desc">将笔记以未加密的纯 TXT 文件导出，并打包为一个 zip 文件</string>
     <string name="cloud_backup_options">备份选项</string>
+    <string name="cloud_backup_local_section">仅本机（不会上传）</string>
     <string name="cloud_backup_passphrase">备份口令</string>
     <string name="cloud_backup_passphrase_desc">用于加密上传到 WebDAV 的压缩包。云端恢复需要同一口令，请妥善保存。</string>
     <string name="cloud_backup_passphrase_missing">请先设置备份口令，再使用 WebDAV 备份或恢复</string>
@@ -261,8 +269,20 @@
     <string name="auto_backup_none">本设备上还没有自动备份。开启自动备份后，第二天即可在此恢复。</string>
     <string name="auto_backup_decrypt_failed">无法解密此自动备份：它可能由其他安装或设备创建，或文件已损坏。</string>
     <string name="cloud_webdav_saved">WebDAV 凭据已保存！</string>
-    <string name="cloud_webdav_cleartext_warning">该服务器使用明文 http，用户名和密码将以未加密方式传输。请尽量使用 https。</string>
+    <string name="cloud_backup_completed">WebDAV 备份完成</string>
+    <string name="cloud_backup_failed">WebDAV 备份失败</string>
+    <string name="cloud_backup_no_validator">服务器不提供校验信息，已拒绝覆盖以防数据丢失</string>
+    <string name="cloud_restore_manifest_freshness">备份于 %1$s，含 %2$d 条笔记</string>
+    <string name="cloud_restore_manifest_unknown">年代未知：该归档未记录备份时间</string>
+    <string name="cloud_restore_manifest_loading">正在读取备份信息…</string>
+    <string name="cloud_conflict_kept">远端备份已变化，本机副本已另存为冲突副本。</string>
+    <string name="cloud_webdav_restore_failed">WebDAV 恢复失败</string>
+    <string name="cloud_credentials_unreadable">无法读取已保存的 WebDAV 凭据，请在设置中重新输入。</string>
+    <string name="cloud_restore_newer_version">该备份由更高版本的 WriteOn 创建，请先升级应用再恢复。</string>
+    <string name="cloud_restore_incompatible_db">备份与当前安装的 WriteOn 数据库不匹配，已拒绝恢复。</string>
     <string name="cloud_webdav_settings">WebDAV 设置</string>
+    <string name="cloud_work_in_progress">WebDAV 传输进行中…</string>
+    <string name="cloud_local_work_in_progress">备份或恢复进行中…</string>
     <string name="cloud_webdav_url">WebDAV 地址</string>
     <string name="columns_dialog_count">%1$d 列</string>
     <string name="columns_dialog_title">选择列数</string>
@@ -370,8 +390,8 @@
     <string name="msg_link_copied">链接已复制到剪贴板！</string>
     <string name="msg_no_browser_found">未找到浏览器！</string>
     <string name="msg_note_saved">笔记已保存！</string>
+    <string name="msg_note_moved_to_trash">笔记已移入回收站</string>
     <string name="msg_opening_browser">正在打开默认浏览器…</string>
-    <string name="msg_storage_permission_required">加载或保存图片需要存储权限</string>
     <string name="msg_text_saved">文本保存成功</string>
     <string name="nav_all_notes">全部笔记</string>
     <string name="nav_homepage">主页</string>
@@ -430,16 +450,10 @@
     <string name="tagged_note">带标签的笔记</string>
     <string name="tools_autohide_desc">编辑笔记时，键盘弹出后自动隐藏该按钮。</string>
     <string name="tools_autohide_title">自动隐藏可见性按钮</string>
-    <string name="tools_disabled">已禁用</string>
-    <string name="tools_edit_mode">&lt;编辑模式></string>
-    <string name="tools_enabled_recommended">启用（推荐）</string>
     <string name="tools_example_text">示例：你好！</string>
     <string name="tools_saved_exclaim">已保存！</string>
     <string name="tools_text_not_updated">文本未更新！</string>
     <string name="tools_text_updated">文本已更新！</string>
-    <string name="tools_title_only">&lt;仅标题></string>
-    <string name="tools_title_with_desc">&lt;标题与描述></string>
-    <string name="tools_view_mode">&lt;阅读模式></string>
     <string name="unknown">未知</string>
     <string name="unsaved_changes_message">你有未保存的更改。离开前要保存吗？</string>
     <string name="unsaved_changes_title">保存更改？</string>
@@ -498,4 +512,21 @@
     <string name="cloud_conflict_dismiss">知道了</string>
     <string name="msg_image_export_blank">导出结果是空白，没有保存任何图片。请重试，或先把便签导出为文本。</string>
     <string name="msg_image_saved_pages">已保存 %1$d 张图片，第一张：%2$s</string>
+
+    <!-- 首页便签卡：整张卡是一个点击目标，读屏只能从这里得知点按与长按会做什么。 -->
+    <string name="cd_note_open_note">打开便签</string>
+    <string name="cd_note_select_note">选择便签</string>
+    <!-- 置顶 / 标签 / 删除靠左滑露出，读屏用户做不到这个手势，因此在卡片本身上再提供一次自定义操作。 -->
+    <string name="cd_note_action_pin">置顶便签</string>
+    <string name="cd_note_action_unpin">取消置顶</string>
+    <string name="cd_note_action_tags">编辑标签</string>
+    <string name="cd_note_action_delete">删除便签</string>
+
+    <!-- 开源许可页：这一行厂商标识原先硬编码为英文。 -->
+    <string name="about_android_developers">Android 开发者</string>
+
+    <!-- WebDAV 备份 / 恢复失败提示。 -->
+    <string name="cloud_webdav_redirect_refused">服务器重定向了请求。WebDAV 备份不会跟随重定向，请在设置中检查地址。</string>
+    <string name="cloud_restore_too_large">服务器上的文件过大，不可能是一个 WriteOn 备份；未恢复任何内容。</string>
+    <string name="cloud_restore_no_space">可用存储空间不足，无法下载备份；未恢复任何内容。</string>
 </resources>

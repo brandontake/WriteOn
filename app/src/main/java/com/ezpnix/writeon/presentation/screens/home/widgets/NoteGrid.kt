@@ -39,6 +39,10 @@ import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.CustomAccessibilityAction
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.customActions
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -86,6 +90,42 @@ fun NotesGrid(
         }
     }
 
+    /**
+     * Publishes pin / tags / delete on the note card as custom accessibility actions.
+     *
+     * All three live behind a left swipe on the card, and a swipe is not a gesture a screen-reader
+     * user can perform, so without this TalkBack could neither reach them nor stop announcing the
+     * permanently invisible buttons that sit under the card (U7). [onReveal] collapses a row that
+     * was left slid open.
+     */
+    @Composable
+    fun noteCardActions(note: Note, onReveal: () -> Unit): Modifier {
+        val pinLabel = stringResource(
+            if (note.pinned) R.string.cd_note_action_unpin else R.string.cd_note_action_pin
+        )
+        val tagLabel = stringResource(R.string.cd_note_action_tags)
+        val deleteLabel = stringResource(R.string.cd_note_action_delete)
+        return Modifier.semantics {
+            customActions = listOf(
+                CustomAccessibilityAction(pinLabel) {
+                    onReveal()
+                    onPinNote(note)
+                    true
+                },
+                CustomAccessibilityAction(tagLabel) {
+                    onReveal()
+                    onTagNote(note)
+                    true
+                },
+                CustomAccessibilityAction(deleteLabel) {
+                    onReveal()
+                    animationFinished(note.id)
+                    true
+                }
+            )
+        }
+    }
+
     // A note row with pin/trash actions that slide out from behind the card on a
     // left swipe. Only the card's x offset animates, so staggered grid measurements
     // never change; the actions row is painted underneath and revealed by the offset.
@@ -97,6 +137,9 @@ fun NotesGrid(
         // of relying on a hard-coded distance that could leave one of them covered.
         var actionsWidthPx by remember { mutableStateOf(0) }
         val actionsWidth = with(LocalDensity.current) { actionsWidthPx.toDp() }
+        // The pin / tags / delete buttons only exist behind a left swipe, which a screen-reader
+        // user cannot perform, so the same three actions are published on the card itself.
+        val cardActions = noteCardActions(note) { isRevealed.value = false }
         // Collapse a revealed row as soon as selection mode starts anywhere.
         LaunchedEffect(selectedNoteIds.isNotEmpty()) {
             if (selectedNoteIds.isNotEmpty()) isRevealed.value = false
@@ -111,6 +154,10 @@ fun NotesGrid(
                 modifier = Modifier
                     .align(Alignment.CenterEnd)
                     .onSizeChanged { actionsWidthPx = it.width }
+                    // Sighted users still reach these by swiping the card; for TalkBack the actions
+                    // are offered on the card instead, so that a swipe-only control never becomes a
+                    // focus stop that cannot be seen.
+                    .clearAndSetSemantics { }
                     .padding(end = 20.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(12.dp)
@@ -193,7 +240,8 @@ fun NotesGrid(
                     },
                     onNoteUpdate = onNoteUpdate,
                     onLongClick = { handleLongClick(selectedNotes, note) },
-                    onAttachmentDelete = onAttachmentDelete
+                    onAttachmentDelete = onAttachmentDelete,
+                    modifier = cardActions
                 )
             }
         }

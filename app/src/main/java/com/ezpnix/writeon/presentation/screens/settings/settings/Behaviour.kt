@@ -5,7 +5,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Calculate
-import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.Image
 import androidx.compose.material.icons.rounded.Style
 import androidx.compose.material.icons.rounded.Title
@@ -37,7 +36,7 @@ fun MarkdownScreen(navController: NavController, settingsViewModel: SettingsView
                     actionType = ActionType.SWITCH,
                     radius = shapeManager(isBoth = true, radius = settingsViewModel.settings.value.cornerRadius),
                     variable = settingsViewModel.settings.value.isMarkdownEnabled,
-                    switchEnabled = { settingsViewModel.update(settingsViewModel.settings.value.copy(isMarkdownEnabled = it))}
+                    switchEnabled = { settingsViewModel.update(settingsViewModel.settings.value.copy(isMarkdownEnabled = it)) }
                 )
                 Spacer(modifier = Modifier.height(18.dp))
             }
@@ -76,17 +75,8 @@ fun MarkdownScreen(navController: NavController, settingsViewModel: SettingsView
                 }
             }
             item {
-                SettingsBox(
-                    title = stringResource(id = R.string.always_edit),
-                    description = stringResource(id = R.string.always_edit_description),
-                    icon = Icons.Rounded.Edit,
-                    actionType = ActionType.SWITCH,
-                    radius = shapeManager(isBoth = true, radius = settingsViewModel.settings.value.cornerRadius),
-                    variable = settingsViewModel.settings.value.editMode,
-                    switchEnabled = { settingsViewModel.update(settingsViewModel.settings.value.copy(editMode = it))}
-                )
-            }
-            item {
+                // The list-layout switch lives here as its single home: its duplicate on the Tools
+                // page was removed with the other two shared switches (X3).
                 SettingsBox(
                     title = stringResource(id = R.string.show_only_title),
                     description = stringResource(id = R.string.show_only_title_description),
@@ -94,7 +84,11 @@ fun MarkdownScreen(navController: NavController, settingsViewModel: SettingsView
                     actionType = ActionType.SWITCH,
                     radius = shapeManager(isBoth = true, radius = settingsViewModel.settings.value.cornerRadius),
                     variable = settingsViewModel.settings.value.showOnlyTitle,
-                    switchEnabled = { settingsViewModel.update(settingsViewModel.settings.value.copy(showOnlyTitle = it))}
+                    switchEnabled = {
+                        settingsViewModel.update(
+                            settingsViewModel.settings.value.copy(showOnlyTitle = it)
+                        )
+                    }
                 )
             }
         }

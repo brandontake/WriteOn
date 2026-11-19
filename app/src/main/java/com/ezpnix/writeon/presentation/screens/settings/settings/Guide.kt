@@ -87,7 +87,9 @@ fun GuideScreen(navController: NavController, settingsViewModel: SettingsViewMod
                                 text = answer,
                                 modifier = Modifier.padding(top = 8.dp),
                                 style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.secondary
+                                // U5: `secondary` measured 2.03:1 on the light FAQ card. Body copy
+                                // must use a text role, not an accent colour.
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
                     }

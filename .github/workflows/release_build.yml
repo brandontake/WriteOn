@@ -24,6 +24,21 @@ jobs:
         with:
           submodules: true
 
+      # A release tag that does not match the app's versionName produced APKs whose README size/SHA
+      # and changelog could not be tied to the source that built them. Fail before spending minutes
+      # on tests and a signed build.
+      - name: Verify tag matches versionName
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          set -euo pipefail
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          APP_VERSION="$(sed -n 's/^[[:space:]]*versionName = "\(.*\)".*/\1/p' app/build.gradle.kts)"
+          if [ "${TAG_VERSION}" != "${APP_VERSION}" ]; then
+            echo "Tag '${GITHUB_REF_NAME}' does not match versionName '${APP_VERSION}'." >&2
+            exit 1
+          fi
+          echo "Tag and versionName agree: ${APP_VERSION}"
+
       - name: Set up Java 21
         uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
         with:

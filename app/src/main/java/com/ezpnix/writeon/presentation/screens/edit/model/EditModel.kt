@@ -19,9 +19,11 @@ import com.ezpnix.writeon.data.local.database.LegacyBodyMigration
 import com.ezpnix.writeon.domain.model.Attachment
 import com.ezpnix.writeon.domain.model.Note
 import com.ezpnix.writeon.domain.usecase.NoteUseCase
+import com.ezpnix.writeon.core.security.DecryptFailureRegistry
 import com.ezpnix.writeon.core.security.DecryptionResult
 import com.ezpnix.writeon.core.security.EncryptionHelper
 import com.ezpnix.writeon.presentation.components.markdown.AttachmentRegistry
+import com.ezpnix.writeon.presentation.screens.edit.PendingSaveUndo
 import com.ezpnix.writeon.presentation.screens.edit.components.UndoRedoState
 import com.ezpnix.writeon.presentation.screens.edit.segments.AttachmentSegment
 import com.ezpnix.writeon.presentation.screens.edit.segments.TextSegment
@@ -30,12 +32,15 @@ import com.ezpnix.writeon.presentation.share.ShareIntake
 import dagger.hilt.android.lifecycle.HiltViewModel
 import java.io.File
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import javax.inject.Inject
 
 @HiltViewModel
@@ -90,7 +95,8 @@ class EditViewModel @Inject constructor(
     val isImageSaveRequested: State<Boolean> get() = _isImageSaveRequested
 
     private val _originalNote = mutableStateOf<Note?>(null)
-    private val undoRedoState = UndoRedoState()
+    private val nameUndoRedoState = UndoRedoState()
+    private val descriptionUndoRedoState = UndoRedoState()
 
     private var noteJob: Job? = null
 
@@ -215,6 +221,18 @@ class EditViewModel @Inject constructor(
 
     fun saveNote(id: Int) {
         viewModelScope.launch {
+            // A row whose stored text this process could not decrypt only exists here as a
+            // placeholder (see EncryptedNoteDao). Saving would overwrite the ciphertext that is
+            // the user's only chance of recovery with display text, so refuse up front, before
+            // any plan, snapshot or transaction is built, and say why.
+            if (id != 0 && DecryptFailureRegistry.isFailed(id)) {
+                Toast.makeText(
+                    application,
+                    application.getString(R.string.decrypt_failed_cannot_save),
+                    Toast.LENGTH_LONG
+                ).show()
+                return@launch
+            }
             try {
             // Pinning is already persisted by [toggleNotePin]. Rewriting it here compared
             // isPinned.value against _isPinned.value - the same state object - so the branch could
@@ -248,7 +266,8 @@ class EditViewModel @Inject constructor(
                 // replaced the whole row with tags = emptyList(), silently dropping the note's
                 // tags. Reading the row keeps every field this screen does not edit.
                 val base = _originalNote.value ?: if (id != 0) {
-                    runCatching { noteUseCase.getNoteById(id).first() }.getOrNull()
+                    noteUseCase.getNoteById(id).firstOrNull()
+                        ?: throw IllegalStateException("Note no longer exists; refusing to save over missing data")
                 } else {
                     null
                 }
@@ -306,10 +325,18 @@ class EditViewModel @Inject constructor(
                     reviveAttachmentIds = plan.reviveIds,
                     deleteAttachmentIds = plan.removeRows.map { it.id },
                 )
-                finishAttachmentPlan(plan, savedId)
+                if (savedId > 0 && id == 0) {
+                    setupNoteData(savedId)
+                }
+                finishAttachmentPlan(plan)
                 // The database now holds this text; the draft would only re-offer it after a
                 // restore of a note that no longer needs it.
                 clearDraft()
+                // Bounded history: after a committed save the stored row is the undo target (the
+                // save-point bar), so keeping every pre-save snapshot only pins whole documents
+                // in memory for a feature that must not offer them any more.
+                nameUndoRedoState.clearTo(_noteName.value)
+                descriptionUndoRedoState.clearTo(_noteDescription.value)
                 // Clearing the body sends the note to the recycle bin; it does not mean "destroy
                 // every picture and recording it ever held". When the saved body is empty, keep
                 // the rows and files so a restore (or the ten-second undo) still finds them. Only
@@ -324,9 +351,14 @@ class EditViewModel @Inject constructor(
                     )
                 }
                 _undoToken.intValue++
+                // The global snackbar can be tapped after this destination is popped, when
+                // viewModelScope is already cancelled. Register the database half separately so
+                // the action keeps working for the snackbar's lifetime (U2).
+                savePoint?.let { point ->
+                    PendingSaveUndo.register { performUndo(point) }
+                }
             }
 
-            fetchLastNoteAndUpdate()
             } catch (e: CancellationException) {
                 // Never swallow cancellation: the coroutine is being torn down (screen closed),
                 // and swallowing it would keep a dead scope alive pretending to work.
@@ -353,24 +385,33 @@ class EditViewModel @Inject constructor(
         val point = savePoint ?: return
         savePoint = null
         _undoToken.intValue++
-        viewModelScope.launch {
-            val previous = point.previous
-            if (previous != null) {
-                noteUseCase.restoreNote(previous)
-                // Forced: undo's whole purpose is to put the stored text back even though it
-                // differs from what the fields hold right now.
-                syncNote(previous, forceText = true)
-            } else {
-                val savedId = point.saved.id.takeIf { it != 0 } ?: noteId.value
-                if (savedId != 0) noteUseCase.deleteNoteById(savedId)
-                _originalNote.value = null
-                _noteId.value = 0
-                _noteCreatedTime.value = System.currentTimeMillis()
-                _noteUpdatedTime.longValue = 0L
-                _noteName.value = TextFieldValue("")
-                _noteDescription.value = TextFieldValue("")
-                _isPinned.value = false
-            }
+        PendingSaveUndo.clear()
+        viewModelScope.launch { performUndo(point) }
+    }
+
+    /**
+     * The database and field work behind [undoLastSave].
+     *
+     * Shared with `PendingSaveUndo`: the snackbar invokes it directly, because by the time the
+     * user taps Undo the editor destination (and its viewModelScope) may already be gone.
+     */
+    private suspend fun performUndo(point: SavePoint) {
+        val previous = point.previous
+        if (previous != null) {
+            noteUseCase.restoreNote(previous)
+            // Forced: undo's whole purpose is to put the stored text back even though it
+            // differs from what the fields hold right now.
+            syncNote(previous, forceText = true)
+        } else {
+            val savedId = point.saved.id.takeIf { it != 0 } ?: noteId.value
+            if (savedId != 0) noteUseCase.deleteNoteById(savedId)
+            _originalNote.value = null
+            _noteId.value = 0
+            _noteCreatedTime.value = System.currentTimeMillis()
+            _noteUpdatedTime.longValue = 0L
+            _noteName.value = TextFieldValue("")
+            _noteDescription.value = TextFieldValue("")
+            _isPinned.value = false
         }
     }
 
@@ -458,20 +499,6 @@ class EditViewModel @Inject constructor(
         }
     }
 
-    private fun fetchLastNoteAndUpdate() {
-        if (noteName.value.text.isNotEmpty() || noteDescription.value.text.isNotBlank()) {
-            if (noteId.value == 0) {
-                viewModelScope.launch {
-                    noteUseCase.getLastNoteId { lastId ->
-                        viewModelScope.launch {
-                            setupNoteData(lastId?.toInt() ?: 1)
-                        }
-                    }
-                }
-            }
-        }
-    }
-
     fun toggleEditMenuVisibility(value: Boolean) {
         _isEditMenuVisible.value = value
     }
@@ -493,7 +520,7 @@ class EditViewModel @Inject constructor(
 
     fun updateNoteName(newName: TextFieldValue) {
         _noteName.value = newName
-        undoRedoState.onInput(newName)
+        nameUndoRedoState.onInput(newName)
     }
 
     fun updateIsEncrypted(value: Boolean) {
@@ -502,7 +529,24 @@ class EditViewModel @Inject constructor(
 
     fun updateNoteDescription(newDescription: TextFieldValue) {
         _noteDescription.value = newDescription
-        undoRedoState.onInput(newDescription)
+        descriptionUndoRedoState.onInput(newDescription)
+    }
+
+    /**
+     * U3: text changed from the rendered preview (a checkbox tap), not by typing.
+     *
+     * The old call built a fresh `TextFieldValue(text = it)`, whose default selection is offset 0;
+     * every checkbox tap therefore jumped the caret to the start of the note. Keep the current
+     * selection, clamped when the new text happens to be shorter.
+     */
+    fun updateNoteDescriptionFromRendered(text: String) {
+        val current = _noteDescription.value
+        if (current.text == text) return
+        val start = current.selection.start.coerceIn(0, text.length)
+        val end = current.selection.end.coerceIn(0, text.length)
+        updateNoteDescription(
+            current.copy(text = text, selection = TextRange(start, end))
+        )
     }
 
     /** Told by the segmented editor so attachment insertion can follow its caret rules. */
@@ -749,7 +793,7 @@ class EditViewModel @Inject constructor(
         _noteDescription.value = TextFieldValue(text, selection, composition)
         // Undo snapshots do not need the IME composition, and keeping a stale one there lets undo
         // hand TextFieldValue a composition range that no longer exists in the restored text.
-        undoRedoState.onInput(TextFieldValue(text, selection))
+        descriptionUndoRedoState.onInput(TextFieldValue(text, selection))
     }
 
     private fun lineBreakFor(text: String): String =
@@ -797,16 +841,16 @@ class EditViewModel @Inject constructor(
     }
 
     fun undo() {
-        undoRedoState.undo()
-        _noteDescription.value = undoRedoState.input
+        descriptionUndoRedoState.undo()
+        _noteDescription.value = descriptionUndoRedoState.input
         if (segmentedEditing) {
             requestFocusInText(_noteDescription.value.selection.end)
         }
     }
 
     fun redo() {
-        undoRedoState.redo()
-        _noteDescription.value = undoRedoState.input
+        descriptionUndoRedoState.redo()
+        _noteDescription.value = descriptionUndoRedoState.input
         if (segmentedEditing) {
             requestFocusInText(_noteDescription.value.selection.end)
         }
@@ -1098,17 +1142,25 @@ class EditViewModel @Inject constructor(
      * unless the rows actually landed. Deleting a file before the transaction could commit left a
      * row pointing at bytes that were already gone - the one ordering that cannot be undone.
      */
-    private suspend fun finishAttachmentPlan(plan: AttachmentPlan, savedNoteId: Int) {
+    private suspend fun finishAttachmentPlan(plan: AttachmentPlan) {
         val appContext = application.applicationContext
 
         plan.upsert.forEach { pendingAttachments.remove(it.id) }
 
+        // D10: deleting files touches the filesystem and used to run on the main dispatcher at the
+        // end of every save. The rows are already committed at this point, so a slow unlink can
+        // only delay the UI - do it off the main thread. Registry writes stay on the caller's
+        // thread because AttachmentRegistry is Compose state.
+        val filesToDelete = plan.removeRows + plan.abandoned
+        if (filesToDelete.isNotEmpty()) {
+            withContext(Dispatchers.IO) {
+                AttachmentFiles.deleteAll(appContext, filesToDelete)
+            }
+        }
         if (plan.removeRows.isNotEmpty()) {
-            AttachmentFiles.deleteAll(appContext, plan.removeRows)
             AttachmentRegistry.remove(plan.removeRows.map { it.id })
         }
         if (plan.abandoned.isNotEmpty()) {
-            AttachmentFiles.deleteAll(appContext, plan.abandoned)
             AttachmentRegistry.remove(plan.abandoned.map { it.id })
             plan.abandoned.forEach { pendingAttachments.remove(it.id) }
         }

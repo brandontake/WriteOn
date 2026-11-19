@@ -36,7 +36,9 @@ import com.ezpnix.writeon.presentation.theme.LocalNoteFontFamily
 import com.ezpnix.writeon.presentation.theme.NoteFontManager
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import javax.inject.Inject
 
 @AndroidEntryPoint
@@ -68,7 +70,15 @@ class MainActivity : AppCompatActivity() {
         // singleTask delivers later shares here instead of creating a second activity, so the
         // payload is parked and the running composition is asked to open a new note.
         setIntent(intent)
-        readShareIntent(this, intent)?.let { ShareIntake.offer(it, navigate = true) }
+        // P-10: importing a shared image copies up to 100 MB out of the sender's URI. Doing that
+        // in onNewIntent blocked the main thread for the whole copy; the cold-start path already
+        // moved it to IO, and the warm path has to do the same.
+        lifecycleScope.launch {
+            val payload = withContext(Dispatchers.IO) {
+                readShareIntent(this@MainActivity, intent)
+            }
+            payload?.let { ShareIntake.offer(it, navigate = true) }
+        }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -91,12 +101,23 @@ class MainActivity : AppCompatActivity() {
         // A share that starts the process: park the payload and land straight in the editor. The
         // editor asks ShareIntake for it when it is created, so a cold start needs no extra
         // navigation - the start destination below already is the editor.
-        val sharedAtLaunch = readShareIntent(this, intent)
-        if (sharedAtLaunch != null) {
-            ShareIntake.offer(sharedAtLaunch, navigate = false)
-        }
+        //
+        // The read is also the copy: every shared image is pulled out of the sender's content URI
+        // into our own files dir (up to 100 MB). That copy used to run here on the main thread
+        // before the first frame, so a photo share froze the launch and a large one could ANR. It
+        // now runs on IO, and the splash screen covers it because `startup` is not completed until
+        // the start destination is decided - so the cold-start share still opens the editor and
+        // nothing arrives after the window is already on screen.
+        val launchIntent = intent
 
         lifecycleScope.launch {
+            val sharedAtLaunch = withContext(Dispatchers.IO) {
+                readShareIntent(this@MainActivity, launchIntent)
+            }
+            if (sharedAtLaunch != null) {
+                ShareIntake.offer(sharedAtLaunch, navigate = false)
+            }
+
             val termsAccepted = settingsRepositoryImpl.getBoolean("termsOfService") ?: false
             startup.complete(termsAccepted)
 

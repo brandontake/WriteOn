@@ -5,11 +5,15 @@ import android.content.Context
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBackIos
 import androidx.compose.material.icons.automirrored.rounded.ArrowForwardIos
@@ -47,6 +51,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -57,6 +62,9 @@ import com.ezpnix.writeon.core.attachment.AttachmentFiles
 import com.ezpnix.writeon.domain.model.Attachment
 import com.ezpnix.writeon.presentation.components.getImageName
 import com.ezpnix.writeon.presentation.screens.edit.model.EditViewModel
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileOutputStream
 import java.time.LocalDateTime
@@ -73,6 +81,16 @@ data class ToolbarItem(
     val icon: ImageVector,
     val contentDescription: String,
     val color: Color,
+    /**
+     * False for the two arrows that sit at the ends of the strip and have no page to go to. They
+     * used to stay enabled with an empty click body: the only feedback was a slightly different
+     * icon tint, so a tap looked broken and TalkBack still announced a working button (U12).
+     *
+     * Declared before [onClickAction] on purpose: every call site passes the click as a trailing
+     * lambda, and Kotlin only binds a trailing lambda to the *last* parameter. Putting this last
+     * made the trailing lambda land on a Boolean.
+     */
+    val enabled: Boolean = true,
     val onClickAction: () -> Unit,
 )
 
@@ -86,13 +104,23 @@ fun TextFormattingToolbar(viewModel: EditViewModel, modifier: Modifier = Modifie
     var currentIndex by remember { mutableIntStateOf(0) }
     var showRecordAudioDialog by remember { mutableStateOf(false) }
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     val launcher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
-        uri?.let {
-            val savedUri = saveImageToAppStorage(context, it)
-            // An empty result means the copy failed; inserting a reference to nothing would leave a
-            // permanently unavailable attachment in the note body.
-            if (savedUri.isNotEmpty()) {
-                viewModel.insertImageAttachment(savedUri)
+        if (uri != null) {
+            // A picked photo is tens of megabytes, and the copy used to run inside this result
+            // callback on the main thread: the editor froze for the whole copy (P-11). The read is
+            // started here, where the grant on `uri` is still valid, and finished on Dispatchers.IO.
+            scope.launch {
+                val savedUri = withContext(Dispatchers.IO) {
+                    // The size guard throws; catching keeps an oversized pick from crashing the app
+                    // out of the result callback and turns it into the same "failed" path as I/O.
+                    runCatching { saveImageToAppStorage(context, uri) }.getOrDefault("")
+                }
+                // An empty result means the copy failed; inserting a reference to nothing would
+                // leave a permanently unavailable attachment in the note body.
+                if (savedUri.isNotEmpty()) {
+                    viewModel.insertImageAttachment(savedUri)
+                }
             }
         }
     }
@@ -110,8 +138,12 @@ fun TextFormattingToolbar(viewModel: EditViewModel, modifier: Modifier = Modifie
         listOf(
             // Page 0: Common Actions (5 items: Checkbox, Numbered, Bullet, Image, Mic)
             listOf(
-                ToolbarItem(Icons.AutoMirrored.Rounded.ArrowBackIos, context.getString(R.string.cd_toolbar_prev_page), color = colorArrow) {
-                },
+                ToolbarItem(
+                    icon = Icons.AutoMirrored.Rounded.ArrowBackIos,
+                    contentDescription = context.getString(R.string.cd_toolbar_prev_page),
+                    color = colorArrow,
+                    enabled = false,
+                ) {},
                 ToolbarItem(Icons.Rounded.CheckBox, context.getString(R.string.fmt_checkbox), color = colorIcon) {
                     viewModel.insertText("[x] \n[ ] ")
                 },
@@ -204,50 +236,71 @@ fun TextFormattingToolbar(viewModel: EditViewModel, modifier: Modifier = Modifie
                     val dateTime = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"))
                     viewModel.insertText(dateTime, newLine = false)
                 },
-                ToolbarItem(Icons.AutoMirrored.Rounded.ArrowForwardIos, context.getString(R.string.cd_toolbar_next_page), color = colorArrow) {
-                },
+                ToolbarItem(
+                    icon = Icons.AutoMirrored.Rounded.ArrowForwardIos,
+                    contentDescription = context.getString(R.string.cd_toolbar_next_page),
+                    color = colorArrow,
+                    enabled = false,
+                ) {},
             ),
         )
     }
-    Row(
-        horizontalArrangement = Arrangement.SpaceBetween,
+    // A page of this strip is seven 48dp targets. On a 320dp-wide phone that is wider than the
+    // screen, so the last target used to be pushed off the edge with no way to reach it (U12). The
+    // strip scrolls horizontally now. `widthIn(min = viewportWidth)` keeps the old edge-to-edge
+    // spacing on windows that are wide enough in the first place, because SpaceBetween needs the
+    // Row itself to be as wide as the viewport, not just the scroll container.
+    BoxWithConstraints(
         modifier = modifier
             .fillMaxWidth()
             .padding(horizontal = 6.dp)
     ) {
-        toolbarSets.getOrNull(currentIndex)?.let { toolbarItems ->
-            toolbarItems.forEach { item ->
-                val isArrow = item.color == colorArrow
-                if (isArrow) {
-                    IconButton(
-                        onClick = { item.onClickAction.invoke() },
-                    ) {
-                        Icon(
-                            item.icon,
-                            contentDescription = item.contentDescription,
-                            modifier = Modifier.size(20.dp),
-                            tint = item.color,
-                        )
-                    }
-                } else {
-                    TooltipBox(
-                        positionProvider = TooltipDefaults.rememberPlainTooltipPositionProvider(),
-                        tooltip = {
-                            PlainTooltip {
-                                Text(item.contentDescription)
-                            }
-                        },
-                        state = rememberTooltipState()
-                    ) {
+        val viewportWidth = maxWidth
+        Row(
+            horizontalArrangement = Arrangement.SpaceBetween,
+            modifier = Modifier
+                .horizontalScroll(rememberScrollState())
+                .widthIn(min = viewportWidth)
+        ) {
+            toolbarSets.getOrNull(currentIndex)?.let { toolbarItems ->
+                toolbarItems.forEach { item ->
+                    val isArrow = item.color == colorArrow
+                    // An explicit tint overrides LocalContentColor, so the disabled state has to be
+                    // dimmed by hand; IconButton(enabled = false) alone would leave the icon opaque.
+                    val tint = if (item.enabled) item.color else item.color.copy(alpha = 0.38f)
+                    if (isArrow) {
                         IconButton(
                             onClick = { item.onClickAction.invoke() },
+                            enabled = item.enabled,
                         ) {
                             Icon(
                                 item.icon,
                                 contentDescription = item.contentDescription,
                                 modifier = Modifier.size(20.dp),
-                                tint = item.color,
+                                tint = tint,
                             )
+                        }
+                    } else {
+                        TooltipBox(
+                            positionProvider = TooltipDefaults.rememberPlainTooltipPositionProvider(),
+                            tooltip = {
+                                PlainTooltip {
+                                    Text(item.contentDescription)
+                                }
+                            },
+                            state = rememberTooltipState()
+                        ) {
+                            IconButton(
+                                onClick = { item.onClickAction.invoke() },
+                                enabled = item.enabled,
+                            ) {
+                                Icon(
+                                    item.icon,
+                                    contentDescription = item.contentDescription,
+                                    modifier = Modifier.size(20.dp),
+                                    tint = tint,
+                                )
+                            }
                         }
                     }
                 }

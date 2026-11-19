@@ -41,6 +41,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.sizeIn
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
@@ -72,6 +73,7 @@ import androidx.compose.material.icons.rounded.PushPin
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DividerDefaults
 import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -84,6 +86,7 @@ import androidx.compose.material3.ModalDrawerSheet
 import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.NavigationDrawerItem
 import androidx.compose.material3.NavigationDrawerItemDefaults
+import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -126,11 +129,13 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavController
 import com.ezpnix.writeon.R
+import com.ezpnix.writeon.core.security.DecryptionResult
 import com.ezpnix.writeon.domain.model.Attachment
 import com.ezpnix.writeon.domain.model.Note
 import com.ezpnix.writeon.presentation.components.CalculatorUI
 import com.ezpnix.writeon.presentation.components.CloseButton
 import com.ezpnix.writeon.presentation.components.DeleteButton
+import com.ezpnix.writeon.presentation.components.LocalAppSnackbar
 import com.ezpnix.writeon.presentation.components.MainButton
 import com.ezpnix.writeon.presentation.components.NotesScaffold
 import com.ezpnix.writeon.presentation.components.PinButton
@@ -142,7 +147,9 @@ import com.ezpnix.writeon.presentation.navigation.HomeOverlayState
 import com.ezpnix.writeon.presentation.navigation.NavRoutes
 import com.ezpnix.writeon.presentation.navigation.overlayBackHandler
 import com.ezpnix.writeon.presentation.screens.home.viewmodel.HomeViewModel
+import com.ezpnix.writeon.presentation.screens.home.widgets.DecryptFailureBanner
 import com.ezpnix.writeon.presentation.screens.home.widgets.NoteFilter
+import com.ezpnix.writeon.presentation.screens.home.widgets.VaultLockBanner
 import com.ezpnix.writeon.presentation.screens.settings.model.SettingsViewModel
 import com.ezpnix.writeon.presentation.screens.settings.settings.shapeManager
 import com.ezpnix.writeon.presentation.theme.appCornerShape
@@ -151,7 +158,6 @@ import com.maxkeppeler.sheets.calendar.CalendarDialog
 import com.maxkeppeler.sheets.calendar.models.CalendarConfig
 import com.maxkeppeler.sheets.calendar.models.CalendarSelection
 import com.maxkeppeler.sheets.calendar.models.CalendarStyle
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import java.time.LocalDate
 
@@ -166,6 +172,9 @@ fun HomeView(
     navController: NavController
 ) {
     val context = LocalContext.current
+    val snackbar = LocalAppSnackbar.current
+    val trashedMessage = stringResource(R.string.msg_note_moved_to_trash)
+    val undoLabel = stringResource(R.string.cd_undo)
     var showDimBackground by rememberSaveable { mutableStateOf(false) }
     var fabExpanded by rememberSaveable { mutableStateOf(false) }
     // Tag deletion from the drawer asks for confirmation first: the dialog outlives recomposition
@@ -223,10 +232,13 @@ fun HomeView(
     // equal to the previous one.
     val displayedNotes by remember {
         derivedStateOf {
-            viewModel.noteUseCase.notes
+            viewModel.notes
                 .filter {
-                    it.encrypted == viewModel.isVaultMode.value &&
-                            (if (viewModel.currentFilter.value == "all") true
+                    // The old `it.encrypted == isVaultMode.value` clause depended on a vault mode
+                    // that nothing could ever turn on (always false), so a successfully unlocked
+                    // vault row - which keeps encrypted = true - would have been filtered straight
+                    // back out. NoteUseCase already decides what is decryptable; trust that list.
+                    (if (viewModel.currentFilter.value == "all") true
                             else if (viewModel.currentFilter.value == "pinned") it.pinned
                             else viewModel.currentFilter.value in it.tags)
                 }
@@ -242,8 +254,19 @@ fun HomeView(
             val drawerCornerRadius = settingsModel.settings.value.cornerRadius
             // Counts deliberately ignore the trash: a deleted note should not keep inflating the
             // numbers the user relies on to find their way around.
-            val activeNotes = viewModel.noteUseCase.notes
-            val trashedNotes by viewModel.noteUseCase.getTrashedNotesFlow()
+            val activeNotes = viewModel.notes
+            // Each tag row used to ask `activeNotes.count { tag in it.tags }`, so drawing the
+            // drawer cost (tags x notes) membership tests - recomputed for every row on every
+            // recomposition of the sheet. One pass fills all of them at once, and the result is
+            // keyed on the list so it is only redone when a note actually changes.
+            val tagCounts = remember(activeNotes) {
+                val counts = HashMap<String, Int>()
+                activeNotes.forEach { note ->
+                    note.tags.forEach { tag -> counts[tag] = (counts[tag] ?: 0) + 1 }
+                }
+                counts
+            }
+            val trashedNotes by viewModel.trashedNotesFlow
                 .collectAsStateWithLifecycle(initialValue = emptyList())
             ModalDrawerSheet(
                 modifier = Modifier.width(320.dp),
@@ -273,7 +296,7 @@ fun HomeView(
                         )
                         Spacer(modifier = Modifier.height(4.dp))
                         Text(
-                            text = stringResource(R.string.nav_drawer_subtitle, viewModel.noteUseCase.notes.size),
+                            text = stringResource(R.string.nav_drawer_subtitle, viewModel.notes.size),
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -324,7 +347,7 @@ fun HomeView(
                     )
 
                     DrawerSectionHeader(context.getString(R.string.nav_tags))
-                    if (viewModel.noteUseCase.tags.isEmpty()) {
+                    if (viewModel.tags.isEmpty()) {
                         Text(
                             text = context.getString(R.string.tag_none_yet),
                             style = MaterialTheme.typography.bodyMedium,
@@ -332,12 +355,12 @@ fun HomeView(
                             modifier = Modifier.padding(start = 16.dp, top = 4.dp, bottom = 8.dp)
                         )
                     } else {
-                        viewModel.noteUseCase.tags.forEach { tag ->
+                        viewModel.tags.forEach { tag ->
                             DeletableDrawerItem(
                                 text = tag,
                                 selected = viewModel.currentFilter.value == tag,
                                 cornerRadius = drawerCornerRadius,
-                                count = activeNotes.count { tag in it.tags },
+                                count = tagCounts[tag] ?: 0,
                                 onClick = {
                                     viewModel.currentFilter.value = tag
                                     scope.launch { drawerState.close() }
@@ -393,7 +416,17 @@ fun HomeView(
                                 allNotes = displayedNotes,
                                 settingsModel = settingsModel,
                                 onPinClick = { viewModel.pinOrUnpinNotes() },
-                                onMoveToTrashClick = { viewModel.moveSelectedNotesToTrash() },
+                                onMoveToTrashClick = {
+                                    val selected = viewModel.selectedNotes.toList()
+                                    viewModel.trashNotes(selected) { trashed ->
+                                        snackbar?.show(
+                                            message = trashedMessage,
+                                            actionLabel = undoLabel,
+                                            duration = SnackbarDuration.Long,
+                                            onAction = { viewModel.restoreTrashedNotes(trashed) },
+                                        )
+                                    }
+                                },
                                 onSelectAllClick = { selectAllNotes(viewModel, displayedNotes) },
                                 onCloseClick = { viewModel.selectedNotes.clear() },
                                 onTagClick = { viewModel.showTagDialog.value = true },
@@ -425,7 +458,34 @@ fun HomeView(
                     content = {
                         Column(modifier = Modifier.fillMaxSize()) {
                             Spacer(modifier = Modifier.height(16.dp))
-                            NoteFilter(
+                            VaultLockBanner(
+                                lockedCount = viewModel.hiddenVaultCount,
+                                unlockAttempted = viewModel.vaultUnlockAttempted.value,
+                                onUnlock = { viewModel.unlockVault(it) },
+                            )
+                            // Both banners hide themselves at 0; collecting the registry flow here
+                            // keeps the count in step with every list emission and single-row read.
+                            val decryptFailedCount by viewModel.decryptFailedCount
+                                .collectAsStateWithLifecycle()
+                            DecryptFailureBanner(failedCount = decryptFailedCount)
+                            // U10: the first emission decrypts every row and can take a moment on a
+                            // large library. Without this the grid showed the "no notes" welcome
+                            // screen first and then replaced it, which reads as data loss. A locked
+                            // vault also reports LOADING but has hidden rows to explain instead.
+                            val notesLoading = viewModel.decryptionResult ==
+                                DecryptionResult.LOADING &&
+                                viewModel.notes.isEmpty() &&
+                                viewModel.hiddenVaultCount == 0
+                            if (notesLoading) {
+                                Box(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .fillMaxWidth(),
+                                    contentAlignment = Alignment.Center,
+                                ) {
+                                    CircularProgressIndicator()
+                                }
+                            } else NoteFilter(
                                 modifier = Modifier.weight(1f),
                                 navController = navController,
                                 settingsViewModel = settingsModel,
@@ -434,22 +494,31 @@ fun HomeView(
                                     radius = settingsModel.settings.value.cornerRadius / 2,
                                     isBoth = true
                                 ),
-                                onNoteClicked = { onNoteClicked(it, viewModel.isVaultMode.value) },
+                                onNoteClicked = { id ->
+                                    // The editor needs the row's own vault flag: passing the old
+                                    // always-false vault mode made opening an unlocked vault note
+                                    // look plain, and the next save would have dropped its
+                                    // password protection.
+                                    onNoteClicked(id, displayedNotes.any { n -> n.id == id && n.encrypted })
+                                },
                                 notes = displayedNotes,
                                 selectedNotes = viewModel.selectedNotes,
                                 viewMode = settingsModel.settings.value.viewMode,
                                 searchText = viewModel.searchQuery.value.ifBlank { null },
                                 isDeleteMode = viewModel.isDeleteMode.value,
-                                onNoteUpdate = { note ->
-                                    scope.launch(Dispatchers.IO) {
-                                        viewModel.noteUseCase.addNote(
-                                            note
-                                        )
-                                    }
-                                },
+                                onNoteUpdate = { note -> viewModel.saveNote(note) },
                                 onDeleteNote = {
                                     val note = displayedNotes.find { note -> note.id == it }
-                                    note?.let { n -> viewModel.noteUseCase.moveToTrash(n) }
+                                    note?.let { n ->
+                                        viewModel.trashNote(n) { trashed ->
+                                            snackbar?.show(
+                                                message = trashedMessage,
+                                                actionLabel = undoLabel,
+                                                duration = SnackbarDuration.Long,
+                                                onAction = { viewModel.restoreTrashedNotes(listOf(trashed)) },
+                                            )
+                                        }
+                                    }
                                 },
                                 onPinNote = { note -> viewModel.pinOrUnpinNote(note) },
                                 onTagNote = { note ->
@@ -475,7 +544,9 @@ fun HomeView(
                 }
                 FloatingBottomButtons(
                     navController = navController,
-                    onNoteClicked = { onNoteClicked(it, viewModel.isVaultMode.value) },
+                    onNoteClicked = { id ->
+                        onNoteClicked(id, displayedNotes.any { n -> n.id == id && n.encrypted })
+                    },
                     expanded = fabExpanded,
                     onExpandedChange = { fabExpanded = it },
                     onDimToggle = { showDimBackground = it },
@@ -668,7 +739,10 @@ fun DeletableDrawerItem(
         badge = {
             IconButton(
                 onClick = { onDeleteClick() },
-                modifier = Modifier.size(32.dp)
+                // U6: a 32 dp square was below the 48 dp minimum touch target. The drawer row is
+                // 56 dp tall, so reserving the full 48 dp here costs no layout height; the icon
+                // itself stays 18 dp.
+                modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp)
             ) {
                 Icon(
                     imageVector = Icons.Default.Close,

@@ -7,9 +7,7 @@
    See https://developer.android.com/about/versions/12/backup-restore
 -->
 <full-backup-content>
-    <exclude domain="database" path="note-list.db" />
-    <exclude domain="database" path="note-list.db-wal" />
-    <exclude domain="database" path="note-list.db-shm" />
+    <exclude domain="database" path="." />
     <!-- The app lock lives in EncryptedSharedPreferences, whose master key is in the device
          Keystore and does not travel with a backup. Restoring those files on another device used
          to make LockManager throw on first access; excluding the whole directory also keeps
@@ -26,4 +24,9 @@
          would only produce files nothing can open, and they can grow to several copies of the
          database. -->
     <exclude domain="file" path="BackupFolder/" />
+    <!-- Glance widget state (files/glance/widget-state/) maps appWidgetId -> note id and carries no
+         note text today, but every list above is a negative list: any new directory under files/
+         is backed up by default. Keep this one out before widget state starts holding note
+         content, which would then leave the device through cloud backup without this file changing. -->
+    <exclude domain="file" path="glance/" />
 </full-backup-content>

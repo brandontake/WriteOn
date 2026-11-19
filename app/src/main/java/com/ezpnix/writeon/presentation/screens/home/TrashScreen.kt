@@ -54,7 +54,7 @@ fun TrashScreen(
     navController: NavController,
     viewModel: HomeViewModel = hiltViewModel()
 ) {
-    val trashedNotes by viewModel.noteUseCase.getTrashedNotesFlow()
+    val trashedNotes by viewModel.trashedNotesFlow
         .collectAsStateWithLifecycle(initialValue = emptyList())
 
     val selectedNotes = remember { mutableStateListOf<Note>() }
@@ -68,7 +68,7 @@ fun TrashScreen(
     var tab by rememberSaveable { mutableIntStateOf(0) }
     var longPressedAttachmentId by rememberSaveable { mutableStateOf<String?>(null) }
     var pendingPermanentDeleteAttachmentId by rememberSaveable { mutableStateOf<String?>(null) }
-    val trashedAttachments by viewModel.noteUseCase.getTrashedAttachmentsFlow()
+    val trashedAttachments by viewModel.trashedAttachmentsFlow
         .collectAsStateWithLifecycle(initialValue = emptyList())
     val trashedImages = remember(trashedAttachments) {
         trashedAttachments.filter { it.type == Attachment.TYPE_IMAGE }

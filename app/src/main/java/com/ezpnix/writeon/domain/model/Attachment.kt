@@ -19,7 +19,13 @@ import androidx.room.PrimaryKey
  */
 @Entity(
     tableName = "attachments",
-    indices = [Index(value = ["note-id"])]
+    indices = [
+        Index(value = ["note-id"]),
+        // D5: the library and recycle bin filter on these two columns on every list emission;
+        // before 11 each query was a full attachment-table scan.
+        Index(value = ["trashed_at"]),
+        Index(value = ["type"]),
+    ]
 )
 data class Attachment(
     @PrimaryKey

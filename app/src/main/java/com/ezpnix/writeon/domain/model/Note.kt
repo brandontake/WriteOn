@@ -1,4 +1,5 @@
 package com.ezpnix.writeon.domain.model
+import androidx.compose.runtime.Immutable
 import androidx.room.ColumnInfo
 import androidx.room.Entity
 import androidx.room.Index
@@ -11,11 +12,17 @@ import com.ezpnix.writeon.core.database.Converters
  *
  * Every save or pin used to trigger a full-table scan (and, through the decrypting DAO, a full
  * pass of Keystore work); with an index the same query reads only the rows it needs.
+ *
+ * `@Immutable` because every property is a `val` and the one mutable field (`trashed`) is now
+ * read-only too - trash/untrash goes through `NotesDao.updateTrashed`. Compose previously treated
+ * this class as unstable (one `var` is enough), so every note that arrived in a new list emission
+ * forced its card to recompose even when nothing the card shows had changed.
  */
 @Entity(
     tableName = "notes-table",
     indices = [Index("trashed"), Index("pinned"), Index("updated_at")]
 )
+@Immutable
 @TypeConverters(Converters::class)
 data class Note(
     @PrimaryKey(autoGenerate = true)
@@ -33,7 +40,7 @@ data class Note(
     @ColumnInfo(name = "updated_at", defaultValue = "0")
     val updatedAt: Long = 0L,
     @ColumnInfo(defaultValue = "0")
-    var trashed: Boolean = false,
+    val trashed: Boolean = false,
     @ColumnInfo(name = "tags")
     val tags: List<String> = emptyList()
 )
