@@ -43,15 +43,25 @@ object SnapshotSidecar {
     private const val KEY_HASH = "dbSha256"
     private const val KEY_SALT = "vaultSalt"
     private const val KEY_FLASHCARDS = "flashcards"
+    private const val KEY_ATTACHMENTS = "attachmentSnapshot"
 
     /**
-     * The prefs state as it was when the snapshot database was live.
+     * The prefs and media state as it was when the snapshot database was live.
      *
-     * A null field is authoritative, not "unknown": [write] always records both fields, so a valid
-     * sidecar from a fresh install says "this snapshot had no salt/deck" and the undo must clear
-     * whatever the restored archive put there. "Unknown" is represented by no sidecar at all.
+     * A null salt/deck is authoritative, not "unknown": [write] always records both fields, so a
+     * valid sidecar from a fresh install says "this snapshot had no salt/deck" and the undo must
+     * clear whatever the restored archive put there. "Unknown" is represented by no sidecar at all.
+     *
+     * [attachmentSnapshot] names a directory under
+     * [com.ezpnix.writeon.core.attachment.AttachmentSnapshots]. Null means the snapshot predates
+     * attachment pairing (or the database had no previous install); the undo then restores only
+     * the database and prefs, exactly as before.
      */
-    data class Contents(val vaultSalt: String?, val flashcards: String?)
+    data class Contents(
+        val vaultSalt: String?,
+        val flashcards: String?,
+        val attachmentSnapshot: String? = null,
+    )
 
     sealed class ReadResult {
         data class Found(val contents: Contents) : ReadResult()
@@ -72,7 +82,12 @@ object SnapshotSidecar {
      * when the metadata reached disk. The caller decides whether a false result should abort a
      * restore; it must not proceed while trusting the old sidecar.
      */
-    fun write(backup: File, vaultSalt: String?, flashcards: String?): Boolean {
+    fun write(
+        backup: File,
+        vaultSalt: String?,
+        flashcards: String?,
+        attachmentSnapshot: String? = null,
+    ): Boolean {
         // A restore on a fresh install legitimately has no `.bak`; there is no undo to protect.
         if (!backup.isFile || backup.length() <= 0L) return true
 
@@ -84,6 +99,11 @@ object SnapshotSidecar {
                 addProperty(KEY_FLASHCARDS, flashcards)
             } else {
                 add(KEY_FLASHCARDS, JsonNull.INSTANCE)
+            }
+            if (attachmentSnapshot != null) {
+                addProperty(KEY_ATTACHMENTS, attachmentSnapshot)
+            } else {
+                add(KEY_ATTACHMENTS, JsonNull.INSTANCE)
             }
         }.toString().toByteArray(Charsets.UTF_8)
 
@@ -124,6 +144,7 @@ object SnapshotSidecar {
                     Contents(
                         vaultSalt = json.stringOrNull(KEY_SALT),
                         flashcards = json.stringOrNull(KEY_FLASHCARDS),
+                        attachmentSnapshot = json.stringOrNull(KEY_ATTACHMENTS),
                     )
                 )
             }
@@ -144,7 +165,7 @@ object SnapshotSidecar {
     }
 
     /** SHA-256 of the whole database file, or null when it cannot be read. */
-    private fun sha256(file: File): String? = try {
+    internal fun sha256(file: File): String? = try {
         val digest = MessageDigest.getInstance("SHA-256")
         file.inputStream().use { input ->
             val buffer = ByteArray(DEFAULT_BUFFER_SIZE)

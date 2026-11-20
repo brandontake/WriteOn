@@ -2,8 +2,10 @@ package com.ezpnix.writeon.core.util
 
 import android.content.Context
 import android.util.Log
+import com.ezpnix.writeon.core.attachment.AttachmentSnapshots
 import com.ezpnix.writeon.core.constant.DatabaseConst
 import com.ezpnix.writeon.data.backup.FlashcardArchive
+import com.ezpnix.writeon.data.backup.RestoreJournal
 import com.ezpnix.writeon.data.backup.SnapshotSidecar
 import com.ezpnix.writeon.data.backup.VaultSaltArchive
 import com.ezpnix.writeon.data.local.database.BackupDatabase
@@ -110,6 +112,18 @@ object RestoreSnapshots {
                     )
                 )
             }
+            // N-1: a snapshot from before sidecars has no recorded salt. That is safe only if it
+            // also predates the `v3:` format; an envelope row would need a KEK we cannot recover.
+            if (sidecar is SnapshotSidecar.ReadResult.Missing &&
+                DatabaseRestore.containsEnvelopeRows(snapshot)
+            ) {
+                return@withContext Result.failure(
+                    IOException(
+                        "The previous database snapshot predates Vault metadata and contains " +
+                            "envelope-encrypted notes; restoring it safely is not possible"
+                    )
+                )
+            }
 
             // Waiting for the lock is still cancellable: nothing has been closed or written yet,
             // so a cancelled caller simply sees CancellationException and the files are untouched.
@@ -155,11 +169,37 @@ object RestoreSnapshots {
         // successful path rotates them into the new `.bak` sidecar after it.
         val currentSalt = VaultSaltArchive.read(context)
         val currentDeck = FlashcardArchive.readRaw(context)
+        // The current attachment tree becomes the new `.bak`'s pairing when the undo succeeds.
+        // Capturing before Room closes also gives a rollback target if the old tree cannot be
+        // installed (install itself already restores what it moved, but this is the full tree).
+        var redoSnapshot: String? = null
         try {
             if (!DatabaseRestore.quickCheckPasses(snapshot)) {
                 throw IOException("The previous database snapshot failed its integrity check")
             }
             DatabaseRestore.assertArchiveCompatible(snapshot)
+            redoSnapshot = AttachmentSnapshots.capture(context)
+                ?: throw IOException("Could not snapshot the current attachments before undoing")
+
+            // N-1 undo half: the same byte-decision journal as a normal restore. If the undo's
+            // database move lands but the process dies before prefs/attachments follow, startup
+            // finishes the snapshot's state; if it does not land, the live values stay untouched.
+            val found = sidecar as? SnapshotSidecar.ReadResult.Found
+            val journalDeck = found?.contents?.flashcards?.let(FlashcardArchive::resealRawForRecovery)
+            if (!RestoreJournal.write(
+                    context = context,
+                    restoredDb = snapshot,
+                    newSalt = found?.contents?.vaultSalt,
+                    newDeckSealed = journalDeck,
+                    setSalt = found != null,
+                    setDeck = found != null &&
+                        (found.contents.flashcards == null || journalDeck != null),
+                    attachmentTarget = found?.contents?.attachmentSnapshot,
+                    attachmentDiscard = redoSnapshot,
+                )
+            ) {
+                throw IOException("Could not write the restore journal before undoing")
+            }
 
             // DAT-7: the snapshot has passed its checks, so the undo is really going to close the
             // shared Room connection. Publish the restore first - the UI covers the app and the
@@ -198,6 +238,27 @@ object RestoreSnapshots {
                             }
                         )
                     }
+                    val snapshotId = sidecar.contents.attachmentSnapshot
+                    if (snapshotId != null && !AttachmentSnapshots.install(context, snapshotId)) {
+                        // The install is all-or-nothing: a false result means the live trees were
+                        // put back. Restore the database/prefs too, then put the captured redo
+                        // tree in place so all four stores describe the same state again.
+                        val rolledBack = rollbackParked(target, replaced)
+                        if (rolledBack) {
+                            VaultSaltArchive.restoreEncoded(context, currentSalt)
+                            FlashcardArchive.restoreRaw(context, currentDeck)
+                            redoSnapshot?.let { AttachmentSnapshots.install(context, it) }
+                        }
+                        throw IOException(
+                            if (rolledBack) {
+                                "Could not restore the snapshot's attachments; the previous " +
+                                    "database was put back"
+                            } else {
+                                "Could not restore the snapshot's attachments and the previous " +
+                                    "database could not be put back"
+                            }
+                        )
+                    }
                 }
             } catch (e: Throwable) {
                 // The UI entry point restarts only on success; a failure must leave the app usable
@@ -209,17 +270,32 @@ object RestoreSnapshots {
         } catch (e: CancellationException) {
             // V-7: rethrowing keeps the coroutine contract. `.bak` was never written (see the
             // class comment above), so the only cleanup is the parked current-database copy.
+            // The journal and re-do snapshot are deliberately left for startup: the hash decides
+            // whether the database move landed, and deleting them here could discard the only
+            // record of a half-installed undo.
             replaced.delete()
             throw e
         } catch (e: Exception) {
             // `.bak` still holds the snapshot byte for byte: the install wrote to `replaced`, not
             // to `.bak`. Dropping that copy leaves the live database (still the current one) as
-            // the only copy of itself, which is exactly the state before the call.
+            // the only copy of itself, which is exactly the state before the call. The journal is
+            // resolved at next launch by the same byte comparison.
             replaced.delete()
             return Result.failure(e)
         }
 
-        rotateReplacedIntoBackup(replaced, snapshot, currentSalt, currentDeck)
+        val oldAttachmentSnapshot = (sidecar as? SnapshotSidecar.ReadResult.Found)
+            ?.contents
+            ?.attachmentSnapshot
+        rotateReplacedIntoBackup(replaced, snapshot, currentSalt, currentDeck, redoSnapshot)
+        // The undo is complete; the old snapshot belongs to a database that is no longer behind
+        // `.bak`. Delete it only after the rotation, so a failed rotation leaves the old pair
+        // intact.
+        if (oldAttachmentSnapshot != null && oldAttachmentSnapshot != redoSnapshot) {
+            AttachmentSnapshots.delete(context, oldAttachmentSnapshot)
+        }
+        AttachmentSnapshots.pruneExcept(context, redoSnapshot)
+        RestoreJournal.clear(context)
         // SEC-5/SEC-4: the old database may contain plaintext rows and captions; the process is
         // normally restarted after this action, so the next launch must not trust a flag written
         // for the DB we just replaced. reset() commits, because a lost flag turns into a skipped
@@ -282,6 +358,7 @@ object RestoreSnapshots {
         snapshot: File,
         currentSalt: String?,
         currentDeck: String?,
+        currentAttachments: String?,
     ) {
         if (!replaced.isFile || replaced.length() <= 0L) return
         try {
@@ -295,7 +372,7 @@ object RestoreSnapshots {
             // must be the prefs state that database expects. Written after the move; if the write
             // fails, the old sidecar's hash no longer matches and the next undo refuses instead
             // of applying the wrong KEK.
-            SnapshotSidecar.write(snapshot, currentSalt, currentDeck)
+            SnapshotSidecar.write(snapshot, currentSalt, currentDeck, currentAttachments)
         } catch (e: Exception) {
             // Log is a stub on the plain-JVM test runtime; a failed log must not turn a completed
             // restore into a reported failure.
@@ -308,6 +385,20 @@ object RestoreSnapshots {
                 )
             }
         }
+    }
+
+    /**
+     * Startup hygiene: the attachment tree paired with the one `.bak` is the only one that can
+     * still be used. A restore killed before its sidecar was written leaves an unreferenced
+     * candidate; without this it would sit in noBackupFilesDir forever. A missing/corrupt sidecar
+     * keeps nothing, because the undo would refuse that snapshot anyway.
+     */
+    fun pruneAttachmentSnapshots(context: Context) {
+        val backup = DatabaseRestore.backupFile(liveDatabaseFile(context))
+        val keep = (SnapshotSidecar.read(backup) as? SnapshotSidecar.ReadResult.Found)
+            ?.contents
+            ?.attachmentSnapshot
+        AttachmentSnapshots.pruneExcept(context, keep)
     }
 
     private fun liveDatabaseFile(context: Context): File =

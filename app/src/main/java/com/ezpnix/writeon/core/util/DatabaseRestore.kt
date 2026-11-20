@@ -182,8 +182,12 @@ object DatabaseRestore {
      * @return the backup file holding the previous database, for a caller that wants to delete it
      *   once the restored database has proven usable.
      */
-    fun replaceDatabaseAtomically(target: File, replacement: File): File? =
-        replaceDatabaseAtomically(target, replacement, backupFile(target))
+    fun replaceDatabaseAtomically(
+        target: File,
+        replacement: File,
+        onBackupCreated: ((File) -> Unit)? = null,
+    ): File? =
+        replaceDatabaseAtomically(target, replacement, backupFile(target), onBackupCreated)
 
     /**
      * [replaceDatabaseAtomically] with the previous database parked at [backupDestination].
@@ -202,7 +206,8 @@ object DatabaseRestore {
         target: File,
         replacement: File,
         backupDestination: File,
-    ): File? = replaceDatabaseAtomically(target, replacement, backupDestination) { staged, installTarget ->
+        onBackupCreated: ((File) -> Unit)? = null,
+    ): File? = replaceDatabaseAtomically(target, replacement, backupDestination, onBackupCreated) { staged, installTarget ->
         // One atomic replacement: POSIX rename(2) over an existing target swaps the file in a
         // single step, and java.nio mirrors that on every platform this code reaches (verified
         // on the Windows JVM the unit tests run on, where File.renameTo refuses to overwrite
@@ -228,6 +233,7 @@ object DatabaseRestore {
         target: File,
         replacement: File,
         backupDestination: File,
+        onBackupCreated: ((backup: File) -> Unit)? = null,
         move: (staged: File, target: File) -> Unit,
     ): File? {
         target.parentFile?.mkdirs()
@@ -269,6 +275,11 @@ object DatabaseRestore {
                 // The rotation comment on this function explains why the copy is kept.
                 target.copyTo(backup, overwrite = true)
                 RandomAccessFile(backup, "rw").use { it.fd.sync() }
+                // N-1: write the sidecar *before* the replacement is installed. If the process dies
+                // after this callback, `.bak` and its salt/deck/attachment snapshot already describe
+                // the same database; the old order (swap first, metadata after) left a window where
+                // the bytes had moved but the undo metadata still described the previous snapshot.
+                onBackupCreated?.invoke(backup)
             } catch (e: Exception) {
                 staged.delete()
                 throw IOException("Could not keep a backup of the current database", e)
@@ -531,6 +542,64 @@ object DatabaseRestore {
             }
         } catch (e: Exception) {
             null
+        }
+    }
+
+    /**
+     * True when [file] holds at least one `v3:` vault row.
+     *
+     * N-1: a `.bak` written before snapshot sidecars existed has no recorded salt, so putting it
+     * back would only be safe if it predates the envelope format. The undo uses this as a
+     * fail-safe: a missing sidecar plus an envelope row means "cannot know the KEK", which must be
+     * refused instead of silently handing the old rows the archive's salt.
+     *
+     * SQLite is asked first (exact, uses the real columns). On the plain-JVM test runtime, or when
+     * the table is missing, a raw byte scan is the fallback: `v3:` is stored literally at the
+     * start of each sealed field, so a false positive can only make the undo more conservative.
+     */
+    fun containsEnvelopeRows(file: File): Boolean {
+        try {
+            android.database.sqlite.SQLiteDatabase.openDatabase(
+                file.absolutePath,
+                null,
+                android.database.sqlite.SQLiteDatabase.OPEN_READONLY
+            ).use { db ->
+                db.rawQuery(
+                    "SELECT 1 FROM \"notes-table\" WHERE \"note-name\" LIKE 'v3:%' " +
+                        "OR \"note-description\" LIKE 'v3:%' LIMIT 1",
+                    null
+                ).use { cursor -> return cursor.moveToFirst() }
+            }
+        } catch (e: Exception) {
+            // No SQLite stub, no notes-table (a minimal test database), or an unreadable file.
+        }
+        return scanForEnvelopePrefix(file)
+    }
+
+    private fun scanForEnvelopePrefix(file: File): Boolean {
+        val needle = "v3:".toByteArray(Charsets.US_ASCII)
+        return try {
+            file.inputStream().use { input ->
+                val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+                var matched = 0
+                while (true) {
+                    val read = input.read(buffer)
+                    if (read < 0) break
+                    for (index in 0 until read) {
+                        val byte = buffer[index]
+                        if (byte == needle[matched]) {
+                            matched++
+                            if (matched == needle.size) return true
+                        } else {
+                            matched = if (byte == needle[0]) 1 else 0
+                        }
+                    }
+                }
+                false
+            }
+        } catch (e: Exception) {
+            // Unreadable is not proof of safety; the caller already validated the file.
+            false
         }
     }
 

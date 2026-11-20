@@ -49,6 +49,24 @@ class SnapshotSidecarTest {
         val contents = (SnapshotSidecar.read(backup) as SnapshotSidecar.ReadResult.Found).contents
         assertNull("a snapshot with no vault must clear the archive's salt on undo", contents.vaultSalt)
         assertNull("a snapshot with no deck must clear the archive's deck on undo", contents.flashcards)
+        assertNull("no attachment tree means the undo stays database-only", contents.attachmentSnapshot)
+    }
+
+    @Test
+    fun `the paired attachment snapshot survives the round trip`() {
+        val backup = backup()
+
+        assertTrue(
+            SnapshotSidecar.write(
+                backup,
+                vaultSalt = "S1",
+                flashcards = "A",
+                attachmentSnapshot = "snapshot-20261120-120000-001-42",
+            )
+        )
+
+        val contents = (SnapshotSidecar.read(backup) as SnapshotSidecar.ReadResult.Found).contents
+        assertEquals("snapshot-20261120-120000-001-42", contents.attachmentSnapshot)
     }
 
     @Test

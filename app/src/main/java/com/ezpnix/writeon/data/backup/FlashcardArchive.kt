@@ -113,6 +113,39 @@ object FlashcardArchive {
         false
     }
 
+    /**
+     * The staged archive member as plain JSON, without touching `flashcards_prefs`.
+     *
+     * N-1's restart journal needs the deck before the database swap so it can seal it for crash
+     * recovery. Reuses the same size/array validation as [restoreFromStaging]; a malformed member
+     * returns null and the normal restore path will leave the stored deck untouched.
+     */
+    fun readStagedPlainJson(stagingDir: File): String? =
+        readStagedDeck(File(stagingDir, ENTRY_NAME))
+
+    /** Seals a staged deck for the crash journal with the same Keystore key as the live deck. */
+    fun sealForRecovery(json: String): String? = runCatching {
+        NoteCryptoSealer().seal(json)
+    }.onFailure {
+        runCatching { Log.w(TAG, "Could not seal flashcards for restore recovery", it) }
+    }.getOrNull()
+
+    /** Opens a journal-sealed deck; null means this install cannot read it and must keep its own. */
+    fun openForRecovery(sealed: String): String? = runCatching {
+        NoteCryptoSealer().openOrNull(sealed)
+    }.getOrNull()
+
+    /**
+     * Re-seals a raw `flashcards_prefs` value for the undo journal.
+     *
+     * The sidecar stores whatever the live deck held - `w1:` ciphertext or legacy plain JSON - so
+     * this opens it first (plaintext passes through) and seals the JSON again. A null result means
+     * the journal must not clear or replace the current deck; leaving it is safer than writing an
+     * unreadable value during crash recovery.
+     */
+    fun resealRawForRecovery(raw: String): String? =
+        openForRecovery(raw)?.let(::sealForRecovery)
+
     internal fun readPlainJson(store: DeckStore, sealer: Sealer): String? {
         val stored = try {
             store.read()

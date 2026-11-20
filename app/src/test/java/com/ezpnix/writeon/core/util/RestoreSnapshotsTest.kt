@@ -3,6 +3,7 @@ package com.ezpnix.writeon.core.util
 import android.content.Context
 import android.database.sqlite.SQLiteDatabase
 import androidx.test.core.app.ApplicationProvider
+import com.ezpnix.writeon.core.attachment.AttachmentSnapshots
 import com.ezpnix.writeon.core.constant.DatabaseConst
 import com.ezpnix.writeon.core.security.SharedPreferencesVaultKeyStore
 import com.ezpnix.writeon.data.backup.SnapshotSidecar
@@ -268,6 +269,98 @@ class RestoreSnapshotsTest {
         )
     }
 
+    /**
+     * N-2: the undo must put the old database, its salt/deck and its attachment tree back as one
+     * set, and pair the displaced tree with the new `.bak` so the undo stays undoable.
+     */
+    @Test
+    fun `undo restores the snapshot's attachment tree and pairs the redo tree`() = runBlocking {
+        val live = liveDatabase()
+        live.writeBytes("current database".toByteArray())
+        val snapshotBytes = compatibleDatabase(temporaryFolder.newFile("previous.db")).readBytes()
+        val backup = snapshot().apply {
+            parentFile?.mkdirs()
+            writeBytes(snapshotBytes)
+        }
+
+        val attachments = context.filesDir
+        val oldImage = File(attachments, "attachments/old.jpg").apply {
+            parentFile?.mkdirs()
+            writeBytes("old-image".toByteArray())
+        }
+        val oldSnapshot = AttachmentSnapshots.capture(context)!!
+
+        // The live tree changed after the snapshot was captured; the undo must not keep these.
+        val temp = File(oldImage.parentFile, oldImage.name + ".tmp")
+        temp.writeBytes("current-image".toByteArray())
+        java.nio.file.Files.move(
+            temp.toPath(),
+            oldImage.toPath(),
+            java.nio.file.StandardCopyOption.REPLACE_EXISTING
+        )
+        File(attachments, "attachments/current.jpg").writeBytes("current-extra".toByteArray())
+
+        assertTrue(SnapshotSidecar.write(backup, null, null, oldSnapshot))
+
+        val result = RestoreSnapshots.restorePrevious(context)
+
+        assertTrue("the undo must succeed, was: ${result.exceptionOrNull()}", result.isSuccess)
+        assertArrayEquals("the snapshot's image bytes must be live", "old-image".toByteArray(), oldImage.readBytes())
+        assertFalse("a file added after the snapshot must be gone", File(attachments, "attachments/current.jpg").exists())
+        assertFalse("the consumed snapshot is removed", AttachmentSnapshots.exists(context, oldSnapshot))
+
+        val rotated = SnapshotSidecar.read(backup) as SnapshotSidecar.ReadResult.Found
+        val redo = rotated.contents.attachmentSnapshot
+        assertTrue("the new .bak must carry the displaced tree", AttachmentSnapshots.exists(context, redo))
+        assertTrue(
+            "the redo tree holds the pre-undo image",
+            File(AttachmentSnapshots.directory(context, redo!!), "attachments/old.jpg")
+                .readBytes()
+                .contentEquals("current-image".toByteArray())
+        )
+        AttachmentSnapshots.pruneExcept(context, null)
+    }
+
+    @Test
+    fun `a legacy snapshot with v3 rows is refused instead of using the current salt`() = runBlocking {
+        val live = liveDatabase()
+        val currentBytes = "current database".toByteArray()
+        live.writeBytes(currentBytes)
+        val snapshotBytes = envelopeDatabase(temporaryFolder.newFile("legacy-v3.db")).readBytes()
+        val backup = snapshot().apply {
+            parentFile?.mkdirs()
+            writeBytes(snapshotBytes)
+        }
+
+        val result = RestoreSnapshots.restorePrevious(context)
+
+        assertTrue("a v3 snapshot without a recorded salt must be refused", result.isFailure)
+        assertTrue(
+            "the failure must explain the missing Vault metadata, was: ${result.exceptionOrNull()?.message}",
+            result.exceptionOrNull()?.message.orEmpty().contains("predates Vault metadata", ignoreCase = true)
+        )
+        assertArrayEquals("the refused snapshot must survive byte for byte", snapshotBytes, backup.readBytes())
+        assertArrayEquals("the live database must not change", currentBytes, live.readBytes())
+    }
+
+    @Test
+    fun `startup cleanup keeps only the attachment tree named by the sidecar`() {
+        val live = liveDatabase()
+        live.writeBytes("current database".toByteArray())
+        val backup = snapshot().apply {
+            parentFile?.mkdirs()
+            writeBytes("previous database".toByteArray())
+        }
+        val keep = AttachmentSnapshots.capture(context)!!
+        val drop = AttachmentSnapshots.capture(context)!!
+        assertTrue(SnapshotSidecar.write(backup, null, null, keep))
+
+        RestoreSnapshots.pruneAttachmentSnapshots(context)
+
+        assertTrue(AttachmentSnapshots.exists(context, keep))
+        assertFalse(AttachmentSnapshots.exists(context, drop))
+    }
+
     private fun encodedSalt(fill: Byte): String =
         Base64.getEncoder().encodeToString(ByteArray(16) { fill })
 
@@ -294,6 +387,30 @@ class RestoreSnapshotsTest {
             database.execSQL(
                 "INSERT INTO room_master_table (id, identity_hash) VALUES (42, ?)",
                 arrayOf(DatabaseRestore.CURRENT_IDENTITY_HASH)
+            )
+            database.version = DatabaseConst.NOTES_DATABASE_VERSION
+        } finally {
+            database.close()
+        }
+        return file
+    }
+
+    /** A compatible database carrying one `v3:` row but (deliberately) no sidecar. */
+    private fun envelopeDatabase(file: File): File {
+        val database = SQLiteDatabase.openOrCreateDatabase(file, null)
+        try {
+            database.execSQL(
+                "CREATE TABLE room_master_table (id INTEGER PRIMARY KEY, identity_hash TEXT)"
+            )
+            database.execSQL(
+                "INSERT INTO room_master_table (id, identity_hash) VALUES (42, ?)",
+                arrayOf(DatabaseRestore.CURRENT_IDENTITY_HASH)
+            )
+            database.execSQL(
+                "CREATE TABLE \"notes-table\" (\"note-name\" TEXT, \"note-description\" TEXT)"
+            )
+            database.execSQL(
+                "INSERT INTO \"notes-table\" VALUES ('v3:wrap:dek:iv:body', '')"
             )
             database.version = DatabaseConst.NOTES_DATABASE_VERSION
         } finally {

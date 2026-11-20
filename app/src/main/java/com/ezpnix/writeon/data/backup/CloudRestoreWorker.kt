@@ -14,6 +14,7 @@ import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
 import com.ezpnix.writeon.R
 import com.ezpnix.writeon.core.attachment.AttachmentArchive
+import com.ezpnix.writeon.core.attachment.AttachmentSnapshots
 import com.ezpnix.writeon.core.constant.DatabaseConst
 import com.ezpnix.writeon.core.security.SharedPreferencesVaultKeyStore
 import com.ezpnix.writeon.core.util.BackupArchiveCrypto
@@ -471,6 +472,8 @@ open class WebDAVRestoreWorker(
                 // collectors stop before they can query a closed connection. Decryption and
                 // validation deliberately ran before this point, so a rejected archive never blanks
                 // the UI.
+                var attachmentSnapshotId: String? = null
+                var snapshotPaired = false
                 RestoreCoordinator.begin()
                 try {
                     // The connection has to be closed before its file is replaced. Room keeps the
@@ -478,21 +481,37 @@ open class WebDAVRestoreWorker(
                     // the running app reading and writing the previous database - the notes looked
                     // restored until the next write went to the discarded file.
                     BackupDatabase.provider(applicationContext).close()
-                    val previousBackup =
-                        DatabaseRestore.replaceDatabaseAtomically(dbFile, stagedDatabase)
-
-                    // N-1/N-2: pair `.bak` with the salt and deck its database was using. Without
-                    // this the in-app undo puts the old rows back under the archive's salt and
-                    // every `v3:` note becomes unreadable. A failed stamp rolls the swap back.
-                    if (previousBackup != null &&
-                        !SnapshotSidecar.write(previousBackup, oldSalt, oldDeck)
-                    ) {
-                        val rolledBack = DatabaseRestore.rollbackFromBackup(dbFile)
-                        if (rolledBack) {
-                            VaultSaltArchive.restoreEncoded(applicationContext, oldSalt)
-                            FlashcardArchive.restoreRaw(applicationContext, oldDeck)
+                    attachmentSnapshotId = AttachmentSnapshots.capture(applicationContext)
+                        ?: throw IOException("could not snapshot attachments")
+                    val newSalt = VaultSaltArchive.readStaged(tempDir)
+                    if (newSalt != null && !VaultSaltArchive.isValidEncoded(newSalt)) {
+                        throw IOException("downloaded backup vault salt is invalid")
+                    }
+                    val newDeck = FlashcardArchive.readStagedPlainJson(tempDir)
+                        ?.let(FlashcardArchive::sealForRecovery)
+                    if (!RestoreJournal.write(applicationContext, stagedDatabase, newSalt, newDeck)) {
+                        throw IOException("could not write the restore journal")
+                    }
+                    val previousBackup = DatabaseRestore.replaceDatabaseAtomically(
+                        dbFile,
+                        stagedDatabase
+                    ) { backup ->
+                        if (!SnapshotSidecar.write(
+                                backup,
+                                oldSalt,
+                                oldDeck,
+                                attachmentSnapshotId
+                            )
+                        ) {
+                            throw IOException("could not record snapshot metadata")
                         }
-                        throw IOException("could not record snapshot metadata")
+                        snapshotPaired = true
+                    }
+                    if (previousBackup == null) {
+                        AttachmentSnapshots.delete(applicationContext, attachmentSnapshotId)
+                        attachmentSnapshotId = null
+                    } else {
+                        AttachmentSnapshots.pruneExcept(applicationContext, attachmentSnapshotId)
                     }
 
                     // The archive's salt must be live before any failure-prone attachment work. A
@@ -544,7 +563,15 @@ open class WebDAVRestoreWorker(
                     // D7: the restored database is live now - reconcile its attachment rows
                     // against the files on disk and quarantine what no row references any more.
                     AttachmentArchive.reconcileAfterRestore(applicationContext, dbFile)
+                    RestoreJournal.clear(applicationContext)
                 } catch (e: Throwable) {
+                    // Leave the journal for the startup byte check: rollback is a mismatch and is
+                    // discarded, a failed rollback is a completed move and gets its new prefs.
+                    // Only a candidate that never reached the `.bak` sidecar is discarded; a
+                    // stamped one is the attachment pairing for the current `.bak`.
+                    if (!snapshotPaired) {
+                        AttachmentSnapshots.delete(applicationContext, attachmentSnapshotId)
+                    }
                     // Every failure/rollback path reopens the app. Success leaves the coordinator
                     // set: this worker restarts the process a moment later, and a fresh process
                     // starts from the default (not restoring).

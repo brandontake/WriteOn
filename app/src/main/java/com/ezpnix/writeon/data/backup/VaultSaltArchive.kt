@@ -49,6 +49,29 @@ object VaultSaltArchive {
     fun read(context: Context): String? = SharedPreferencesVaultKeyStore(context).encodedSalt()
 
     /**
+     * The salt member extracted into [stagingDir], if the archive has one.
+     *
+     * Read-only: the normal restore still validates and applies it through [restoreFromStaging].
+     * The restart journal uses this to remember which salt belongs to the database it is about to
+     * install, so a kill between the move and the apply can be finished at startup.
+     */
+    fun readStaged(stagingDir: File): String? = runCatching {
+        File(stagingDir, ENTRY_NAME)
+            .takeIf { it.isFile }
+            ?.readText(Charsets.UTF_8)
+            ?.trim()
+            ?.takeIf { it.isNotEmpty() }
+    }.getOrNull()
+
+    /**
+     * Structural check used before the journal/database swap, so an invalid member fails while the
+     * live database is still untouched instead of relying on the post-swap rollback.
+     */
+    fun isValidEncoded(encoded: String): Boolean = runCatching {
+        java.util.Base64.getDecoder().decode(encoded).size >= 8
+    }.getOrDefault(false)
+
+    /**
      * Applies a salt extracted from an archive.
      *
      * Returns true only when a valid value replaced the current salt. A missing member is a no-op

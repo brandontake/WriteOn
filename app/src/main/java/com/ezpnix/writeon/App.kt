@@ -4,6 +4,8 @@ import android.app.Application
 import android.util.Log
 import com.ezpnix.writeon.core.attachment.AttachmentArchive
 import com.ezpnix.writeon.core.constant.DatabaseConst
+import com.ezpnix.writeon.core.util.RestoreSnapshots
+import com.ezpnix.writeon.data.backup.RestoreJournal
 import com.ezpnix.writeon.presentation.components.markdown.AttachmentRegistry
 import dagger.hilt.android.HiltAndroidApp
 import kotlinx.coroutines.CoroutineScope
@@ -29,7 +31,17 @@ class App : Application() {
         // the application scope, not an Activity: resolving happens from players, widgets and
         // background share jobs long after any Activity is gone.
         AttachmentRegistry.initialize(context)
+        // N-1: a restore killed between the database move and the salt/deck apply leaves a journal.
+        // The check is one `isFile` on a normal launch; when it is present the recovery must finish
+        // (or discard) the pending prefs transition before any screen or Room query can observe the
+        // database. It is therefore synchronous, unlike the attachment replay below.
+        runCatching { RestoreJournal.recover(context) }
+            .onFailure { error -> Log.w(TAG, "Startup restore-journal recovery failed", error) }
         startupScope.launch {
+            // N-2: only the attachment tree named by the current `.bak` sidecar is still reachable
+            // by the undo; anything else is a candidate from a restore that never published.
+            runCatching { RestoreSnapshots.pruneAttachmentSnapshots(context) }
+                .onFailure { error -> Log.w(TAG, "Startup attachment-snapshot cleanup failed", error) }
             // Cheap `isFile` check first; only an interrupted install touches files. The journal
             // lives in noBackupFilesDir (V-8), so this also survives a cache eviction between the
             // database swap and the last attachment move. The result decides whether the full D7

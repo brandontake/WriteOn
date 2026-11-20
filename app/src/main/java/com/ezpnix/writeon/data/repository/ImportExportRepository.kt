@@ -6,6 +6,7 @@ import android.provider.MediaStore
 import androidx.core.database.getStringOrNull
 import com.ezpnix.writeon.R
 import com.ezpnix.writeon.core.attachment.AttachmentArchive
+import com.ezpnix.writeon.core.attachment.AttachmentSnapshots
 import com.ezpnix.writeon.core.constant.DatabaseConst
 import com.ezpnix.writeon.core.security.SharedPreferencesVaultKeyStore
 import com.ezpnix.writeon.core.util.AutoBackupCrypto
@@ -13,6 +14,7 @@ import com.ezpnix.writeon.core.util.BackupArchiveCrypto
 import com.ezpnix.writeon.core.util.DatabaseRestore
 import com.ezpnix.writeon.core.util.RestoreCoordinator
 import com.ezpnix.writeon.data.backup.FlashcardArchive
+import com.ezpnix.writeon.data.backup.RestoreJournal
 import com.ezpnix.writeon.data.backup.SnapshotSidecar
 import com.ezpnix.writeon.data.backup.VaultSaltArchive
 import com.ezpnix.writeon.data.local.database.LegacyCaptionBackfillFlag
@@ -263,27 +265,55 @@ class ImportExportRepository(
             // connection. Publishing the restore now covers the app and stops the note collectors
             // *before* the connection dies, instead of leaving them to hit a closed database in
             // the restart window. A rejected archive never reaches here, so it cannot blank the UI.
+            var attachmentSnapshotId: String? = null
+            var snapshotPaired = false
             RestoreCoordinator.begin()
             try {
                 // Room holds the old file open; it must be closed before the rename. This is
                 // deliberately the only remaining close() on the export/import path.
                 provider.close()
-                val previousBackup = DatabaseRestore.replaceDatabaseAtomically(dbFile, restored)
-                // N-1/N-2: `.bak` is now the replaced database. Stamp it with the salt and deck
-                // that database expects, so "restore the previous database" can put all three
-                // back together. A failed stamp rolls the swap back: an undo that silently
-                // applies the archive's salt to the old rows is exactly the bug this fixes.
-                if (previousBackup != null &&
-                    !SnapshotSidecar.write(previousBackup, oldSalt, oldDeck)
-                ) {
-                    val rolledBack = DatabaseRestore.rollbackFromBackup(dbFile)
-                    if (rolledBack) {
-                        VaultSaltArchive.restoreEncoded(context, oldSalt)
-                        FlashcardArchive.restoreRaw(context, oldDeck)
-                    }
-                    throw IOException(
-                        context.getString(R.string.import_failed, "could not record snapshot metadata")
+                // N-1: capture the attachment bytes after Room closed, so no committed save can
+                // add a row between the database snapshot and this file walk. The snapshot is
+                // hard-linked, not copied, and is paired with `.bak` in the callback below.
+                attachmentSnapshotId = AttachmentSnapshots.capture(context)
+                    ?: throw IOException(
+                        context.getString(R.string.import_failed, "could not snapshot attachments")
                     )
+                // N-1 restart half: record the database hash and the new prefs state before the
+                // move. A kill after the move but before the salt/deck apply is finished at next
+                // launch; a kill before it is recognised by the hash and changes nothing. The
+                // deck is sealed, never stored as plaintext.
+                val newSalt = VaultSaltArchive.readStaged(tempDir)
+                if (newSalt != null && !VaultSaltArchive.isValidEncoded(newSalt)) {
+                    throw IOException(
+                        context.getString(R.string.import_failed, "backup vault salt is invalid")
+                    )
+                }
+                val newDeck = FlashcardArchive.readStagedPlainJson(tempDir)
+                    ?.let(FlashcardArchive::sealForRecovery)
+                if (!RestoreJournal.write(context, restored, newSalt, newDeck)) {
+                    throw IOException(
+                        context.getString(R.string.import_failed, "could not write the restore journal")
+                    )
+                }
+                // N-1/N-2: stamp `.bak` *before* the final move. A kill after this callback leaves
+                // a database, salt, deck and attachment tree that all describe the same state;
+                // the old order swapped first and wrote metadata after, which is the window this
+                // closes. A failed stamp aborts the swap while the live database is still intact.
+                val previousBackup = DatabaseRestore.replaceDatabaseAtomically(dbFile, restored) { backup ->
+                    if (!SnapshotSidecar.write(backup, oldSalt, oldDeck, attachmentSnapshotId)) {
+                        throw IOException(
+                            context.getString(R.string.import_failed, "could not record snapshot metadata")
+                        )
+                    }
+                    snapshotPaired = true
+                }
+                if (previousBackup == null) {
+                    // Fresh install: no `.bak`, so the captured tree has no snapshot to belong to.
+                    AttachmentSnapshots.delete(context, attachmentSnapshotId)
+                    attachmentSnapshotId = null
+                } else {
+                    AttachmentSnapshots.pruneExcept(context, attachmentSnapshotId)
                 }
                 // The archive's salt must be live before any failure-prone attachment work: from
                 // here on the restored database is the one Room will open. A present-but-invalid
@@ -334,7 +364,17 @@ class ImportExportRepository(
                 // reported, files without rows go to quarantine (no-op for archives that
                 // predate the attachments table).
                 AttachmentArchive.reconcileAfterRestore(context, dbFile)
+                // Every prefs/file side effect is complete; a crash from here on is a normal
+                // "restart with the restored database", not an interrupted transition.
+                RestoreJournal.clear(context)
             } catch (e: Throwable) {
+                // Leave the journal in place: startup compares the live database bytes with the
+                // staged hash. A successful rollback is a mismatch and is discarded; a failed
+                // rollback means the move landed and the new prefs must be finished.
+                // If `.bak` was never stamped, the candidate snapshot belongs to no database and
+                // must not outlive this failed attempt. Once stamped, it is the pairing for the
+                // current `.bak` (the database a rollback puts back) and is kept.
+                if (!snapshotPaired) AttachmentSnapshots.delete(context, attachmentSnapshotId)
                 // Every failure/rollback path lands here: the caller reports it and the app must
                 // become usable again. Success deliberately falls through with the flag still set;
                 // the caller restarts the process for the database that was just installed.
