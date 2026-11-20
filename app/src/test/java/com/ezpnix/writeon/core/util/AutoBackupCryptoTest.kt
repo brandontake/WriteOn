@@ -2,6 +2,8 @@ package com.ezpnix.writeon.core.util
 
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
+import com.google.crypto.tink.aead.AeadKeyTemplates
+import com.google.crypto.tink.streamingaead.StreamingAeadKeyTemplates
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.nio.charset.StandardCharsets
@@ -19,7 +21,9 @@ import org.robolectric.RobolectricTestRunner
  * (`AndroidKeysetManager` + `android-keystore://writeon_auto_backup`), and the archive is
  * deliberately unreadable on another install. Robolectric has no real Keystore, so this suite
  * pins what is testable without one - the on-disk magic and the "reject instead of guessing"
- * paths. The round trip is exercised on-device by the automatic-backup restore flow.
+ * paths. The primitive/template and streaming close contracts are covered by
+ * [AutoBackupStreamTest] with a generated keyset; the full round trip is exercised on-device by
+ * the automatic-backup restore flow.
  */
 @RunWith(RobolectricTestRunner::class)
 class AutoBackupCryptoTest {
@@ -40,6 +44,27 @@ class AutoBackupCryptoTest {
             "the current and legacy formats must stay distinguishable",
             AutoBackupCrypto.MAGIC_V1.toList(),
             AutoBackupCrypto.MAGIC_V2.toList()
+        )
+    }
+
+    @Test
+    fun `the wab2 and wab1 keysets are pinned to different templates`() {
+        assertEquals(
+            "V-1: WAB2 must be created with a streaming key type, or Tink cannot produce a " +
+                "StreamingAead from it and every automatic backup fails",
+            StreamingAeadKeyTemplates.AES256_GCM_HKDF_4KB.typeUrl,
+            AutoBackupTemplates.streamingAead().typeUrl
+        )
+        assertEquals(
+            "WAB1's already-created keyset keeps its original AEAD template",
+            AeadKeyTemplates.AES256_GCM.typeUrl,
+            AutoBackupTemplates.legacyAead().typeUrl
+        )
+        assertNotEquals(
+            "the two formats must never share a template: AndroidKeysetManager reuses an " +
+                "existing keyset, so one template change would strand the other format",
+            AutoBackupTemplates.streamingAead().typeUrl,
+            AutoBackupTemplates.legacyAead().typeUrl
         )
     }
 

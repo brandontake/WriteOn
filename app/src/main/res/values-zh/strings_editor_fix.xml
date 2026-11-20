@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 编辑器保存/撤销修复（DAT-9、DAT-12、UX-1、UX-2、SEC-7）。 -->
+<resources>
+    <string name="editor_fix_saving">正在保存…</string>
+    <string name="editor_fix_saved">已保存</string>
+    <string name="editor_fix_save_failed">保存失败</string>
+    <string name="editor_fix_retry">重试</string>
+    <string name="editor_fix_moved_to_trash">已移入回收站</string>
+    <string name="editor_fix_undo_unavailable">暂时无法撤销，笔记仍然保留</string>
+    <string name="editor_fix_vault_draft_disabled">保险库笔记不保存草稿，离开前请先保存</string>
+</resources>

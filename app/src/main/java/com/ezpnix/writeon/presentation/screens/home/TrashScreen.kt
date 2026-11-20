@@ -516,7 +516,10 @@ private fun TrashAttachmentsGrid(
         modifier = Modifier.fillMaxSize()
     ) {
         items(attachments, key = { it.id }) { attachment ->
-            val path = AttachmentRegistry.path(attachment.id)
+            // SEC-4: never render the stored path directly - an encrypted attachment only has
+            // readable bytes at the vault's decrypted copy. Null while that copy is being made
+            // (or when it cannot be made) is exactly the placeholder case.
+            val path = AttachmentRegistry.playablePath(attachment.id)
             Box(
                 modifier = Modifier
                     .aspectRatio(1f)
@@ -566,7 +569,10 @@ private fun TrashAttachmentsList(
         modifier = Modifier.fillMaxSize()
     ) {
         items(attachments, key = { it.id }) { attachment ->
-            val path = AttachmentRegistry.path(attachment.id)
+            // SEC-4: never render the stored path directly - an encrypted attachment only has
+            // readable bytes at the vault's decrypted copy. Null while that copy is being made
+            // (or when it cannot be made) is exactly the placeholder case.
+            val path = AttachmentRegistry.playablePath(attachment.id)
             Box(
                 modifier = Modifier
                     .fillMaxWidth()

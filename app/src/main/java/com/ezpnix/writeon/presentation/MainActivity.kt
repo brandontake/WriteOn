@@ -2,28 +2,42 @@ package com.ezpnix.writeon.presentation
 
 import android.content.Intent
 import android.os.Bundle
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
 import androidx.appcompat.app.AppCompatActivity
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import com.ezpnix.writeon.R
+import com.ezpnix.writeon.core.util.RestoreCoordinator
 import com.ezpnix.writeon.data.repository.SettingsRepositoryImpl
-import com.ezpnix.writeon.presentation.components.GalleryObserver
 import com.ezpnix.writeon.presentation.components.markdown.LocalLatexEnabled
-import com.ezpnix.writeon.presentation.components.registerGalleryObserver
-import com.ezpnix.writeon.presentation.components.unregisterGalleryObserver
 import com.ezpnix.writeon.presentation.lock.LockGate
 import com.ezpnix.writeon.presentation.navigation.AppNavHost
+import com.ezpnix.writeon.presentation.navigation.BackGestureRouter
 import com.ezpnix.writeon.presentation.navigation.HomeOverlayState
 import com.ezpnix.writeon.presentation.navigation.NavRoutes
 import com.ezpnix.writeon.presentation.navigation.PredictiveBackHost
@@ -46,24 +60,6 @@ class MainActivity : AppCompatActivity() {
     @Inject
     lateinit var settingsRepositoryImpl: SettingsRepositoryImpl
     private val settingsViewModel: SettingsViewModel by viewModels()
-
-    // The observer outlives a single composition but not the activity: it used to be registered
-    // from inside setContent on every recomposition, which piled up duplicate observers that each
-    // held the activity and could delete files after it was gone.
-    private var galleryObserver: GalleryObserver? = null
-
-    override fun onStart() {
-        super.onStart()
-        if (galleryObserver == null) {
-            galleryObserver = registerGalleryObserver(this)
-        }
-    }
-
-    override fun onStop() {
-        galleryObserver?.let { unregisterGalleryObserver(this, it) }
-        galleryObserver = null
-        super.onStop()
-    }
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
@@ -157,44 +153,114 @@ class MainActivity : AppCompatActivity() {
                     LocalLatexEnabled provides renderLatex
                 ) {
                     LeafNotesTheme(settingsViewModel) {
-                        Surface(
-                            color = MaterialTheme.colorScheme.surfaceContainerLow,
-                        ) {
-                            LockGate {
-                                // Compare destination ids, not route strings: a start destination built
-                                // by createRoute() is a filled path ("edit/0/false"), while the graph
-                                // stores the template ("edit/{id}/{encrypted}"), so the old comparison
-                                // was never true for the share/shortcut entry points and left them on
-                                // the predictive-back root path (where back does nothing).
-                                val rootDestinationId = runCatching {
-                                    navController.graph.startDestinationId
-                                }.getOrNull()
-                                val isAtRoot = rootDestinationId != null &&
-                                    backStackEntry?.destination?.id == rootDestinationId
-                                PredictiveBackHost(
-                                    enabled = !isAtRoot,
-                                    showPreview = predictiveBackEnabled,
-                                    // A failed pop means there is nowhere left to go; closing the
-                                    // activity is the only exit that does not strand the user.
-                                    onBack = { if (!navController.popBackStack()) finish() },
-                                    // The home quick action bar, drawer, and note selection are overlays
-                                    // on the root screen. Only when at the root destination can an overlay
-                                    // suppress the predictive back host; when away from the root, sub-screens
-                                    // (e.g. settings) must always be popped on system back gestures.
-                                    isOverlayOpen = isAtRoot && HomeOverlayState.expanded
-                                ) {
-                                    AppNavHost(
-                                        settingsViewModel = settingsViewModel,
-                                        noteId = noteId,
-                                        navController = navController,
-                                        startDestination = startDestination
-                                    )
+                        // DAT-7: a restore closes the process-wide Room connection before it
+                        // swaps the database file, so every screen's Flow is about to query a
+                        // closed connection. This covers the whole app - editor and settings
+                        // included - from the moment the swap starts until the process restarts
+                        // (or the restore fails and the coordinator reopens the app).
+                        val restoring by RestoreCoordinator.restoring.collectAsStateWithLifecycle()
+                        // System back must not leave the overlay: there is no screen to go back
+                        // to while the database underneath it is being replaced.
+                        BackHandler(enabled = restoring) {
+                            // Consumed on purpose.
+                        }
+                        Box(modifier = Modifier.fillMaxSize()) {
+                            Surface(
+                                color = MaterialTheme.colorScheme.surfaceContainerLow,
+                            ) {
+                                LockGate {
+                                    // Compare destination ids, not route strings: a start destination built
+                                    // by createRoute() is a filled path ("edit/0/false"), while the graph
+                                    // stores the template ("edit/{id}/{encrypted}"), so the old comparison
+                                    // was never true for the share/shortcut entry points and left them on
+                                    // the predictive-back root path (where back does nothing).
+                                    val rootDestinationId = runCatching {
+                                        navController.graph.startDestinationId
+                                    }.getOrNull()
+                                    val isAtRoot = rootDestinationId != null &&
+                                        backStackEntry?.destination?.id == rootDestinationId
+                                    PredictiveBackHost(
+                                        enabled = !isAtRoot,
+                                        showPreview = predictiveBackEnabled,
+                                        // V-3: a destination that owns a save-before-exit path (the
+                                        // editor) publishes it through the router, so the gesture runs
+                                        // the same save-then-leave as the toolbar and hardware back
+                                        // instead of a bare pop that loses the last unsaved paragraph.
+                                        // Nothing registered means the normal navigation pop.
+                                        onBack = {
+                                            if (!BackGestureRouter.handle() &&
+                                                !navController.popBackStack()
+                                            ) {
+                                                finish()
+                                            }
+                                        },
+                                        // The home quick action bar, drawer, and note selection are overlays
+                                        // on the root screen. Only when at the root destination can an overlay
+                                        // suppress the predictive back host; when away from the root, sub-screens
+                                        // (e.g. settings) must always be popped on system back gestures.
+                                        isOverlayOpen = isAtRoot && HomeOverlayState.expanded
+                                    ) {
+                                        AppNavHost(
+                                            settingsViewModel = settingsViewModel,
+                                            noteId = noteId,
+                                            navController = navController,
+                                            startDestination = startDestination
+                                        )
+                                    }
                                 }
+                            }
+                            if (restoring) {
+                                RestoreInProgressOverlay()
                             }
                         }
                     }
                 }
             }
+        }
+    }
+}
+
+/**
+ * DAT-7: the full-screen block shown while the database is closed and replaced.
+ *
+ * It is a sibling of the navigation content, not a decoration inside a screen: a restore is
+ * triggered from Settings but the screen underneath it (and every Flow it collects) is exactly
+ * what must not run a query until the process restarts. The pointer-input loop consumes every
+ * gesture so taps and scrolls cannot reach the editor behind an opaque Surface.
+ *
+ * The overlay plus `NoteUseCase`'s own collector pause cover the normal Settings-triggered
+ * restore. An editor that is somehow already composed collects its note flow directly, outside
+ * the shared list, and is not cancelled by the coordinator - it is covered visually here, but it
+ * is not the screen a restore starts from.
+ */
+@Composable
+private fun RestoreInProgressOverlay() {
+    Surface(
+        modifier = Modifier
+            .fillMaxSize()
+            .pointerInput(Unit) {
+                awaitPointerEventScope {
+                    while (true) {
+                        awaitPointerEvent().changes.forEach { it.consume() }
+                    }
+                }
+            },
+        color = MaterialTheme.colorScheme.surface,
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(32.dp),
+            verticalArrangement = Arrangement.Center,
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            CircularProgressIndicator()
+            Text(
+                text = stringResource(R.string.restore_fix_restoring),
+                modifier = Modifier.padding(top = 24.dp),
+                style = MaterialTheme.typography.titleMedium,
+                textAlign = TextAlign.Center,
+            )
         }
     }
 }

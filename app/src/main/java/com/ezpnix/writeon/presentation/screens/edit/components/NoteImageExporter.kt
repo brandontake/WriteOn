@@ -441,7 +441,11 @@ private fun ImageBitmap.looksBlank(backgroundColor: Int): Boolean {
 private suspend fun preloadNoteImages(context: Context, body: String) {
     val loader = context.imageLoader
     AttachmentSyntax.idsIn(body).forEach { id ->
-        val path = AttachmentRegistry.path(id) ?: return@forEach
+        // SEC-4: preloading the stored path of an encrypted image would feed Coil `WMV1`
+        // ciphertext. `playablePath` schedules the vault materialisation when needed, so the
+        // decrypted copy is warm by the time the renderer asks for it; null means "not ready
+        // yet", which is the same placeholder the renderer shows.
+        val path = AttachmentRegistry.playablePath(id) ?: return@forEach
         runCatching {
             loader.execute(
                 ImageRequest.Builder(context)

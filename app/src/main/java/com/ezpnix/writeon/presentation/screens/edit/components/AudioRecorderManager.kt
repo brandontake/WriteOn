@@ -4,6 +4,7 @@ import android.content.Context
 import android.media.MediaRecorder
 import android.os.Build
 import android.util.Log
+import com.ezpnix.writeon.core.attachment.MediaVault
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -91,6 +92,14 @@ class AudioRecorderManager(private val context: Context) {
             file?.delete()
             return null
         }
+
+        // SEC-4: encrypt the finished clip before the caller ever sees its path. A failure here is
+        // deliberately not fatal: losing a recording the user just made is worse than keeping one
+        // plaintext file, and every reader (and the next start of the recorder) handles plaintext
+        // legacy audio. The next save/export path may encrypt it again.
+        if (file != null && !MediaVault.encryptInPlace(context, file)) {
+            Log.e("AudioRecorderManager", "Could not encrypt ${file.name}; keeping it plaintext")
+        }
         return file
     }
 
@@ -146,6 +155,9 @@ class AudioRecorderManager(private val context: Context) {
                     if (file.exists() && file.canonicalPath.startsWith(audioDir)) {
                         file.delete()
                     }
+                    // SEC-4: the decrypted copy in the media cache must not outlive the file the
+                    // user deleted, even when the delete above was refused or failed.
+                    MediaVault.deleteCached(context, path)
                 } catch (t: Throwable) {
                     Log.e("AudioRecorderManager", "Failed to delete audio file: $path", t)
                 }

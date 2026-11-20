@@ -58,6 +58,14 @@ class SettingsViewModel @Inject constructor(
 
     private companion object {
         const val TAG = "SettingsViewModel"
+
+        /**
+         * URLs the user already accepted the cleartext warning for (SEC-2).
+         *
+         * A string set rather than a boolean because the acknowledgement is per server: pointing
+         * the same field at a different LAN address is a new decision and must ask again.
+         */
+        const val CLEARTEXT_ACK_KEY = "webdav_cleartext_ack"
     }
 
     private val _savedNote = MutableStateFlow("")
@@ -176,19 +184,55 @@ class SettingsViewModel @Inject constructor(
      * before this change has no `w1:` marker, so [NoteCrypto.openOrNull] still returns it and the
      * next save upgrades it in place.
      */
-    fun saveNote(note: String) {
+    fun saveNote(note: String): Boolean {
+        // DAT-10: the stored value exists but could not be decrypted. Writing here would replace
+        // the only copy of the user's text with a fresh ciphertext of whatever is on screen, so
+        // the save is refused until the value is deliberately dealt with. Returns false so the
+        // caller does not show its "saved" confirmation for a write that never happened.
+        if (scratchpadUnreadable) {
+            Log.w(TAG, "Refusing to overwrite an unreadable scratchpad value")
+            return false
+        }
         val stored = runCatching { noteCrypto.seal(note) }.getOrNull()
         if (stored == null) {
             // Never fall back to plaintext: failing the save is recoverable, leaking the text is not.
             showToast(context.getString(R.string.error), context)
-            return
+            return false
         }
         sharedPreferences.edit().putString("note", stored).apply()
+        return true
     }
+
+    /**
+     * True once [loadNote] found a stored scratchpad value it could not decrypt (DAT-10).
+     *
+     * An empty scratchpad and an undecryptable one used to be the same thing - `""` - so the next
+     * save silently overwrote the original ciphertext with new text and the old content was gone.
+     * The screen shows an explanation and disables saving while this is set; the stored bytes are
+     * left untouched, and a copy is parked under `note_corrupt` in case the key ever comes back.
+     */
+    var scratchpadUnreadable by mutableStateOf(false)
+        private set
 
     fun loadNote(): String {
         val stored = sharedPreferences.getString("note", "") ?: ""
-        return noteCrypto.openOrNull(stored) ?: ""
+        // Nothing stored, or a value written before sealing: the latter is returned as-is by
+        // openOrNull, which is why no `w1:` test is needed here.
+        if (stored.isBlank()) {
+            scratchpadUnreadable = false
+            return ""
+        }
+        val opened = noteCrypto.openOrNull(stored)
+        if (opened == null) {
+            Log.e(TAG, "Scratchpad ciphertext could not be opened; leaving it in place")
+            runCatching {
+                sharedPreferences.edit().putString("note_corrupt", stored).apply()
+            }
+            scratchpadUnreadable = true
+            return ""
+        }
+        scratchpadUnreadable = false
+        return opened
     }
 
     fun updatePlaceholder(newText: String) {
@@ -196,6 +240,41 @@ class SettingsViewModel @Inject constructor(
             settingsPreferences.savePlaceholder(newText)
             _dynamicPlaceholder.value = newText
         }
+    }
+
+    /**
+     * SEC-2: whether [url] may be used without showing the cleartext warning again.
+     *
+     * Returns true for anything that is not `http://` - https never needs the warning - and for an
+     * http URL the user has already accepted. The gate itself lives in the Cloud screen, right in
+     * front of every path that saves the config or starts a transfer, because that is the only
+     * place that can show a dialog and wait for the answer.
+     */
+    fun isCleartextWebDavAcknowledged(url: String): Boolean {
+        val key = cleartextAckKey(url) ?: return true
+        return sharedPreferences.getStringSet(CLEARTEXT_ACK_KEY, emptySet())?.contains(key) == true
+    }
+
+    /** Remembers that the user accepted the cleartext warning for [url] (SEC-2). */
+    fun acknowledgeCleartextWebDav(url: String) {
+        val key = cleartextAckKey(url) ?: return
+        val acknowledged = sharedPreferences
+            .getStringSet(CLEARTEXT_ACK_KEY, emptySet())
+            .orEmpty()
+            .toMutableSet()
+        if (!acknowledged.add(key)) return
+        sharedPreferences.edit().putStringSet(CLEARTEXT_ACK_KEY, acknowledged).apply()
+    }
+
+    /**
+     * Normalises an http URL for the acknowledgement set, or returns null for a scheme that needs
+     * no warning. Only the trailing slash is normalised: two different paths on the same host are
+     * two different servers as far as the user is concerned, so they each get their own warning.
+     */
+    private fun cleartextAckKey(url: String): String? {
+        val trimmed = url.trim()
+        if (!trimmed.startsWith("http://", ignoreCase = true)) return null
+        return trimmed.trimEnd('/')
     }
 
     private fun startAutoBackup(context: Context) {
@@ -360,9 +439,25 @@ class SettingsViewModel @Inject constructor(
     private var flashcardsUnreadable = false
 
     fun loadFlashcards(): List<Flashcard> {
-        val json = flashPrefs.getString("flashcards_key", null)
-        if (json == null) {
+        val stored = flashPrefs.getString("flashcards_key", null)
+        if (stored == null) {
             flashcardsUnreadable = false
+            return emptyList()
+        }
+        // SEC-4: the deck is sealed with the same Keystore-backed [NoteCrypto] as a note body, but
+        // a deck written by an older build has no `w1:` marker and openOrNull hands it back
+        // unchanged - so this single call reads both forms. A sealed value that cannot be opened
+        // (key reset, deck copied from another install) returns null and falls into the
+        // protection below instead of being reported as an empty deck.
+        val json = noteCrypto.openOrNull(stored)
+        if (json == null) {
+            Log.e(TAG, "Stored flashcards could not be decrypted; keeping them out of the save path")
+            flashcardsUnreadable = true
+            // Keep a copy of the unreadable payload: overwriting the key is exactly the failure
+            // mode this branch exists to prevent, so the bytes must survive somewhere recoverable.
+            runCatching {
+                flashPrefs.edit().putString("flashcards_key_corrupt", stored).apply()
+            }
             return emptyList()
         }
         return try {
@@ -374,10 +469,8 @@ class SettingsViewModel @Inject constructor(
         } catch (e: Exception) {
             Log.e(TAG, "Could not parse stored flashcards; keeping them out of the save path", e)
             flashcardsUnreadable = true
-            // Keep a copy of the unreadable payload: overwriting the key is exactly the failure
-            // mode this branch exists to prevent, so the bytes must survive somewhere recoverable.
             runCatching {
-                flashPrefs.edit().putString("flashcards_key_corrupt", json).apply()
+                flashPrefs.edit().putString("flashcards_key_corrupt", stored).apply()
             }
             emptyList()
         }
@@ -393,8 +486,17 @@ class SettingsViewModel @Inject constructor(
             return
         }
         val json = gson.toJson(newList, listType)
+        val sealed = try {
+            noteCrypto.seal(json)
+        } catch (e: Exception) {
+            // SEC-4: never fall back to plaintext. Failing the save leaves the stored deck as it
+            // was, which is recoverable; writing readable JSON to disk is not.
+            Log.e(TAG, "Could not seal the flashcards; keeping the stored deck untouched", e)
+            showToast(context.getString(R.string.restore_fix_flashcards_save_failed), context)
+            return
+        }
         flashPrefs.edit()
-            .putString("flashcards_key", json)
+            .putString("flashcards_key", sealed)
             .apply()
         flashcardsUnreadable = false
     }

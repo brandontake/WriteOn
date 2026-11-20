@@ -12,6 +12,20 @@ import com.ezpnix.writeon.core.database.Converters
 import com.ezpnix.writeon.domain.model.Note
 import kotlinx.coroutines.flow.Flow
 
+/**
+ * SEC-5: one note row exactly as the database stores it, with no decryption on the way out.
+ *
+ * The sweep that seals rows written before `NoteCrypto` existed has to look at the *stored* bytes:
+ * going through `NoteDao`'s entity mapping would hand it plain text for every legacy row (that is
+ * what the read path does) and it could never tell a plain row from a sealed one. Only the three
+ * columns the sweep can rewrite are projected, so the query stays a narrow read.
+ */
+data class LegacyNoteRow(
+    val id: Int,
+    val name: String,
+    val description: String,
+)
+
 @Dao
 @TypeConverters(Converters::class)
 interface NoteDao {
@@ -85,6 +99,50 @@ interface NoteDao {
             "WHERE id = :id AND encrypted = 1"
     )
     suspend fun updateVaultFields(id: Int, name: String, description: String): Int
+
+    /**
+     * SEC-5: every non-vault row with its text still in the form it was written in.
+     *
+     * Vault rows are excluded by the query, not filtered afterwards: their columns are ciphertext
+     * derived from the user's password, and no Keystore sweep may ever reinterpret them. This is a
+     * single pass - the sweep that consumes it runs at most once per process - and it projects only
+     * the columns it can rewrite, so it never pulls `tags` or the attachment metadata.
+     */
+    @Query(
+        "SELECT id, `note-name` AS name, `note-description` AS description " +
+            "FROM `notes-table` WHERE encrypted = 0"
+    )
+    suspend fun getLegacyPlaintextRows(): List<LegacyNoteRow>
+
+    /**
+     * SEC-5: the raw write-back for [getLegacyPlaintextRows], bypassing `EncryptedNoteDao`.
+     *
+     * The caller has already sealed whatever needed sealing and passes the other column back
+     * untouched, so running the values through the encrypting wrapper again would double-seal the
+     * fresh ciphertext. The `encrypted = 0` guard mirrors [updatePlainDescription]: a row that
+     * turned into a vault row between the read and this write must not receive Keystore ciphertext.
+     *
+     * The two `previous*` predicates make this a compare-and-swap against the exact bytes the sweep
+     * read. The sweep visits every row of the library, so a user can open a note and save it while
+     * the sweep is still working; without this, the sweep's older snapshot would be written back
+     * over text that was just typed. A row that changed since the read is simply left alone (the
+     * save already sealed it), which the caller counts as "nothing to do".
+     *
+     * @return the number of rows changed (0 when the row is gone, is now a vault row, or no longer
+     *   matches the bytes that were read).
+     */
+    @Query(
+        "UPDATE `notes-table` SET `note-name` = :name, `note-description` = :description " +
+            "WHERE id = :id AND encrypted = 0 " +
+            "AND `note-name` = :previousName AND `note-description` = :previousDescription"
+    )
+    suspend fun updateLegacyPlaintextFields(
+        id: Int,
+        previousName: String,
+        previousDescription: String,
+        name: String,
+        description: String,
+    ): Int
 
     @Query("SELECT * FROM `notes-table` WHERE id = :id")
     fun getNoteById(id: Int): Flow<Note>

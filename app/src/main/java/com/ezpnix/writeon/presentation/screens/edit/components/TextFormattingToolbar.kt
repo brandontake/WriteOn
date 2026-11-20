@@ -59,6 +59,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.ezpnix.writeon.core.attachment.AttachmentFiles
+import com.ezpnix.writeon.core.attachment.MediaVault
 import com.ezpnix.writeon.domain.model.Attachment
 import com.ezpnix.writeon.presentation.components.getImageName
 import com.ezpnix.writeon.presentation.screens.edit.model.EditViewModel
@@ -343,6 +344,15 @@ private fun saveImageToAppStorage(context: Context, uri: Uri): String {
 
     if (!copied || !imageFile.exists()) {
         android.util.Log.e(TAG, "Could not save the picked image to app storage")
+        runCatching { imageFile.delete() }
+        return ""
+    }
+
+    // SEC-4: encrypt before the path is returned, on this same IO dispatcher. Returning "" instead
+    // of a plaintext path means the caller never inserts an attachment row for it, so the rest of
+    // the app cannot reference an unencrypted file.
+    if (!MediaVault.encryptInPlace(context, imageFile)) {
+        android.util.Log.e(TAG, "Could not encrypt the picked image; dropping the plaintext copy")
         runCatching { imageFile.delete() }
         return ""
     }

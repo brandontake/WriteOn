@@ -4,9 +4,13 @@ import android.app.Application
 import android.content.Context
 import android.net.Uri
 import android.util.Log
+import com.ezpnix.writeon.core.security.DecryptFailureRegistry
+import com.ezpnix.writeon.core.util.BackupRestoreLock
 import com.ezpnix.writeon.data.local.database.BackupDatabase
+import com.ezpnix.writeon.data.local.database.NoteSealFormat
 import com.ezpnix.writeon.domain.model.Note
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.io.ByteArrayOutputStream
 import java.io.IOException
@@ -23,8 +27,28 @@ object TxtBackupHelper {
 
     data class ExportNote(val title: String, val content: String)
 
+    /**
+     * The rows a `.txt` package may contain, plus why the others were left out (DAT-3/DAT-13).
+     *
+     * A TXT package has no encryption and no attachment channel, so exporting a vault row would
+     * write its `v2:` ciphertext as body text, and exporting a failed row would write the
+     * localized "cannot decrypt" placeholder. Both turn a readable archive into misleading
+     * garbage, so they are skipped and counted instead.
+     */
+    internal data class ExportSelection(
+        val notes: List<ExportNote>,
+        val skippedVault: Int,
+        val skippedUndecryptable: Int,
+        val skippedSealedText: Int,
+    ) {
+        val skippedTotal: Int get() = skippedVault + skippedUndecryptable + skippedSealedText
+    }
+
     /** One `.txt` member as read back from a package: its text plus whether the cap cut it (D12). */
     internal data class EntryContent(val text: String, val truncated: Boolean)
+
+    /** Prefix of a vault value sealed with the user's password (see EncryptionHelper). */
+    private const val VAULT_MARKER = "v2:"
 
     /**
      * D12: hard ceiling on a single imported entry, in bytes of UTF-8.
@@ -39,13 +63,19 @@ object TxtBackupHelper {
     suspend fun writeNotesToZipStream(context: Context, uri: Uri) = withContext(Dispatchers.IO) {
         val outputStream = context.contentResolver.openOutputStream(uri)
             ?: throw IOException(context.getString(R.string.export_failed, ""))
-        ZipOutputStream(outputStream).use { zipOut ->
-            getAllNotes(context).forEachIndexed { index, note ->
-                val baseName = note.title.ifBlank { context.getString(R.string.untitled) }
-                val filename = sanitizeFileName("${index + 1}_$baseName") + ".txt"
-                zipOut.putNextEntry(ZipEntry(filename))
-                zipOut.write(note.content.toByteArray())
-                zipOut.closeEntry()
+        // DAT-8: the decrypted note snapshot and the zip written from it are one unit; a restore
+        // that closes and replaces the database must not land between the query and the writes.
+        // The SAF stream was opened before the lock so waiting for a restore never leaves a
+        // half-claimed document behind.
+        BackupRestoreLock.mutex.withLock {
+            ZipOutputStream(outputStream).use { zipOut ->
+                getAllNotes(context).forEachIndexed { index, note ->
+                    val baseName = note.title.ifBlank { context.getString(R.string.untitled) }
+                    val filename = sanitizeFileName("${index + 1}_$baseName") + ".txt"
+                    zipOut.putNextEntry(ZipEntry(filename))
+                    zipOut.write(note.content.toByteArray())
+                    zipOut.closeEntry()
+                }
             }
         }
     }
@@ -70,45 +100,53 @@ object TxtBackupHelper {
     suspend fun restoreNotesFromZipStream(context: Context, uri: Uri) {
         withContext(Dispatchers.IO) {
             val inputStream = context.contentResolver.openInputStream(uri) ?: return@withContext
-            val dbProvider = BackupDatabase.provider(context)
-            val dao = dbProvider.noteDao()
-            val untitled = context.getString(R.string.untitled)
-            val existing = dao.getAllNotesSync()
-                .mapTo(HashSet()) { note -> noteKey(note.name, note.description, untitled) }
+            // DAT-8: the read and the inserts are one unit relative to any database close/swap.
+            // Without this lock a restore could close the shared Room connection (or replace the
+            // file underneath it) between two entries, which imported half the archive into the
+            // outgoing database. Same order as the export above: the SAF stream is opened before
+            // the lock, so waiting for a restore never leaves a half-claimed document behind.
+            BackupRestoreLock.mutex.withLock {
+                val dbProvider = BackupDatabase.provider(context)
+                val dao = dbProvider.noteDao()
+                val untitled = context.getString(R.string.untitled)
+                val existing = dao.getAllNotesSync()
+                    .mapTo(HashSet()) { note -> noteKey(note.name, note.description, untitled) }
 
-            var imported = 0
-            var skipped = 0
-            var truncated = 0
+                var imported = 0
+                var skipped = 0
+                var truncated = 0
 
-            java.util.zip.ZipInputStream(inputStream).use { zipIn ->
-                var entry = zipIn.nextEntry
-                while (entry != null) {
-                    if (!entry.isDirectory && entry.name.endsWith(".txt")) {
-                        val read = readCurrentZipEntry(zipIn)
-                        if (read.truncated) truncated++
+                java.util.zip.ZipInputStream(inputStream).use { zipIn ->
+                    var entry = zipIn.nextEntry
+                    while (entry != null) {
+                        if (!entry.isDirectory && entry.name.endsWith(".txt")) {
+                            val read = readCurrentZipEntry(zipIn)
+                            if (read.truncated) truncated++
 
-                        val fileName = entry.name.removeSuffix(".txt")
-                        val title = fileName.substringAfter("_").ifBlank { untitled }
+                            val fileName = entry.name.removeSuffix(".txt")
+                            val title = fileName.substringAfter("_").ifBlank { untitled }
 
-                        if (isDuplicate(existing, title, read.text, untitled)) {
-                            skipped++
-                        } else {
-                            dao.addNote(Note(id = 0, name = title, description = read.text))
-                            imported++
+                            if (isDuplicate(existing, title, read.text, untitled)) {
+                                skipped++
+                            } else {
+                                dao.addNote(Note(id = 0, name = title, description = read.text))
+                                imported++
+                            }
                         }
+                        zipIn.closeEntry()
+                        entry = zipIn.nextEntry
                     }
-                    zipIn.closeEntry()
-                    entry = zipIn.nextEntry
                 }
-            }
 
-            // Counts go to logcat only: the restore screen keeps its single generic confirmation and
-            // the caller restarts the process right after, so there is no surface to report on yet.
-            Log.i(
-                TAG,
-                "TXT restore: $imported imported, $skipped skipped as duplicates, " +
-                    "$truncated entries truncated at $MAX_ENTRY_BYTES bytes"
-            )
+                // Counts go to logcat only: the restore screen keeps its single generic
+                // confirmation and the caller restarts the process right after, so there is no
+                // surface to report on yet.
+                Log.i(
+                    TAG,
+                    "TXT restore: $imported imported, $skipped skipped as duplicates, " +
+                        "$truncated entries truncated at $MAX_ENTRY_BYTES bytes"
+                )
+            }
         }
     }
 
@@ -205,8 +243,68 @@ object TxtBackupHelper {
     private suspend fun getAllNotes(context: Context): List<ExportNote> {
         val dbProvider = BackupDatabase.provider(context)
         val dao = dbProvider.noteDao()
-        return dao.getAllNotesSync().map { ExportNote(it.name, it.description) }
+
+        // getAllNotesSync decrypts through EncryptedNoteDao, which also refreshes the active
+        // DecryptFailureRegistry scope from exactly this snapshot. Reading the registry right
+        // after therefore names the rows whose body is currently a placeholder; the marker scan
+        // inside selectExportableNotes only adds defence in depth for a sealed value that somehow
+        // reached a non-vault row.
+        val allNotes = dao.getAllNotesSync()
+        val selection = selectExportableNotes(allNotes, DecryptFailureRegistry.failedIds.value)
+        if (selection.skippedTotal > 0) {
+            Log.w(
+                TAG,
+                "TXT export skipped ${selection.skippedTotal} of ${allNotes.size} rows: " +
+                    "${selection.skippedVault} vault, ${selection.skippedUndecryptable} " +
+                    "undecryptable, ${selection.skippedSealedText} still sealed. A .txt package " +
+                    "never receives placeholder text or ciphertext."
+            )
+        }
+        return selection.notes
     }
+
+    /**
+     * DAT-3/DAT-13: decides which rows may be written as readable `.txt` bodies.
+     *
+     * Pure so the policy is testable without a Context or a database. [failedIds] is the
+     * [DecryptFailureRegistry] snapshot taken after the same read; a row in it holds placeholder
+     * text and must not be exported. Vault rows (`encrypted`) hold `v2:` ciphertext sealed with
+     * the user's password and are skipped because a TXT package cannot carry the key. The final
+     * marker check is defence in depth for a sealed value that reached a non-vault row.
+     */
+    internal fun selectExportableNotes(notes: List<Note>, failedIds: Set<Int>): ExportSelection {
+        val exportable = ArrayList<ExportNote>(notes.size)
+        var skippedVault = 0
+        var skippedUndecryptable = 0
+        var skippedSealedText = 0
+
+        notes.forEach { note ->
+            when {
+                note.encrypted -> skippedVault++
+                note.id in failedIds -> skippedUndecryptable++
+                hasStoredCiphertext(note) -> skippedSealedText++
+                else -> exportable += ExportNote(note.name, note.description)
+            }
+        }
+
+        return ExportSelection(exportable, skippedVault, skippedUndecryptable, skippedSealedText)
+    }
+
+    /**
+     * True when either stored column still carries a marker that only a ciphertext can have.
+     *
+     * V-11: the `w1:` prefix alone is not proof. A legacy plain note can legitimately start with
+     * those three characters ("w1:hello"), and skipping it made a readable note silently missing
+     * from the TXT export. [NoteSealFormat] requires a base64 payload longer than the IV, which is
+     * the smallest shape the sealer can produce; a truncated payload still fails later in
+     * [NoteCrypto.openOrNull] and is caught by the decrypt-failure registry or this structural
+     * filter.
+     */
+    private fun hasStoredCiphertext(note: Note): Boolean =
+        note.name.startsWith(VAULT_MARKER) ||
+            note.description.startsWith(VAULT_MARKER) ||
+            NoteSealFormat.isSealedValue(note.name) ||
+            NoteSealFormat.isSealedValue(note.description)
 
     internal fun sanitizeFileName(name: String): String {
         return name.replace(Regex("[\\\\/:*?\"<>|]"), "_")

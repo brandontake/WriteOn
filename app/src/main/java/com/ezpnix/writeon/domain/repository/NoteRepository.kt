@@ -58,6 +58,31 @@ interface NoteRepository {
     suspend fun getAllTags(): List<String>
     suspend fun batchUpdateNotes(notes: List<Note>)
 
+    /**
+     * SEC-5: seals every non-vault row still stored as plain text.
+     *
+     * A row written before note encryption existed (an upgraded install, an old restored database)
+     * keeps its text in the clear until that note is next saved. This sweep is idempotent: already
+     * sealed columns are left untouched, so it is cheap to call on startup.
+     *
+     * @return how many rows could not be sealed (a Keystore failure); 0 means the library is fully
+     *   sealed and the caller may record the backfill as done.
+     */
+    suspend fun sealLegacyPlaintextRows(): Int
+
+    /**
+     * SEC-4: seals every attachment caption still stored as plain text.
+     *
+     * A portable archive carries plaintext captions by design (its own password protects the
+     * archive; a local Keystore seal would not survive the trip), so restored rows stay readable
+     * until each is next saved. This is the proactive sweep for that, and the lazy counterpart of
+     * the caption sealing every ordinary write already performs.
+     *
+     * @return how many rows could not be sealed and remain plain; 0 means the library is fully
+     *   sealed and the caller may record the backfill as done.
+     */
+    suspend fun sealLegacyCaptions(): Int
+
     // 2.0 attachments: note bodies only hold `attachment://<id>`, the path lives here.
     suspend fun getAllAttachments(): List<Attachment>
     suspend fun getAttachmentsForNote(noteId: Int): List<Attachment>

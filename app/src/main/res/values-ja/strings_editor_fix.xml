@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- エディタの保存/取り消し修正（DAT-9、DAT-12、UX-1、UX-2、SEC-7）。 -->
+<resources>
+    <string name="editor_fix_saving">保存中…</string>
+    <string name="editor_fix_saved">保存しました</string>
+    <string name="editor_fix_save_failed">保存できませんでした</string>
+    <string name="editor_fix_retry">再試行</string>
+    <string name="editor_fix_moved_to_trash">ゴミ箱に移動しました</string>
+    <string name="editor_fix_undo_unavailable">取り消せる保存がありません（ノートは残っています）</string>
+    <string name="editor_fix_vault_draft_disabled">保管庫のノートは下書きを保存しません。離れる前に保存してください</string>
+</resources>

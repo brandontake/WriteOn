@@ -38,6 +38,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -53,6 +54,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.ezpnix.writeon.R
+import com.ezpnix.writeon.core.attachment.MediaVault
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -101,7 +103,19 @@ fun AudioPlayerCard(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
-    val isCurrent = GlobalAudioPlayer.currentPlayingPath == audioUri
+    // SEC-4: `audioUri` is either the stored file (a caller that holds the attachment row) or a
+    // decrypted copy (the markdown renderer resolves through AttachmentRegistry). Resolving again is
+    // idempotent - the vault returns a plaintext path unchanged - so legacy plaintext recordings
+    // keep exactly the old behaviour, and a caller that passes an encrypted path still plays.
+    var playableUri by remember(audioUri) { mutableStateOf(audioUri) }
+    LaunchedEffect(audioUri) {
+        val resolved = withContext(Dispatchers.IO) { AttachmentRegistry.openablePath(audioUri) }
+        // Null means the file is gone or the key cannot open it; keep the stored path so the
+        // player reports a real failure instead of silently playing ciphertext.
+        if (resolved != null) playableUri = resolved
+    }
+
+    val isCurrent = GlobalAudioPlayer.currentPlayingPath == playableUri
     val isPlaying = isCurrent && GlobalAudioPlayer.isPlaying
     val progress = if (isCurrent) GlobalAudioPlayer.progress else 0f
     val currentPositionMs = if (isCurrent) GlobalAudioPlayer.currentPositionMs else 0
@@ -109,8 +123,17 @@ fun AudioPlayerCard(
     val speed = GlobalAudioPlayer.speed
 
     val file = remember(audioUri) { File(audioUri) }
+    // A decrypted copy is named after a hash of the source path, so its file name is not something
+    // to show or to offer as an export name; the stored caption takes over in that case.
+    val isMaterializedCopy = remember(audioUri) {
+        file.parentFile?.absolutePath ==
+            File(context.cacheDir, MediaVault.CACHE_DIRECTORY).absolutePath
+    }
     val storedLabel = AudioLabelStore.label(context, audioUri)
-    val displayName = storedLabel
+    val visibleLabel = storedLabel
+        .takeUnless { isMaterializedCopy && it == file.name }
+        .orEmpty()
+    val displayName = visibleLabel
         .ifBlank { caption.orEmpty().trim() }
         .ifBlank { stringResource(R.string.audio_recording_label) }
 
@@ -128,9 +151,10 @@ fun AudioPlayerCard(
     // memo falls back to its own file name instead of the localized "Voice Memo" default, because
     // that placeholder cannot tell two saved recordings apart. Characters that FAT/exFAT cards
     // reject are replaced, and the stem is capped so the picker never sees an over-long name.
-    val exportName = remember(storedLabel, file) {
-        val stem = storedLabel
-            .ifBlank { file.nameWithoutExtension }
+    val exportName = remember(storedLabel, file, caption, isMaterializedCopy) {
+        val stem = visibleLabel
+            .ifBlank { caption.orEmpty().trim() }
+            .ifBlank { if (isMaterializedCopy) "" else file.nameWithoutExtension }
             .replace(Regex("[\\\\/:*?\"<>|]"), "_")
             .trim()
             .trimEnd('.')
@@ -147,8 +171,14 @@ fun AudioPlayerCard(
         scope.launch {
             val saved = withContext(Dispatchers.IO) {
                 runCatching {
+                    // SEC-4: copy the decrypted bytes, never a WMV1 container. `openablePath`
+                    // returns a plaintext recording unchanged and null when decryption fails, so a
+                    // save fails visibly instead of producing an unplayable export.
+                    val readable = AttachmentRegistry.openablePath(audioUri)
+                        ?.let(::File)
+                        ?: error("No readable audio for $audioUri")
                     context.contentResolver.openOutputStream(uri)?.use { output ->
-                        file.inputStream().use { input -> input.copyTo(output) }
+                        readable.inputStream().use { input -> input.copyTo(output) }
                     } ?: error("No output stream for $uri")
                 }.isSuccess
             }
@@ -176,7 +206,7 @@ fun AudioPlayerCard(
             verticalAlignment = Alignment.CenterVertically
         ) {
             FilledIconButton(
-                onClick = { GlobalAudioPlayer.playOrPause(audioUri) },
+                onClick = { GlobalAudioPlayer.playOrPause(playableUri) },
                 colors = IconButtonDefaults.filledIconButtonColors(
                     containerColor = MaterialTheme.colorScheme.primary,
                     contentColor = MaterialTheme.colorScheme.onPrimary

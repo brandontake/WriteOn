@@ -15,7 +15,10 @@ import com.ezpnix.writeon.domain.repository.NoteRepository
 import com.ezpnix.writeon.core.security.DecryptFailureRegistry
 import com.ezpnix.writeon.core.security.DecryptionResult
 import com.ezpnix.writeon.core.security.EncryptionHelper
+import com.ezpnix.writeon.core.util.RestoreCoordinator
 import com.ezpnix.writeon.core.widget.WidgetRefresher
+import com.ezpnix.writeon.data.local.database.LegacyCaptionBackfillFlag
+import com.ezpnix.writeon.data.local.database.LegacyPlaintextBackfillFlag
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -34,8 +37,21 @@ import kotlinx.coroutines.flow.shareIn
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 import javax.inject.Inject
+import javax.inject.Singleton
 
+/**
+ * The process-wide note list, shared by every screen and widget.
+ *
+ * PERF-3: this used to be unscoped, so Hilt built one instance per injection point (home, editor,
+ * settings, the widget configuration screen, every widget edit). Each of those owned its own
+ * [notes] state and its own collectors - and because [observe] launches into the application-wide
+ * scope, those collectors were never cancelled. A singleton (with an idempotent [observe]) is what
+ * makes "the note list" mean one list, one query and one decryption pass per emission.
+ */
+@Singleton
 class NoteUseCase @Inject constructor(
     // The domain layer talks to the repository *interface*: a fake implementation is what makes
     // "attachment reconciliation", "undo save" and the deletion order testable at all, and the
@@ -78,25 +94,194 @@ class NoteUseCase @Inject constructor(
     private var observeTagsJob: Job? = null
 
     /**
+     * V-5: generation of the live list, advanced by [clearSensitiveState].
+     *
+     * Cancelling a collector is not enough on its own. The CPU-heavy part of an emission runs in a
+     * `withContext(Dispatchers.Default)` block that has no suspension point, so a lock arriving
+     * mid-decrypt cancels the coroutine only after it finishes - and the `notes = ...` that follows
+     * would put the plaintext list straight back into memory behind the lock screen. Both
+     * collectors capture this value before the hop and assign only if it is still current.
+     */
+    private val loadEpoch = NoteLoadEpoch()
+
+    /**
+     * SEC-5/SEC-4: claims the one legacy-backfill pass this process gets.
+     *
+     * [observe] is called on every unlock, so without this the sweeps would run again each time.
+     * It is a process-lifetime latch, not the persisted flags: those say "the job is finished for
+     * good", this says "this process already tried". One latch (and one coroutine) is deliberate -
+     * the caption reset depends on reading the note marker before the note sweep re-marks it.
+     */
+    private val legacyBackfillAttempted = AtomicBoolean(false)
+
+    /**
      * P-5: one table stream shared by the note list and the tag index.
      *
      * Both observers used to call `getAllNotes()` independently, so every save made Room read the
-     * whole notes table twice - and [EncryptedNoteDao] decrypted every row on each copy. `shareIn`
+     * whole notes table twice - and [EncryptedNoteDao] decrypted every row on each copy. Sharing
      * keeps one upstream query and one decryption pass; the tag observer only derives a small list
-     * from the same emission. `WhileSubscribed` lets the query stop when no screen is listening.
+     * from the same emission.
+     *
+     * PERF-3/SEC-6: the shared flow is nullable and dropped by [clearSensitiveState]. Its replay
+     * slot holds the last *decrypted* list, so keeping the flow alive behind the lock screen would
+     * leave exactly the plaintext the lock is supposed to evict. `WhileSubscribed(0)` (rather than a
+     * grace timeout) means the only moment both collectors stop - a lock - also stops the upstream
+     * query immediately instead of five seconds later.
      */
-    private val notesSource: SharedFlow<List<Note>> by lazy {
-        noteRepository.getAllNotes().shareIn(
+    private var notesSource: SharedFlow<List<Note>>? = null
+
+    private fun sharedNotes(): SharedFlow<List<Note>> =
+        notesSource ?: noteRepository.getAllNotes().shareIn(
             scope = coroutineScope,
-            started = SharingStarted.WhileSubscribed(5_000),
+            started = SharingStarted.WhileSubscribed(0),
             replay = 1,
-        )
+        ).also { notesSource = it }
+
+    /**
+     * DAT-7: this singleton is the process-wide collector pause for a database restore.
+     *
+     * A restore closes the shared Room connection before swapping the file, and these collectors
+     * are the process's largest Flow subscriber - left running they query a closed connection and
+     * crash inside the restart window. Registering here (rather than making the restore paths know
+     * about [NoteUseCase]) keeps the dependency one-way: the coordinator is a plain object and this
+     * class only ever pushes listeners into it, so Hilt still constructs `NoteUseCase` exactly as
+     * before.
+     *
+     * [clearSensitiveState] also drops the decrypted list and the shared flow's replay slot. That
+     * is deliberate: while the database is being replaced there is no version of the list that is
+     * not about to describe a file that no longer exists, and a failed restore reloads through
+     * [observe] rather than publishing stale plaintext.
+     */
+    init {
+        RestoreCoordinator.onBegin { clearSensitiveState() }
+        // `observe()` reads and replaces the collector job references, and every other caller runs
+        // it on the main dispatcher. A worker's failure path calls end() from IO, so hop to the
+        // injected scope rather than racing those reads from a background thread.
+        RestoreCoordinator.onEnd { coroutineScope.launch { observe() } }
     }
 
+    /**
+     * Starts the collectors once and leaves them running.
+     *
+     * PERF-3: this used to cancel and restart both collectors on every call, and Home called it
+     * after every pin/tag/delete. Starting an already-running observer is now a no-op; use
+     * [refresh] when the data really has to be reprocessed (the vault password changed). Attachment
+     * ids are filled once per start - they are not part of the locked note body and survive a lock.
+     */
     fun observe() {
+        // DAT-7: a reload queued by a failed restore must not start collectors into a retry that
+        // has already begun (the close-and-swap would then be racing live queries again). The
+        // retry's own end() - or the next unlock - is what starts them.
+        if (RestoreCoordinator.restoring.value) return
+        // SEC-5/SEC-4: independent of the collectors. The sweeps need only the database and the
+        // Keystore, and the guard inside makes the repeated calls (every unlock) free.
+        sealLegacyBackfillsOnce()
+        val alreadyObserving = observeKeysJob?.isActive == true && observeTagsJob?.isActive == true
+        if (alreadyObserving) return
+        if (observeKeysJob?.isActive != true) observeNotes()
+        if (observeTagsJob?.isActive != true) observeTags()
+        coroutineScope.launch { refreshAttachments() }
+    }
+
+    /**
+     * SEC-5/SEC-4: seals legacy plaintext note rows and attachment captions, once per process.
+     *
+     * Both jobs protect data a restore can bring back readable - an upgraded install, or a database
+     * restored from a portable archive - and neither can wait for each row's next save, which for
+     * an unedited note or recording is never. They run in one coroutine so the note marker can be
+     * read before the note sweep re-marks it: `RestoreSnapshots` clears only the note marker, and
+     * seeing it absent here is what re-arms the caption sweep for the database it restored.
+     *
+     * They run off the main thread and publish nothing: [observe] must return immediately so the
+     * list, the tags and the widget render on the normal path, and the sealed rows come back to the
+     * UI through Room's own emission like any other write.
+     *
+     * Each persisted flag is only written when its sweep had no failures. A Keystore that is
+     * temporarily unavailable must not turn those rows permanently plain: no flag means the next
+     * launch tries again, and a successful retry is the only thing that ends the loop.
+     */
+    private fun sealLegacyBackfillsOnce() {
+        // Claimed before any I/O: two observe() calls racing at startup must launch one pass, and
+        // the winner is the only one allowed to write the flags.
+        if (!legacyBackfillAttempted.compareAndSet(false, true)) return
+        coroutineScope.launch(Dispatchers.IO) {
+            // Read on IO: even the flag check is a disk access, and observe() runs on the UI thread.
+            // It has to happen before the note sweep below, which is the only writer of this flag.
+            val noteAlreadyDone = LegacyPlaintextBackfillFlag.isDone(context)
+            if (!noteAlreadyDone) {
+                // SEC-4: a restore that only knows the note flag (RestoreSnapshots' `.bak` undo)
+                // cannot clear this one. An absent note marker therefore means the caption marker
+                // may describe the database that was just replaced, so re-arm it here.
+                LegacyCaptionBackfillFlag.reset(context)
+            }
+
+            sealLegacyPlaintextRows(noteAlreadyDone)
+            sealLegacyCaptions()
+        }
+    }
+
+    /** SEC-5 half of [sealLegacyBackfillsOnce]; [alreadyDone] was read before the caption reset. */
+    private suspend fun sealLegacyPlaintextRows(alreadyDone: Boolean) {
+        if (alreadyDone) return
+
+        val failures = try {
+            noteRepository.sealLegacyPlaintextRows()
+        } catch (e: CancellationException) {
+            // A real cancellation (the process going away) leaves the flag unwritten, so the
+            // next launch retries - exactly what should happen for work that did not finish.
+            throw e
+        } catch (e: Exception) {
+            // A closed database (a restore swapping the file) or an unreachable Keystore.
+            Log.w(TAG, "Legacy plaintext sweep failed; retrying on the next launch", e)
+            return
+        }
+
+        if (failures == 0) {
+            LegacyPlaintextBackfillFlag.markDone(context)
+        } else {
+            Log.w(
+                TAG,
+                "$failures note rows are still stored as plain text; retrying on the next launch"
+            )
+        }
+    }
+
+    /** SEC-4 half of [sealLegacyBackfillsOnce]. */
+    private suspend fun sealLegacyCaptions() {
+        if (LegacyCaptionBackfillFlag.isDone(context)) return
+
+        val failures = try {
+            noteRepository.sealLegacyCaptions()
+        } catch (e: CancellationException) {
+            // Leaving the flag unwritten is exactly right for work that did not finish.
+            throw e
+        } catch (e: Exception) {
+            // A closed database (a restore swapping the file) or an unreachable Keystore.
+            Log.w(TAG, "Legacy caption sweep failed; retrying on the next launch", e)
+            return
+        }
+
+        if (failures == 0) {
+            LegacyCaptionBackfillFlag.markDone(context)
+        } else {
+            Log.w(
+                TAG,
+                "$failures attachment captions are still stored as plain text; retrying on the next launch"
+            )
+        }
+    }
+
+    /**
+     * Re-reads the list through the current vault password.
+     *
+     * Replacing the collectors (rather than a plain [observe]) is deliberate: a fresh collector
+     * receives the shared flow's replay - the last raw rows - and [processNotes] therefore runs
+     * again with the password that has just been loaded. That is how the rows that were hidden
+     * while the vault was locked come back without a database write.
+     */
+    fun refresh() {
         observeNotes()
         observeTags()
-        coroutineScope.launch { refreshAttachments() }
     }
 
     /**
@@ -139,34 +324,111 @@ class NoteUseCase @Inject constructor(
     /**
      * Loads the notes once and stops.
      *
-     * Widgets need this: [observe] starts collectors that refresh every widget on every emission,
-     * so a collector started from inside a widget's own composition refreshed the widget, which
-     * recomposed and started the collector again. Reading once outside the composition ends that
-     * loop.
+     * Kept for callers that cannot start collectors at all. Widgets must use [loadNoteOnce] now:
+     * PERF-6 showed that a full library read per widget refresh decrypted every row, and the
+     * launcher decides when that refresh happens. This method also replaces the shared [notes]
+     * list, so a widget calling it would publish plaintext into whatever Home is rendering.
      */
     suspend fun loadNotesOnce() {
+        // Same epoch guard as the collectors: this is a load a widget or screen waited on, and a
+        // lock that landed while it decrypted must win over the load that was already in flight.
+        val epoch = loadEpoch.current()
         val sourceNotes = withContext(Dispatchers.IO) { noteRepository.getAllNotes().first() }
-        notes = withContext(Dispatchers.Default) { processNotes(sourceNotes) }
+        val processed = withContext(Dispatchers.Default) { processNotes(sourceNotes) }
+        if (!loadEpoch.isCurrent(epoch)) return
+        applyProcessed(processed)
     }
 
-    private fun processNotes(sourceNotes: List<Note>): List<Note> {
+    /**
+     * Reads exactly one row, for a widget that is configured to show it.
+     *
+     * PERF-6: the widget used to run [loadNotesOnce], which queries and decrypts the whole
+     * library on every launcher refresh. `getNoteById` touches one row. Nothing global is written -
+     * [notes], [tags], [hiddenVaultCount] and [decryptionResult] belong to the app's list, and a
+     * widget filling them from one row would overwrite the state Home is rendering.
+     *
+     * @return the decrypted row, or null when it does not exist or is still sealed because the
+     *   vault password is not loaded (the widget then renders its zero state, never ciphertext).
+     */
+    suspend fun loadNoteOnce(noteId: Int): Note? {
+        if (noteId <= 0) return null
+        val stored = withContext(Dispatchers.IO) {
+            noteRepository.getNoteById(noteId).firstOrNull()
+        } ?: return null
+        // `getNoteById` has no `trashed = 0` filter (the editor and the recycle bin need it).
+        // The widget used to read the live-list query, so a note moved to the bin disappeared
+        // from it; keep that behaviour instead of showing deleted content on the launcher.
+        if (stored.trashed) return null
+        return withContext(Dispatchers.Default) {
+            if (!stored.encrypted) {
+                stored
+            } else {
+                val (decrypted, status) = decryptNote(stored)
+                decrypted.takeIf { status == DecryptionResult.SUCCESS }
+            }
+        }
+    }
+
+    /**
+     * Drops every decrypted copy of the note list (SEC-6).
+     *
+     * An app lock used to be a screen overlay: `LockManager` flipped a flag, the UI was hidden, and
+     * every plaintext body stayed in the heap. This is the other half of the lock - it cancels the
+     * collectors (otherwise the next Room emission repopulates [notes] behind the lock screen),
+     * clears the list and drops the shared flow whose replay slot holds the last decrypted rows.
+     *
+     * The vault password and `NoteCrypto`'s cache are cleared by [LockManager] next to this call;
+     * this class deliberately does not know about either. The unlock path calls [observe] again,
+     * which is what brings the list back.
+     *
+     * V-5: cancelling is not enough. A decrypt that is already inside `Dispatchers.Default` runs to
+     * completion (there is no suspension point to cancel), so [loadEpoch] is advanced here and the
+     * collectors skip their assignment if the generation moved under them.
+     */
+    fun clearSensitiveState() {
+        // Advance first, before anything else: a decrypt already running on Dispatchers.Default
+        // checks this value when it finishes, and it must already see the new generation.
+        loadEpoch.advance()
+        observeKeysJob?.cancel()
+        observeTagsJob?.cancel()
+        observeKeysJob = null
+        observeTagsJob = null
+        // Dropping the reference releases the replay slot. The sharing coroutine stops on its own
+        // because WhileSubscribed(0) has no subscribers left.
+        notesSource = null
+        notes = emptyList()
+        // Derived from [notes]; a hidden drawer must not keep tag names either.
+        tags = emptyList()
+        hiddenVaultCount = 0
+        // Not EMPTY: nothing has been loaded since the lock, and EMPTY would read as "no notes".
+        decryptionResult = DecryptionResult.LOADING
+    }
+
+    /**
+     * Decrypts one database emission into the state [NoteUseCase] publishes.
+     *
+     * V-5: pure with respect to the shared state. It used to assign [decryptionResult] and
+     * [hiddenVaultCount] while it mapped, which meant a decrypt that finished after a lock had
+     * already written those back (they are part of what the lock hides). The caller applies the
+     * result only when [loadEpoch] still matches the generation it started in.
+     */
+    private fun processNotes(sourceNotes: List<Note>): ProcessedNotes {
         // A genuinely empty library is loaded, not loading: the home screen uses LOADING below to
         // decide whether to show its first-frame spinner, and this state used to survive forever.
         if (sourceNotes.isEmpty()) {
-            this.decryptionResult = DecryptionResult.EMPTY
-            this.hiddenVaultCount = 0
-            return emptyList()
+            return ProcessedNotes(emptyList(), DecryptionResult.EMPTY, 0)
         }
+        var result = DecryptionResult.LOADING
         val hasUnencryptedNotes = sourceNotes.any { !it.encrypted }
         if (!hasUnencryptedNotes) {
-            this.decryptionResult = DecryptionResult.EMPTY
+            result = DecryptionResult.EMPTY
         }
         var hiddenVault = 0
         var sawPlainNote = false
         val processed = sourceNotes.mapNotNull { note ->
             if (note.encrypted) {
                 val (decryptedNote, status) = decryptNote(note)
-                this.decryptionResult = status
+                result = status
                 if (status == DecryptionResult.SUCCESS) decryptedNote else {
                     hiddenVault++
                     null
@@ -182,25 +444,35 @@ class NoteUseCase @Inject constructor(
         // Keep a vault failure (BAD_PASSWORD / LOADING) visible even when plain notes also loaded;
         // only promote the state to SUCCESS when every row that had work to do succeeded.
         if (sawPlainNote &&
-            this.decryptionResult == DecryptionResult.LOADING &&
+            result == DecryptionResult.LOADING &&
             hiddenVault == 0
         ) {
-            this.decryptionResult = DecryptionResult.SUCCESS
+            result = DecryptionResult.SUCCESS
         }
-        this.hiddenVaultCount = hiddenVault
-        return processed
+        return ProcessedNotes(processed, result, hiddenVault)
+    }
+
+    /** Publishes one [processNotes] result; always on the collector's thread (Main). */
+    private fun applyProcessed(processed: ProcessedNotes) {
+        decryptionResult = processed.decryptionResult
+        hiddenVaultCount = processed.hiddenVaultCount
+        notes = processed.notes
     }
 
     private fun observeNotes() {
         observeKeysJob?.cancel()
         observeKeysJob = coroutineScope.launch {
-            notesSource.collectLatest { sourceNotes ->
+            sharedNotes().collectLatest { sourceNotes ->
+                // Captured before the hop: a lock that lands while the block below runs advances
+                // the generation, and the assignment must then not happen.
+                val epoch = loadEpoch.current()
                 // Decrypting every note touches the Keystore, so it must stay off the main thread.
-                val processedNotes = withContext(Dispatchers.Default) { processNotes(sourceNotes) }
+                val processed = withContext(Dispatchers.Default) { processNotes(sourceNotes) }
+                if (!loadEpoch.isCurrent(epoch)) return@collectLatest
                 val previousIds = notes.map { it.id }
-                this@NoteUseCase.notes = processedNotes
+                applyProcessed(processed)
                 // Refreshing on an unchanged list made the widget recompose for nothing.
-                if (previousIds != processedNotes.map { it.id }) {
+                if (previousIds != processed.notes.map { it.id }) {
                     widgetRefresher.refreshAll()
                 }
             }
@@ -210,7 +482,10 @@ class NoteUseCase @Inject constructor(
     private fun observeTags() {
         observeTagsJob?.cancel()
         observeTagsJob = coroutineScope.launch {
-            notesSource.collectLatest { notes ->
+            sharedNotes().collectLatest { notes ->
+                // Same generation guard as observeNotes: a tag list derived after the lock is
+                // still data from the decrypted library and must not be published either.
+                val epoch = loadEpoch.current()
                 // P-5: the injected scope runs on Dispatchers.Main, so this collectLatest body -
                 // a flatten + trim + lowercase + distinct + sort over every tag in the library -
                 // used to run on the UI thread on *every* database emission. `observeNotes` above
@@ -223,6 +498,7 @@ class NoteUseCase @Inject constructor(
                         .sorted()
                         .filter { it.isNotBlank() }
                 }
+                if (!loadEpoch.isCurrent(epoch)) return@collectLatest
                 tags = newTags
             }
         }
@@ -240,10 +516,10 @@ class NoteUseCase @Inject constructor(
         check(!encryptionHelper.isPasswordEmpty()) {
             "Refusing to save a vault note while the vault is locked"
         }
-        // This is also the vault's lazy upgrade point (A4): decrypt() reads the pre-PBKDF2 layout
-        // without rewriting it, so a legacy note keeps the weak single-SHA-256 format until the
-        // user saves it. encrypt() always seals with the current v2/PBKDF2 layout, which upgrades
-        // the row here - on a real save, never on a list read.
+        // This is also the vault's lazy upgrade point (A4/PERF-2): decrypt() reads the v2 and
+        // pre-PBKDF2 layouts without rewriting them, so an old note keeps its per-row key until the
+        // user saves it. encrypt() always seals with the current v3 envelope, which upgrades the
+        // row here - on a real save, never on a list read.
         return note.copy(
             name = encryptionHelper.encrypt(note.name),
             description = encryptionHelper.encrypt(note.description),
@@ -252,18 +528,27 @@ class NoteUseCase @Inject constructor(
     }
 
     /**
-     * A4: re-seals every vault row still written in the pre-PBKDF2 layout.
+     * A4/PERF-2: re-seals every vault row that is not yet in the envelope (`v3:`) layout.
      *
-     * The legacy layout derived its key with a single SHA-256 pass over the passphrase, which is
-     * the one part of the vault a stolen database file could brute-force. It used to be upgraded
-     * only when the user happened to open *and save* that exact note, so a library the user
-     * restored or never edited again could keep the weak format indefinitely. This sweep runs once
-     * per unlock - the only moment the passphrase is in memory - and rewrites the rows it can
-     * positively authenticate.
+     * Two formats predate the envelope: `v2:` rows derived a key with PBKDF2 from a salt embedded
+     * in each row, and the legacy rows derived it with a single SHA-256 pass. Unlocking a library
+     * used to pay one 120k-iteration derivation per `v2` row, which is what made a few hundred vault
+     * notes take tens of seconds; the envelope derives one library KEK instead. This sweep is how an
+     * existing library reaches that state: it runs once per unlock - the only moment the passphrase
+     * is in memory - and rewrites every row it can positively authenticate.
      *
-     * A row where a legacy field does not authenticate (wrong passphrase, or a row that was never
-     * really vault-sealed) is left byte-for-byte untouched, and an unsealed field is never
-     * rewritten either: the Keystore-sealed layout has nothing to do with the vault's.
+     * The first unlock of a library written by an older build still pays the old per-row PBKDF2
+     * once, because those rows carry their own salts and the old password is the only thing that
+     * opens them; there is no cheaper path without it. That is a one-time cost. After the sweep
+     * every row is `v3:` and later unlocks derive nothing per row -
+     * `EncryptionHelper.needsEnvelopeMigration` is a string-prefix check, so the sweep becomes a
+     * single list read that writes nothing.
+     *
+     * A row where a field does not authenticate (wrong passphrase, or a row that was never really
+     * vault-sealed) is left byte-for-byte untouched, and a blank field is never rewritten either:
+     * there is no ciphertext to migrate, and inventing one would replace whatever the row holds.
+     * The `encrypted = 1` column is untouched by `updateVaultFields`, and the query only matches such
+     * rows, so a plain note can never receive vault ciphertext.
      *
      * @return how many rows were rewritten; 0 when the vault is locked or everything is current.
      */
@@ -274,14 +559,15 @@ class NoteUseCase @Inject constructor(
         val vaultRows = noteRepository.getAllNotes().first().filter { it.encrypted }
         var upgraded = 0
         vaultRows.forEach { row ->
-            val nameIsLegacy = encryptionHelper.isLegacyFormat(row.name)
-            val bodyIsLegacy = encryptionHelper.isLegacyFormat(row.description)
-            if (!nameIsLegacy && !bodyIsLegacy) return@forEach
+            val nameNeedsMigration = encryptionHelper.needsEnvelopeMigration(row.name)
+            val bodyNeedsMigration = encryptionHelper.needsEnvelopeMigration(row.description)
+            if (!nameNeedsMigration && !bodyNeedsMigration) return@forEach
 
-            val sealedName = if (nameIsLegacy) resealVaultValueOrNull(row.name, row.id) else row.name
+            val sealedName =
+                if (nameNeedsMigration) resealVaultValueOrNull(row.name, row.id) else row.name
             val sealedBody =
-                if (bodyIsLegacy) resealVaultValueOrNull(row.description, row.id) else row.description
-            // Nothing is written unless every legacy field authenticated.
+                if (bodyNeedsMigration) resealVaultValueOrNull(row.description, row.id) else row.description
+            // Nothing is written unless every field that had to authenticate did.
             if (sealedName == null || sealedBody == null) return@forEach
 
             if (noteRepository.updateVaultFields(row.id, sealedName, sealedBody) > 0) upgraded++
@@ -290,7 +576,7 @@ class NoteUseCase @Inject constructor(
     }
 
     /**
-     * Reads one legacy sealed value and re-seals it with the current layout.
+     * Reads one sealed value and re-seals it into the current envelope.
      *
      * @return the new ciphertext, or null when the value does not authenticate - in which case the
      *   caller must leave the row exactly as it is rather than overwrite a readable note.
@@ -320,7 +606,7 @@ class NoteUseCase @Inject constructor(
     }
 
     fun updateNotes(newNotes: List<Note>) {
-        notes = processNotes(newNotes)
+        applyProcessed(processNotes(newNotes))
     }
 
     fun updateTags(newTags: List<String>) {
@@ -670,4 +956,44 @@ class NoteUseCase @Inject constructor(
             attachmentIndex.remove(listOf(id))
         }
     }
+
+    private companion object {
+        const val TAG = "NoteUseCase"
+    }
+}
+
+/**
+ * One decrypt pass' output: the list plus the two scalars that are part of the same emission.
+ *
+ * They travel together because the caller may no longer be allowed to publish any of them (V-5);
+ * applying the list but not the counts, or the other way round, would leave the home screen
+ * claiming "all notes failed" over an empty list.
+ */
+private data class ProcessedNotes(
+    val notes: List<Note>,
+    val decryptionResult: DecryptionResult,
+    val hiddenVaultCount: Int,
+)
+
+/**
+ * Generation counter that keeps a slow load from republishing what a lock just evicted (V-5).
+ *
+ * The lock path ([NoteUseCase.clearSensitiveState]) calls [advance]; every load captures [current]
+ * before it starts and publishes only when [isCurrent] still holds. A cancelled collector stops at
+ * its next suspension point, but the CPU-bound decrypt inside `Dispatchers.Default` does not
+ * suspend, so cancellation alone can complete and assign afterwards. The epoch is the check that
+ * makes "cleared" mean cleared. It is a separate object so the ordering rule can be tested without
+ * a database, a Keystore or a running collector.
+ */
+internal class NoteLoadEpoch {
+    private val generation = AtomicLong(0)
+
+    /** The generation a loader captures before it starts working. */
+    fun current(): Long = generation.get()
+
+    /** Moves the list to a new generation; every earlier capture is stale from here on. */
+    fun advance(): Long = generation.incrementAndGet()
+
+    /** True while [epoch] is still the generation a load may publish into. */
+    fun isCurrent(epoch: Long): Boolean = generation.get() == epoch
 }

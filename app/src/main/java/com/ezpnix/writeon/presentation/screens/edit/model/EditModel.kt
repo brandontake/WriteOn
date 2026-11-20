@@ -32,8 +32,14 @@ import com.ezpnix.writeon.presentation.share.ShareIntake
 import dagger.hilt.android.lifecycle.HiltViewModel
 import java.io.File
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -42,6 +48,27 @@ import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import javax.inject.Inject
+
+/**
+ * What the editor's most recent save attempt is doing, rendered as the compact status line.
+ *
+ * The editor used to save only on ON_STOP and report failures with a Toast: the user had no way to
+ * tell whether the last paragraph made it to the database, and a dismissed Toast was the only trace
+ * of a failed write (UX-1). [Error] carries the string resource the indicator shows next to Retry,
+ * so a refusal (an undecryptable row) and an I/O failure both stay on screen.
+ *
+ * [VaultLocked] is a refusal too, but one the user can resolve: the vault passphrase was evicted
+ * while the note was open, so the plain text in the fields has nowhere to go. It is a separate
+ * state because a Retry cannot succeed without the passphrase, and because the screen must show the
+ * unlock dialog instead of treating the write as done (V-3).
+ */
+sealed interface SaveState {
+    data object Idle : SaveState
+    data object Saving : SaveState
+    data object Saved : SaveState
+    data class Error(val messageRes: Int) : SaveState
+    data object VaultLocked : SaveState
+}
 
 @HiltViewModel
 class EditViewModel @Inject constructor(
@@ -82,6 +109,39 @@ class EditViewModel @Inject constructor(
     private val _noteUpdatedTime = mutableLongStateOf(0L)
     val noteUpdatedTime: State<Long> get() = _noteUpdatedTime
 
+    /** Save progress surfaced to the editor's status line (UX-1). */
+    private val _saveState = mutableStateOf<SaveState>(SaveState.Idle)
+    val saveState: State<SaveState> get() = _saveState
+
+    /**
+     * True when the password the user typed for the unlock dialog was rejected (V-3).
+     *
+     * Kept apart from [saveState] so the dialog can stay open and show the error in place: a wrong
+     * password leaves [SaveState.VaultLocked] exactly as it was, only with this flag set.
+     */
+    private val _vaultUnlockError = mutableStateOf(false)
+    val vaultUnlockError: State<Boolean> get() = _vaultUnlockError
+
+    /**
+     * True when the refused save belongs to a brand-new vault note (`id == 0`).
+     *
+     * Such a note has no stored ciphertext, so there is no way to tell a correct passphrase from a
+     * wrong one. Accepting one blindly would seal the note under a key nobody can reproduce, and
+     * saving it as plain text would defeat the vault - so the screen offers neither "unlock" nor a
+     * plaintext write, only "unlock from Home" or "discard" (V-3).
+     */
+    private val _vaultUnlockUnverifiable = mutableStateOf(false)
+    val vaultUnlockUnverifiable: Boolean get() = _vaultUnlockUnverifiable.value
+
+    /**
+     * Whether the last committed save also moved the note to the recycle bin.
+     *
+     * Clearing every character is a save, but it is not the same event as "saved": the snackbar has
+     * to say "Moved to trash" or the note looks deleted without explanation (UX-2).
+     */
+    private val _lastSaveMovedToTrash = mutableStateOf(false)
+    val lastSaveMovedToTrash: Boolean get() = _lastSaveMovedToTrash.value
+
     private val _isNoteInfoVisible = mutableStateOf(false)
     val isNoteInfoVisible: State<Boolean> get() = _isNoteInfoVisible
 
@@ -115,9 +175,23 @@ class EditViewModel @Inject constructor(
             snapshotFlow { noteName.value.text to noteDescription.value.text }
                 .distinctUntilChanged()
                 .collect { (name, body) ->
+                    // SEC-7: a vault note's plaintext must never reach SavedStateHandle. The draft
+                    // is a convenience for plain notes only; writing sealed text there would put
+                    // it in the system's saved-instance bundle in clear text, outside the vault.
+                    // Clear first so a draft left by an earlier, still-plain session cannot linger.
+                    if (_isEncrypted.value) {
+                        clearDraft()
+                        return@collect
+                    }
                     // Wait out the typing burst: the handle is written into the saved instance
                     // state on every change, and doing that per keystroke is measurable jank.
                     delay(DRAFT_DEBOUNCE_MS)
+                    // The note can become encrypted during the debounce (a vault row opened from
+                    // the list); re-check before the write, not after.
+                    if (_isEncrypted.value) {
+                        clearDraft()
+                        return@collect
+                    }
                     savedStateHandle[KEY_DRAFT_NOTE_ID] = noteId.value
                     savedStateHandle[KEY_DRAFT_NAME] = name
                     savedStateHandle[KEY_DRAFT_DESCRIPTION] = body
@@ -133,6 +207,12 @@ class EditViewModel @Inject constructor(
 
     /** Puts an unsaved draft back into the fields, if one exists for [id]. */
     private fun restoreDraftFor(id: Int) {
+        // SEC-7: never re-offer plaintext for a vault note. If a draft survived from before the
+        // note was sealed, drop it instead of painting the body over the locked editor.
+        if (_isEncrypted.value) {
+            clearDraft()
+            return
+        }
         if (savedStateHandle.get<Int>(KEY_DRAFT_NOTE_ID) != id) return
         val name = savedStateHandle.get<String>(KEY_DRAFT_NAME).orEmpty()
         val body = savedStateHandle.get<String>(KEY_DRAFT_DESCRIPTION).orEmpty()
@@ -162,8 +242,68 @@ class EditViewModel @Inject constructor(
     /** Notes whose unattributed attachment rows have already been claimed. */
     private val claimedNoteIds = mutableSetOf<Int>()
 
-    /** What the most recent save replaced. */
-    private data class SavePoint(val noteId: Int, val previous: Note?, val saved: Note)
+    /**
+     * What the most recent save replaced.
+     *
+     * [savedId] is the id Room assigned when the save created a new row. It is captured here
+     * because `noteId.value` is only updated by the collector after the insert, so an undo tapped
+     * before that emission used to read 0 and delete nothing (DAT-12).
+     */
+    private data class SavePoint(
+        val noteId: Int,
+        val previous: Note?,
+        val saved: Note,
+        val savedId: Int = 0
+    )
+
+    /**
+     * Scope for writes that must survive the screen.
+     *
+     * ON_STOP is the fallback save and it fires while the destination is torn down. Launching that
+     * save in [viewModelScope] meant `onCleared` could cancel it between the last keystroke and
+     * Room committing - the exact data loss DAT-9 describes. This scope is not cancelled by the
+     * ViewModel, and the transaction additionally runs under [NonCancellable].
+     */
+    private val saveScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+
+    /**
+     * The one write-once-at-a-time gate every save path shares (V-6).
+     *
+     * ON_STOP, the retry button and the awaited back-navigation save used to each launch their own
+     * `performSave`. A back press landing while ON_STOP was still writing ran two transactions
+     * against the same text: a new note could be inserted twice, and the undo point of the first
+     * write was replaced by the second. [SaveSingleFlight] hands the second caller the write that is
+     * already running, and its loop re-runs it when the text changed under the write.
+     */
+    private val saveFlight = SaveSingleFlight(saveScope)
+
+    /**
+     * The id Room assigned to a note this editor created.
+     *
+     * The loop in [saveUntilCaughtUp] and an ON_STOP that arrives mid-insert both still carry the
+     * placeholder id 0. Resolving it here is what makes the repeat run an update of the row Room
+     * just created instead of a second insert of the same note (V-6).
+     */
+    private var committedNoteId = 0
+
+    /**
+     * Text the last committed save wrote.
+     *
+     * Used to skip the ON_STOP that immediately follows a successful back-navigation save: a
+     * second write would bump `updatedAt` again and replace the undo point with an identical one.
+     */
+    private var lastSavedContent: Pair<String, String>? = null
+
+    /**
+     * True when the fields no longer match the last loaded or saved text.
+     *
+     * The status line uses it so a "Saved" label disappears with the first new keystroke instead of
+     * claiming text that is not in the database yet.
+     */
+    val isDirty: Boolean get() = lastSavedContent != currentContent()
+
+    private fun currentContent(): Pair<String, String> =
+        noteName.value.text to noteDescription.value.text
 
     /**
      * The last save, kept only so it can be taken back.
@@ -219,21 +359,91 @@ class EditViewModel @Inject constructor(
         AttachmentRegistry.put(attachment)
     }
 
+    /**
+     * Fallback save: ON_STOP, or the retry button next to an error.
+     *
+     * Runs on [saveScope] rather than [viewModelScope], so clearing the ViewModel cannot cancel the
+     * write the user's last keystrokes depend on (DAT-9). [performSave] additionally wraps the
+     * transaction in [NonCancellable], and [saveFlight] makes this write share the one a back press
+     * or another ON_STOP may already have started.
+     */
     fun saveNote(id: Int) {
-        viewModelScope.launch {
-            // A row whose stored text this process could not decrypt only exists here as a
-            // placeholder (see EncryptedNoteDao). Saving would overwrite the ciphertext that is
-            // the user's only chance of recovery with display text, so refuse up front, before
-            // any plan, snapshot or transaction is built, and say why.
-            if (id != 0 && DecryptFailureRegistry.isFailed(id)) {
-                Toast.makeText(
-                    application,
-                    application.getString(R.string.decrypt_failed_cannot_save),
-                    Toast.LENGTH_LONG
-                ).show()
-                return@launch
-            }
-            try {
+        // Back navigation has already committed this exact text; the ON_STOP that follows would
+        // only bump updatedAt and replace the undo point with an identical one.
+        if (lastSavedContent == currentContent()) return
+        saveScope.launch { saveUntilCaughtUp(id) }
+    }
+
+    /**
+     * Saves and suspends until the write finished, so navigation can wait for it before popping
+     * the destination (UX-1/DAT-9). True when the note is stored or there was nothing to store.
+     *
+     * False keeps the editor open. That is a refusal the user can act on (a locked vault, see
+     * [unlockVaultAndRetry]) as well as a write failure - both used to be indistinguishable from a
+     * successful save here, which is how a locked vault note lost its text on the way out (V-3).
+     */
+    suspend fun saveBeforeExit(id: Int = noteId.value): Boolean {
+        // The row was loaded, or the last save committed this exact text: leaving needs no write,
+        // and a second one would only bump updatedAt and register an undo of identical text.
+        if (lastSavedContent == currentContent()) {
+            _saveState.value = SaveState.Idle
+            return true
+        }
+        // Wait on the save scope instead of merely running here. A rotation cancels the caller's
+        // composition scope, but the write and its status update must still finish, or the new
+        // composition would sit on a stale "Saving…" after the row was actually stored.
+        return saveUntilCaughtUp(id)
+    }
+
+    /** Explicit retry for the error shown by the status line. */
+    fun retrySave() {
+        saveScope.launch { saveUntilCaughtUp(noteId.value) }
+    }
+
+    /**
+     * Persists the latest text, including text typed while a write was already running (V-6).
+     *
+     * Two callers can never run two transactions: the second one awaits the write in flight and
+     * then writes again only if the fields moved on under it. Without that second pass, "save, keep
+     * typing, back" stored the text from before those keystrokes.
+     */
+    private suspend fun saveUntilCaughtUp(id: Int): Boolean =
+        saveFlight.runUntilCaughtUp(
+            currentContent = ::currentContent,
+            committedContent = { lastSavedContent },
+            save = { performSave(id) },
+        )
+
+    private fun failSave(messageRes: Int): Boolean {
+        _saveState.value = SaveState.Error(messageRes)
+        return false
+    }
+
+    /**
+     * The one write path. Deliberately not launched directly: callers pick the scope, and the
+     * transaction runs uncancellable. [saveFlight] guarantees that no two calls are active at once.
+     */
+    private suspend fun performSave(requestedId: Int): Boolean {
+        // The loop in [saveUntilCaughtUp] and an ON_STOP that arrived mid-insert can still carry
+        // the placeholder id 0 for a note Room already created; write the row it created instead of
+        // inserting a second one (V-6).
+        val id = if (requestedId != 0) requestedId else committedNoteId
+        _saveState.value = SaveState.Saving
+        // A row whose stored text this process could not decrypt only exists here as a
+        // placeholder (see EncryptedNoteDao). Saving would overwrite the ciphertext that is
+        // the user's only chance of recovery with display text, so refuse before any plan,
+        // snapshot or transaction is built. This is a refusal, not a write failure: no Retry can
+        // ever succeed, so report it and still let the user leave instead of trapping the editor.
+        if (id != 0 && DecryptFailureRegistry.isFailed(id)) {
+            Toast.makeText(
+                application,
+                application.getString(R.string.decrypt_failed_cannot_save),
+                Toast.LENGTH_LONG
+            ).show()
+            _saveState.value = SaveState.Idle
+            return true
+        }
+        try {
             // Pinning is already persisted by [toggleNotePin]. Rewriting it here compared
             // isPinned.value against _isPinned.value - the same state object - so the branch could
             // never be taken, and it aimed at the placeholder id 0 for a brand-new note anyway.
@@ -242,135 +452,252 @@ class EditViewModel @Inject constructor(
                 noteName.value.text.isNotBlank() || noteDescription.value.text.isNotBlank()
             // An empty brand-new note is not worth storing, but an existing note must still be
             // written when the user clears every character, or the previous text silently survives.
-            if (hasContent || id != 0) {
-                // A vault note keeps its 1.x body until it is opened: the 7 -> 8 migration cannot
-                // decrypt it, so the upgrade happens here, on plain text, the first time the note is
-                // saved. The rewrite is idempotent, which is what makes running it on every save the
-                // simplest way to catch vault notes, restored backups and hand-pasted legacy text.
-                val rewritten = LegacyBodyMigration.rewrite(noteDescription.value.text, id)
-                if (rewritten.changed) {
-                    // Rows the rewrite produced join the editor's own pending attachments, so the
-                    // code below writes one consistent set.
-                    rewritten.attachments.forEach { pendingAttachments[it.id] = it }
-                    val caret = noteDescription.value.selection.end.coerceAtMost(rewritten.body.length)
-                    _noteDescription.value = TextFieldValue(
-                        text = rewritten.body,
-                        selection = TextRange(caret)
-                    )
-                }
-                val description = rewritten.body
-
-                val now = System.currentTimeMillis()
-                // Fall back to the stored row rather than a blank Note: when the editor is saved
-                // before getNoteById has emitted, _originalNote is still null and the old code
-                // replaced the whole row with tags = emptyList(), silently dropping the note's
-                // tags. Reading the row keeps every field this screen does not edit.
-                val base = _originalNote.value ?: if (id != 0) {
-                    noteUseCase.getNoteById(id).firstOrNull()
-                        ?: throw IllegalStateException("Note no longer exists; refusing to save over missing data")
-                } else {
-                    null
-                }
-                // A vault note may only be rewritten while its passphrase is loaded: saving with an
-                // empty key would replace the password-sealed body with ciphertext nobody can open,
-                // and the old fallback of "save it as plaintext instead" quietly removed the
-                // protection the user asked for. Refuse, keep the editor open, and tell the user.
-                //
-                // The condition must not depend on [base] alone: when the row could not be read
-                // (null base — first frame not loaded, or the shared connection was closed), the
-                // code below falls back to a full-row insert with `encrypted = false`, which is
-                // exactly the write that used to overwrite a vault note's ciphertext with
-                // plaintext. The editor's own encrypted flag covers that hole.
-                val lockedVault = encryption.isPasswordEmpty() &&
-                    (base?.encrypted == true || (id != 0 && _isEncrypted.value))
-                if (lockedVault) {
-                    Toast.makeText(
-                        application,
-                        application.getString(R.string.vault_locked_cannot_save),
-                        Toast.LENGTH_LONG
-                    ).show()
-                    return@launch
-                }
-                // A note may only be flagged encrypted when a vault passphrase is actually loaded,
-                // otherwise EncryptionHelper would seal it with an empty key and no screen in the
-                // app can decrypt it again.
-                val encrypted = isEncrypted.value && !encryption.isPasswordEmpty()
-                val note = base?.copy(
-                    name = noteName.value.text,
-                    description = description,
-                    pinned = isPinned.value,
-                    encrypted = encrypted,
-                    createdAt = if (noteCreatedTime.value != 0L) noteCreatedTime.value else now,
-                    updatedAt = now
-                ) ?: Note(
-                    id = id,
-                    name = noteName.value.text,
-                    description = description,
-                    pinned = isPinned.value,
-                    encrypted = encrypted,
-                    createdAt = if (noteCreatedTime.value != 0L) noteCreatedTime.value else now,
-                    updatedAt = now,
-                    tags = emptyList()
+            if (!hasContent && id == 0) {
+                // Nothing was typed: do not create an empty row, and do not claim "Saved" for a
+                // write that never happened.
+                _saveState.value = SaveState.Idle
+                return true
+            }
+            // An existing note whose row has not emitted yet shows empty fields, and the awaited
+            // back-save runs earlier than the old ON_STOP did. Writing now would replace the load
+            // with a blank row, so treat that frame as nothing to save.
+            if (!hasContent && _originalNote.value == null) {
+                _saveState.value = SaveState.Idle
+                return true
+            }
+            // A vault note keeps its 1.x body until it is opened: the 7 -> 8 migration cannot
+            // decrypt it, so the upgrade happens here, on plain text, the first time the note is
+            // saved. The rewrite is idempotent, which is what makes running it on every save the
+            // simplest way to catch vault notes, restored backups and hand-pasted legacy text.
+            val rewritten = LegacyBodyMigration.rewrite(noteDescription.value.text, id)
+            if (rewritten.changed) {
+                // Rows the rewrite produced join the editor's own pending attachments, so the
+                // code below writes one consistent set.
+                rewritten.attachments.forEach { pendingAttachments[it.id] = it }
+                val caret = noteDescription.value.selection.end.coerceAtMost(rewritten.body.length)
+                _noteDescription.value = TextFieldValue(
+                    text = rewritten.body,
+                    selection = TextRange(caret)
                 )
-                // Captured before the write: [note] is about to replace this row.
-                savePoint = SavePoint(noteId = id, previous = base, saved = note)
-                // Plan first, write once: the note row and every attachment row change land in a
-                // single Room transaction, so a failure or a cancelled coroutine can no longer
-                // leave "new body, old rows" (or the reverse). File deletion happens after the
-                // commit - an orphan file is recoverable, a row whose file is already gone is not.
-                val plan = planAttachments(description, note.id, prune = description.isNotEmpty())
-                val savedId = noteUseCase.saveNoteWithAttachments(
+            }
+            val description = rewritten.body
+
+            val now = System.currentTimeMillis()
+            // Fall back to the stored row rather than a blank Note: when the editor is saved
+            // before getNoteById has emitted, _originalNote is still null and the old code
+            // replaced the whole row with tags = emptyList(), silently dropping the note's
+            // tags. Reading the row keeps every field this screen does not edit.
+            val base = _originalNote.value ?: if (id != 0) {
+                noteUseCase.getNoteById(id).firstOrNull()
+                    ?: throw IllegalStateException("Note no longer exists; refusing to save over missing data")
+            } else {
+                null
+            }
+            // A vault note may only be rewritten while its passphrase is loaded: saving with an
+            // empty key would replace the password-sealed body with ciphertext nobody can open,
+            // and the old fallback of "save it as plaintext instead" quietly removed the
+            // protection the user asked for. Refuse and warn.
+            //
+            // The condition must not depend on [base] alone: when the row could not be read
+            // (null base — first frame not loaded, or the shared connection was closed), the
+            // code below falls back to a full-row insert with `encrypted = false`, which is
+            // exactly the write that used to overwrite a vault note's ciphertext with
+            // plaintext. The editor's own encrypted flag covers that hole.
+            val lockedVault = encryption.isPasswordEmpty() &&
+                (_isEncrypted.value || base?.encrypted == true)
+            if (lockedVault) {
+                // V-3: this used to Toast and return true, which let saveBeforeExit pop the editor.
+                // A vault note has no SavedStateHandle draft (SEC-7), so the text typed since the
+                // lock was simply gone. Refuse without reporting success: the screen keeps the
+                // editor open and shows the unlock dialog, and false is what stops the navigation.
+                //
+                // The `_isEncrypted` half must not depend on the id: a brand-new vault note
+                // (`id == 0`) with no stored row used to slip past the `base?.encrypted` check and
+                // be inserted with `encrypted = false` - a plaintext note created from the vault.
+                _vaultUnlockUnverifiable.value = id == 0
+                _saveState.value = SaveState.VaultLocked
+                return false
+            }
+            // A note may only be flagged encrypted when a vault passphrase is actually loaded,
+            // otherwise EncryptionHelper would seal it with an empty key and no screen in the
+            // app can decrypt it again.
+            val encrypted = isEncrypted.value && !encryption.isPasswordEmpty()
+            // Capture the name with the body below: the fields can change again while the write is
+            // in flight, and the save point / lastSavedContent must describe what was actually
+            // written, not whatever the user typed next.
+            val savedName = noteName.value.text
+            val note = base?.copy(
+                name = savedName,
+                description = description,
+                pinned = isPinned.value,
+                encrypted = encrypted,
+                createdAt = if (noteCreatedTime.value != 0L) noteCreatedTime.value else now,
+                updatedAt = now
+            ) ?: Note(
+                id = id,
+                name = savedName,
+                description = description,
+                pinned = isPinned.value,
+                encrypted = encrypted,
+                createdAt = if (noteCreatedTime.value != 0L) noteCreatedTime.value else now,
+                updatedAt = now,
+                tags = emptyList()
+            )
+            // Captured before the write: [note] is about to replace this row.
+            val point = SavePoint(noteId = id, previous = base, saved = note)
+            savePoint = point
+            // Plan first, write once: the note row and every attachment row change land in a
+            // single Room transaction, so a failure or a cancelled coroutine can no longer
+            // leave "new body, old rows" (or the reverse). File deletion happens after the
+            // commit - an orphan file is recoverable, a row whose file is already gone is not.
+            val plan = planAttachments(description, note.id, prune = description.isNotEmpty())
+            // The transaction must complete even if the screen is being torn down. NonCancellable
+            // is what makes the ON_STOP fallback trustworthy when the ViewModel is cleared while
+            // Room is still writing (DAT-9).
+            val savedId = withContext(NonCancellable) {
+                val writtenId = noteUseCase.saveNoteWithAttachments(
                     note = note,
                     upsertAttachments = plan.upsert,
                     reviveAttachmentIds = plan.reviveIds,
                     deleteAttachmentIds = plan.removeRows.map { it.id },
                 )
-                if (savedId > 0 && id == 0) {
-                    setupNoteData(savedId)
-                }
-                finishAttachmentPlan(plan)
-                // The database now holds this text; the draft would only re-offer it after a
-                // restore of a note that no longer needs it.
-                clearDraft()
-                // Bounded history: after a committed save the stored row is the undo target (the
-                // save-point bar), so keeping every pre-save snapshot only pins whole documents
-                // in memory for a feature that must not offer them any more.
-                nameUndoRedoState.clearTo(_noteName.value)
-                descriptionUndoRedoState.clearTo(_noteDescription.value)
                 // Clearing the body sends the note to the recycle bin; it does not mean "destroy
-                // every picture and recording it ever held". When the saved body is empty, keep
-                // the rows and files so a restore (or the ten-second undo) still finds them. Only
-                // a body that still has text prunes what it stopped referencing.
-                // Clearing every character and saving now means the note is gone rather than an
-                // empty row left on the home screen: the version just written is the one that lands
-                // in the trash, so it can still be restored.
+                // every picture and recording it ever held". [plan] already kept the rows and
+                // files (prune is off for an empty body) so a restore or the undo still finds
+                // them. The version just written is the one that lands in the trash.
                 if (!hasContent) {
-                    val trashedId = if (note.id != 0) note.id else id
                     noteUseCase.moveToTrash(
-                        if (note.id != 0) note else note.copy(id = trashedId)
+                        if (note.id != 0) note else note.copy(id = writtenId)
                     )
                 }
-                _undoToken.intValue++
-                // The global snackbar can be tapped after this destination is popped, when
-                // viewModelScope is already cancelled. Register the database half separately so
-                // the action keeps working for the snackbar's lifetime (U2).
-                savePoint?.let { point ->
-                    PendingSaveUndo.register { performUndo(point) }
+                writtenId
+            }
+            if (savedId > 0) {
+                // DAT-12: Room assigns a new note's id inside the call above. The save point is
+                // what Undo reads, so it has to learn the id here - waiting for noteId.value to
+                // catch up left a window where undo deleted id 0 and silently did nothing.
+                savePoint = point.copy(savedId = savedId)
+                // Same id for the queued re-save: a second run for the text typed during this
+                // write must update this row, not insert the note again (V-6).
+                committedNoteId = savedId
+                // The collector sets this a frame later; doing it now closes the window in which a
+                // save still resolves the note as id 0.
+                updateNoteId(savedId)
+            }
+            if (savedId > 0 && id == 0) {
+                setupNoteData(savedId)
+            }
+            // Only after the commit: deleting rows' files before the transaction could leave rows
+            // pointing at bytes that are already gone.
+            finishAttachmentPlan(plan)
+            lastSavedContent = savedName to description
+            // The database now holds this text; the draft would only re-offer it after a
+            // restore of a note that no longer needs it.
+            clearDraft()
+            // Bounded history: after a committed save the stored row is the undo target (the
+            // save-point bar), so keeping every pre-save snapshot only pins whole documents
+            // in memory for a feature that must not offer them any more.
+            nameUndoRedoState.clearTo(_noteName.value)
+            descriptionUndoRedoState.clearTo(_noteDescription.value)
+            // UX-2: clearing every character is still a save, but it is also a move to the
+            // recycle bin. The screen reads this flag to show that second fact instead of the
+            // generic "saved" message.
+            _lastSaveMovedToTrash.value = !hasContent
+            _undoToken.intValue++
+            _vaultUnlockError.value = false
+            _saveState.value = SaveState.Saved
+            // The global snackbar can be tapped after this destination is popped, when
+            // viewModelScope is already cancelled. Register the database half separately so
+            // the action keeps working for the snackbar's lifetime (U2). The point carries the
+            // id Room assigned, not the still-empty noteId (DAT-12).
+            savePoint?.let { committed ->
+                PendingSaveUndo.register {
+                    performUndo(committed)
+                    // The snackbar can be tapped while the editor is still alive (a save made on
+                    // ON_STOP without navigating). Clear the status so it does not keep claiming a
+                    // save the user just took back.
+                    if (savePoint === committed) savePoint = null
+                    _lastSaveMovedToTrash.value = false
+                    _saveState.value = SaveState.Idle
                 }
             }
-
-            } catch (e: CancellationException) {
-                // Never swallow cancellation: the coroutine is being torn down (screen closed),
-                // and swallowing it would keep a dead scope alive pretending to work.
-                throw e
-            } catch (e: Exception) {
-                Toast.makeText(
-                    application,
-                    application.getString(R.string.msg_error_with_message, e.message ?: ""),
-                    Toast.LENGTH_LONG
-                ).show()
-            }
+            return true
+        } catch (e: CancellationException) {
+            // Never swallow cancellation: the coroutine is being torn down (screen closed),
+            // and swallowing it would keep a dead scope alive pretending to work. The DB write
+            // has already finished if it was reached, because it runs under NonCancellable.
+            throw e
+        } catch (e: Exception) {
+            // Keep the editor open: the status line shows the failure with a Retry action, so a
+            // full disk or a closed connection is no longer a Toast that disappears (UX-1).
+            savePoint = null
+            return failSave(R.string.editor_fix_save_failed)
         }
+    }
+
+    /**
+     * V-3: the save was refused because the vault passphrase is no longer loaded.
+     *
+     * The text is plain, in memory, and deliberately in no draft (SEC-7), so the refusal must not
+     * pop the editor. The only two honest ways out are an unlock that *verifies*, or an explicit
+     * discard; this is the unlock half.
+     *
+     * The passphrase is checked against the row the editor loaded before it is kept. Merely storing
+     * it would let a typo seal the note under a key nothing can reproduce, and the row's ciphertext
+     * is the only thing that can tell the two cases apart. On success the retry goes through the
+     * same single-flight save path as every other write, so the unlock cannot start a second
+     * transaction behind a save that is already running.
+     *
+     * @return true only when the text is now stored (or there was nothing to store). False with
+     * [vaultUnlockError] set means the password was wrong; false with an Error [saveState] means the
+     * unlock worked but the write did not, and the status line's Retry is the next step.
+     */
+    suspend fun unlockVaultAndRetry(password: String): Boolean {
+        // A brand-new vault note has no ciphertext to authenticate the passphrase against. Sealing
+        // it with an unverified key makes a note only that wrong key can open, and writing it as a
+        // plaintext row is exactly the loss this dialog exists to prevent - so there is nothing to
+        // accept here. The screen does not offer the password field in this case.
+        if (noteId.value == 0 || _vaultUnlockUnverifiable.value) return false
+        // The row can still be null when the save happens before the first emission. Read it rather
+        // than reject a correct passphrase just because the collector is late. A failed read is a
+        // save failure, not a wrong password, and must not throw out of the dialog's coroutine.
+        val stored = try {
+            _originalNote.value?.description
+                ?: noteUseCase.getNoteById(noteId.value).firstOrNull()?.description
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            return failSave(R.string.editor_fix_save_failed)
+        }
+        if (stored.isNullOrBlank()) return false
+        // Temporarily load the candidate key: decrypt() is the only check that distinguishes "this
+        // is the vault" from "this is some password".
+        encryption.setPassword(password)
+        val (_, status) = encryption.decrypt(stored)
+        if (status != DecryptionResult.SUCCESS) {
+            // Leave the vault exactly as locked as it was. A wrong guess must not stay in memory
+            // where the next list read would try (and fail) to decrypt with it.
+            encryption.removePassword()
+            _vaultUnlockError.value = true
+            _saveState.value = SaveState.VaultLocked
+            return false
+        }
+        _vaultUnlockError.value = false
+        return saveUntilCaughtUp(noteId.value)
+    }
+
+    /**
+     * V-3: the user chose to lose the unsaved text rather than unlock.
+     *
+     * Recording the fields as "last saved" is deliberate, not a claim that they reached the
+     * database: the destination is about to pop, its ON_STOP would otherwise run the refused save
+     * again, and if the vault happened to be unlocked by then it would write text the user just
+     * discarded. The stored row keeps the last committed text.
+     */
+    fun discardVaultLockedSave() {
+        lastSavedContent = currentContent()
+        _vaultUnlockError.value = false
+        _saveState.value = SaveState.Idle
     }
 
     /**
@@ -386,6 +713,8 @@ class EditViewModel @Inject constructor(
         savePoint = null
         _undoToken.intValue++
         PendingSaveUndo.clear()
+        _lastSaveMovedToTrash.value = false
+        _saveState.value = SaveState.Idle
         viewModelScope.launch { performUndo(point) }
     }
 
@@ -403,8 +732,23 @@ class EditViewModel @Inject constructor(
             // differs from what the fields hold right now.
             syncNote(previous, forceText = true)
         } else {
-            val savedId = point.saved.id.takeIf { it != 0 } ?: noteId.value
-            if (savedId != 0) noteUseCase.deleteNoteById(savedId)
+            // DAT-12: prefer the id Room assigned at save time. noteId.value is only updated by
+            // the collector afterwards, so reading it here was a race that ended in
+            // deleteNoteById(0) and an undo that appeared to do nothing.
+            val savedId = point.savedId.takeIf { it != 0 }
+                ?: point.saved.id.takeIf { it != 0 }
+                ?: noteId.value.takeIf { it != 0 }
+            if (savedId == null) {
+                // Nothing was ever created: say so rather than leave the user believing the note
+                // was undone. The global snackbar has no other way to report this.
+                Toast.makeText(
+                    application,
+                    application.getString(R.string.editor_fix_undo_unavailable),
+                    Toast.LENGTH_LONG
+                ).show()
+                return
+            }
+            noteUseCase.deleteNoteById(savedId)
             _originalNote.value = null
             _noteId.value = 0
             _noteCreatedTime.value = System.currentTimeMillis()
@@ -454,6 +798,10 @@ class EditViewModel @Inject constructor(
 
         _originalNote.value = note
         if (stored != null && !hasLocalEdits) {
+            // The fields now hold exactly what is stored, so a later ON_STOP or back press has no
+            // new text to write. Recording it here lets those paths skip the write instead of
+            // bumping updatedAt and registering an undo that would restore identical text.
+            lastSavedContent = stored
             // Equal text is left alone rather than re-assigned: assigning a TextFieldValue moves
             // the caret to the end, so a metadata emission would otherwise jump the cursor while
             // the user was typing.
@@ -525,6 +873,10 @@ class EditViewModel @Inject constructor(
 
     fun updateIsEncrypted(value: Boolean) {
         _isEncrypted.value = value
+        // SEC-7: a vault note must not keep a plaintext draft in SavedStateHandle. Clearing here
+        // also covers the frame before setupNoteData restores/collects anything, and a stale
+        // draft left by a session where the same row was still plain.
+        if (value) clearDraft()
     }
 
     fun updateNoteDescription(newDescription: TextFieldValue) {
@@ -1233,5 +1585,72 @@ class EditViewModel @Inject constructor(
 
         /** How long the user must stop typing before the draft is written. */
         const val DRAFT_DEBOUNCE_MS = 500L
+    }
+}
+
+/**
+ * Lets one save run at a time and lets a caller catch up with text typed during that save (V-6).
+ *
+ * ON_STOP, the retry button and the awaited back-navigation save all write the same row, and two
+ * of them could overlap: a new note's two transactions both read id 0 and each inserted a row, the
+ * second write replaced the first one's undo point, and `updatedAt` ended up out of order. [run]
+ * hands every caller arriving while a write is in flight the same [Deferred] instead of starting a
+ * second one, and [runUntilCaughtUp] re-runs the write while the editor fields moved on under it -
+ * so "save, keep typing, back" cannot leave those last keystrokes behind.
+ *
+ * The deferred is created on the editor's save scope, not the caller's: a rotation or an exiting
+ * composition only stops *waiting* for the write, it never cancels it (DAT-9).
+ */
+internal class SaveSingleFlight(private val scope: CoroutineScope) {
+    private val gate = Any()
+    private var inFlight: Deferred<Boolean>? = null
+
+    /**
+     * Runs [save], or returns the run that is already executing.
+     *
+     * `false` is the save's "refused or failed" result; success is `true`. The caller decides what
+     * to do with it - the loop below stops on `false` because retrying a refusal that needs user
+     * input would spin.
+     */
+    fun run(save: suspend () -> Boolean): Deferred<Boolean> {
+        var created: Deferred<Boolean>? = null
+        val deferred = synchronized(gate) {
+            // `inFlight` is cleared on completion, but that handler can run a beat after the
+            // awaiting caller resumes; checking isCompleted as well keeps a finished result from
+            // being handed to a caller that does have new text to write.
+            inFlight?.takeIf { !it.isCompleted }?.let { return it }
+            scope.async(start = CoroutineStart.LAZY) { save() }.also { started ->
+                inFlight = started
+                created = started
+                started.invokeOnCompletion {
+                    // Identity check: a newer run may already own the slot when this handler fires.
+                    synchronized(gate) { if (inFlight === started) inFlight = null }
+                }
+            }
+        }
+        // Start outside the lock. On an immediate dispatcher the block would otherwise begin - and
+        // could suspend - while this thread still holds the monitor.
+        created?.start()
+        return deferred
+    }
+
+    /**
+     * Writes, then writes again while the fields differ from what the last write stored.
+     *
+     * [committedContent] is the text the database is known to hold; if a run reports success
+     * without advancing it, the save was refused or had nothing to write. Looping there would spin
+     * forever on text that can never match a row that was never written, so that case stops at once.
+     */
+    suspend fun runUntilCaughtUp(
+        currentContent: () -> Pair<String, String>,
+        committedContent: () -> Pair<String, String>?,
+        save: suspend () -> Boolean,
+    ): Boolean {
+        while (true) {
+            val committedBefore = committedContent()
+            if (!run(save).await()) return false
+            if (committedContent() == committedBefore) return true
+            if (committedContent() == currentContent()) return true
+        }
     }
 }

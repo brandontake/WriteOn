@@ -13,46 +13,53 @@ import org.junit.Test
 /**
  * JVM coverage for the vault passphrase layer (report item T2).
  *
- * [EncryptionHelper] now uses java.util.Base64 instead of android.util.Base64, which is what
- * makes these paths testable without a device: the on-disk format (standard alphabet, padding,
- * no line breaks) is unchanged, so ciphertext written by earlier builds still decrypts.
+ * [EncryptionHelper] uses java.util.Base64 instead of android.util.Base64, which is what makes
+ * these paths testable without a device: the encoding (standard alphabet, padding, no line breaks)
+ * is unchanged, so ciphertext written by earlier builds still decrypts. Envelope-specific coverage
+ * - one KEK per session, the v3 layout, migration - lives in [VaultEnvelopeTest].
  */
 class EncryptionHelperTest {
 
     /**
-     * A fresh helper whose derived-key cache is cleared.
+     * A fresh helper whose derived-key and KEK caches are empty.
      *
-     * The PBKDF2 cache is static and keyed by salt alone (one passphrase per process in the app),
-     * so a test that decrypts the same salt under a different password must not see the previous
-     * derivation - setPassword is the public operation that resets it.
+     * The v2 PBKDF2 cache is static and keyed by salt alone (one passphrase per process in the
+     * app), so a test that decrypts the same salt under a different password must not see the
+     * previous derivation - setPassword is the public operation that resets it. Tests that need the
+     * envelope salt to survive into a "later session" pass the same [keyStore] to both helpers.
      */
-    private fun helper(password: String = CORRECT_PASSWORD) =
-        EncryptionHelper(StringBuilder()).apply { setPassword(password) }
+    private fun helper(
+        password: String = CORRECT_PASSWORD,
+        keyStore: VaultKeyStore = InMemoryVaultKeyStore(),
+    ) = EncryptionHelper(StringBuilder(), keyStore).apply { setPassword(password) }
 
     @Test
-    fun `encrypt round-trips through the current v2 format`() {
-        val sealed = helper().encrypt(PLAINTEXT)
-        assertTrue("expected v2: prefix, got $sealed", sealed.startsWith("v2:"))
-        // Four colon-separated parts: prefix, salt, iv, ciphertext.
-        assertEquals(4, sealed.split(":").size)
+    fun `encrypt round-trips through the current v3 envelope`() {
+        val store = InMemoryVaultKeyStore()
+        val sealed = helper(keyStore = store).encrypt(PLAINTEXT)
+        assertTrue("expected v3: prefix, got $sealed", sealed.startsWith("v3:"))
+        // Five colon-separated parts: prefix, wrap iv, wrapped DEK, body iv, body ciphertext.
+        assertEquals(5, sealed.split(":").size)
 
-        val (plain, status) = helper().decrypt(sealed)
+        val (plain, status) = helper(keyStore = store).decrypt(sealed)
         assertEquals(DecryptionResult.SUCCESS, status)
         assertEquals(PLAINTEXT, plain)
     }
 
     @Test
     fun `a different passphrase is rejected instead of returning garbage`() {
-        val sealed = helper().encrypt(PLAINTEXT)
-        val (plain, status) = helper(password = "wrong").decrypt(sealed)
+        val store = InMemoryVaultKeyStore()
+        val sealed = helper(keyStore = store).encrypt(PLAINTEXT)
+        val (plain, status) = helper(password = "wrong", keyStore = store).decrypt(sealed)
         assertNull(plain)
         assertEquals(DecryptionResult.BAD_PASSWORD, status)
     }
 
     @Test
     fun `an empty passphrase reports LOADING rather than failing`() {
-        val sealed = helper().encrypt(PLAINTEXT)
-        val (plain, status) = helper(password = "").decrypt(sealed)
+        val store = InMemoryVaultKeyStore()
+        val sealed = helper(keyStore = store).encrypt(PLAINTEXT)
+        val (plain, status) = helper(password = "", keyStore = store).decrypt(sealed)
         assertNull(plain)
         assertEquals(DecryptionResult.LOADING, status)
     }

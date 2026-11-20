@@ -2,6 +2,7 @@ package com.ezpnix.writeon.data.backup
 
 import android.content.Context
 import org.json.JSONArray
+import java.util.UUID
 
 /**
  * Remembers the archives the last WebDAV backups had to park beside the remote file.
@@ -35,6 +36,40 @@ object WebDavBackupState {
      * something is repeatedly classified as a conflict.
      */
     private const val MAX_REMEMBERED_CONFLICTS = 10
+
+    /** SYN-4: the install-scoped part of the staging name. */
+    private const val INSTALL_ID_KEY = "install_id"
+
+    /**
+     * Kept apart from [PREFS] on purpose: the conflict list is user-facing state, this is a
+     * machine identity that must survive every "dismiss"/"clear" operation.
+     */
+    private const val INSTALL_PREFS = "webdav_install"
+
+    private val installIdLock = Any()
+
+    /**
+     * SYN-4: a random id for *this install*, stable across runs and never derived from the
+     * account or the device.
+     *
+     * The staging file used to be `<canonical>.uploading` on every device, so two devices backing
+     * up at the same time shared one name: each run deleted the other's in-flight upload before
+     * PUTting over it. Appending this id makes the staging name private to the install, which is
+     * what makes it safe to clean up our own leftovers without touching anyone else's. A UUID
+     * (rather than an Android id) also keeps two installs of the same account on the same phone
+     * apart, and the `sharedpref` domain is excluded from auto backup/device transfer (see
+     * `backup_rules.xml`), so the id never travels to a second device.
+     */
+    fun installId(context: Context): String = synchronized(installIdLock) {
+        val prefs = context.getSharedPreferences(INSTALL_PREFS, Context.MODE_PRIVATE)
+        prefs.getString(INSTALL_ID_KEY, null)?.takeIf { it.isNotBlank() } ?: run {
+            val generated = UUID.randomUUID().toString()
+            // commit(), not apply(): a run that starts before the async write lands would generate
+            // a second id, and its staging file could then never be recognised as this install's.
+            prefs.edit().putString(INSTALL_ID_KEY, generated).commit()
+            generated
+        }
+    }
 
     /** Records that this device's archive was kept at [url] because the remote had changed. */
     fun recordConflict(context: Context, url: String) {

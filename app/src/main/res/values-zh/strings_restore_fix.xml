@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 设置/备份相关修复（SEC-2、UX-3/DAT-1/SYN-1、UX-4、DAT-10、DAT-11/SEC-4）。 -->
+<resources>
+    <!-- SEC-2：保存或使用 http:// WebDAV 配置前显示。 -->
+    <string name="restore_fix_cleartext_title">未加密的连接</string>
+    <string name="restore_fix_cleartext_message">该地址以 http:// 开头，因此 WebDAV 用户名、密码以及整个备份归档都会以明文在网络上传输，同一 Wi-Fi 下的任何人都可以读取或替换它们。请仅在可信的局域网中继续；其他网络请使用 https://。</string>
+    <string name="restore_fix_cleartext_continue">仍然使用 http</string>
+
+    <!-- UX-3 / DAT-1 / SYN-1：恢复到底做了什么。 -->
+    <string name="restore_fix_webdav_restore_confirm_message">这会用服务器上的归档替换整个笔记库。它是整库备份/恢复，不是多设备同步。本机当前的所有笔记都会被替换，且在该备份生成之后于本机新建或修改的笔记将会丢失。应用会自动保留被替换的数据库，因此可以用下方的“恢复上一版数据库”入口回滚。</string>
+    <string name="restore_fix_local_restore_confirm_message">这会用所选文件中的备份替换整个笔记库。它是整库备份/恢复，不是多设备同步。本机当前的所有笔记都会被替换，且在该备份生成之后于本机新建或修改的笔记将会丢失。应用会自动保留被替换的数据库，因此可以用下方的“恢复上一版数据库”入口回滚。</string>
+    <string name="restore_fix_auto_restore_confirm_message">这会用 %1$s 生成的自动备份替换整个笔记库。它是整库备份/恢复，不是多设备同步。本机当前的所有笔记都会被替换，该备份之后新建或修改的笔记将会丢失。应用会自动保留被替换的数据库，因此可以用下方的“恢复上一版数据库”入口回滚。</string>
+
+    <!-- DAT-7：数据库关闭并换库期间的阻塞界面。 -->
+    <string name="restore_fix_restoring">正在恢复备份…</string>
+
+    <!-- UX-3：上次恢复所替换数据库的回滚入口。 -->
+    <string name="restore_fix_snapshot_title">恢复上一版数据库</string>
+    <string name="restore_fix_snapshot_desc">上次恢复所替换的数据库，保存于 %1$s（%2$s）。恢复它会撤销那次恢复；此后写入的笔记将丢失。</string>
+    <string name="restore_fix_snapshot_restore">恢复</string>
+    <string name="restore_fix_snapshot_confirm_title">恢复上一版数据库？</string>
+    <string name="restore_fix_snapshot_confirm_message">这将放回上次恢复所替换的数据库。自那次恢复以来新建或修改的笔记会被它覆盖，应用随后会重启以重新打开数据库。</string>
+    <string name="restore_fix_snapshot_restored">已恢复上一版数据库，正在重启…</string>
+    <string name="restore_fix_snapshot_failed">无法恢复上一版数据库：%1$s</string>
+
+    <!-- UX-4：仅在无法读取所选归档文件头时显示。 -->
+    <string name="restore_fix_import_password_hint">无法读取该文件的文件头。若备份没有设置密码，请将此处留空。</string>
+
+    <!-- DAT-10：已存储的速记内容存在但无法解密。 -->
+    <string name="restore_fix_scratchpad_unreadable">已保存的速记内容无法在此设备上解密，加密密钥可能已被重置。原内容保持原样，保存功能已禁用，以免覆盖原文。请先从其他备份中取出你仍需要的内容。</string>
+    <string name="restore_fix_scratchpad_save_blocked">未保存：已存储的速记无法解密，因此保持原样。</string>
+
+    <!-- DAT-11 / SEC-4：闪卡使用笔记密钥封装。 -->
+    <string name="restore_fix_flashcards_save_failed">无法加密闪卡，因此未保存任何内容，已存储的卡片保持不变。</string>
+
+    <!-- SYN-3：恢复冲突副本后，服务器上的正式副本仍属于另一台设备，因此询问一次以哪一个笔记库为准。 -->
+    <string name="restore_fix_conflict_takeover_title">已恢复冲突副本</string>
+    <string name="restore_fix_conflict_takeover_message">此设备现在包含冲突副本中的笔记。服务器上仍是另一台设备的归档，因此下次备份会再次生成冲突副本。请选择要以哪一个笔记库作为服务器上的正式副本。</string>
+    <string name="restore_fix_conflict_takeover_use_local">用本机笔记作为服务器上的正式副本</string>
+    <string name="restore_fix_conflict_takeover_keep_remote">保留服务器上的副本</string>
+
+    <!-- DAT-13：TXT 导出/导入不包含附件。 -->
+    <string name="restore_fix_txt_text_only">TXT 只包含文字，不包含图片和录音。</string>
+</resources>

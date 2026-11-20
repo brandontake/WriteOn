@@ -1,5 +1,6 @@
 package com.ezpnix.writeon.presentation.components.markdown
 
+import android.content.Context
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -34,6 +35,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -45,6 +47,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.platform.UriHandler
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -434,6 +438,36 @@ fun TableBlock(
     }
 }
 
+/**
+ * A [UriHandler] that cannot take the reader down.
+ *
+ * Compose's default handler forwards every `LinkAnnotation.Url` straight to `ACTION_VIEW` and lets
+ * `ActivityNotFoundException` (no app for the scheme) or `FileUriExposedException` (targetSdk 31+
+ * refuses `file://`) escape from the tap. [sanitizeLinkUrl] already keeps those schemes out of the
+ * annotations the builder makes, but the handler is the last line of defence for text that reached
+ * a `Text` by another route, so it re-checks the scheme and turns every failure into a toast.
+ */
+private class SafeMarkdownUriHandler(
+    private val context: Context,
+    private val fallback: UriHandler,
+    private val failureMessage: String
+) : UriHandler {
+    override fun openUri(uri: String) {
+        val safeUri = sanitizeLinkUrl(uri)
+        if (safeUri == null) {
+            Toast.makeText(context, failureMessage, Toast.LENGTH_SHORT).show()
+            return
+        }
+        try {
+            fallback.openUri(safeUri)
+        } catch (exception: Exception) {
+            // A note can carry any link, and a tap is never worth an uncaught exception.
+            android.util.Log.w("MarkdownText", "Could not open link", exception)
+            Toast.makeText(context, failureMessage, Toast.LENGTH_SHORT).show()
+        }
+    }
+}
+
 @Composable
 fun MarkdownText(
     radius: Int,
@@ -482,23 +516,34 @@ fun MarkdownText(
         ).apply { parse() }.content
     }
 
-    MarkdownContent(
-        radius = radius,
-        isPreview = isPreview,
-        content = content,
-        containerColor = containerColor,
-        modifier = modifier,
-        spacing = spacing,
-        weight = weight,
-        fontSize = fontSize,
-        lines = lines,
-        onContentChange = onContentChange,
-        maxLines = maxLines,
-        overflow = overflow,
-        useLazyColumn = useLazyColumn,
-        onImageLoaded = onImageLoaded,
-        onAttachmentDelete = onAttachmentDelete
-    )
+    // Links are opened through a guarded handler. Providing it here, rather than at each call site,
+    // also covers the preview, the editor and the image exporter, which all render this text.
+    val context = LocalContext.current
+    val platformUriHandler = LocalUriHandler.current
+    val linkFailureMessage = stringResource(R.string.error)
+    val linkUriHandler = remember(context, platformUriHandler, linkFailureMessage) {
+        SafeMarkdownUriHandler(context, platformUriHandler, linkFailureMessage)
+    }
+
+    CompositionLocalProvider(LocalUriHandler provides linkUriHandler) {
+        MarkdownContent(
+            radius = radius,
+            isPreview = isPreview,
+            content = content,
+            containerColor = containerColor,
+            modifier = modifier,
+            spacing = spacing,
+            weight = weight,
+            fontSize = fontSize,
+            lines = lines,
+            onContentChange = onContentChange,
+            maxLines = maxLines,
+            overflow = overflow,
+            useLazyColumn = useLazyColumn,
+            onImageLoaded = onImageLoaded,
+            onAttachmentDelete = onAttachmentDelete
+        )
+    }
 }
 
 @Composable

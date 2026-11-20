@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Editor save/undo fixes (DAT-9, DAT-12, UX-1, UX-2, SEC-7).
+
+  Kept in its own file so this lane does not have to rewrite the shared strings table. Every key is
+  prefixed editor_fix_ and has en/zh/ja entries: the save indicator is permanent UI, not a transient
+  Toast, so it must not fall back to English on a localised device.
+-->
+<resources>
+    <string name="editor_fix_saving">Saving…</string>
+    <string name="editor_fix_saved">Saved</string>
+    <string name="editor_fix_save_failed">Couldn\'t save</string>
+    <string name="editor_fix_retry">Retry</string>
+    <string name="editor_fix_moved_to_trash">Moved to trash</string>
+    <string name="editor_fix_undo_unavailable">Nothing to undo — the note is still here</string>
+    <string name="editor_fix_vault_draft_disabled">Vault note: drafts are off, save before leaving</string>
+</resources>

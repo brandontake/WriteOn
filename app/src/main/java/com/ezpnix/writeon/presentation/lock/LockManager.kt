@@ -16,10 +16,22 @@ import android.widget.Toast
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 import com.ezpnix.writeon.R
+import com.ezpnix.writeon.core.attachment.MediaVault
+import com.ezpnix.writeon.core.security.EncryptionHelper
+import com.ezpnix.writeon.data.local.database.BackupDatabase
+import com.ezpnix.writeon.data.local.database.NoteDatabaseProvider
+import com.ezpnix.writeon.domain.usecase.NoteUseCase
+import com.ezpnix.writeon.presentation.components.markdown.AttachmentRegistry
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
 import java.io.File
 import java.security.MessageDigest
 import java.security.SecureRandom
@@ -37,9 +49,30 @@ import javax.inject.Singleton
  *
  * There is intentionally no recovery path: if the user forgets the credential, clearing the app
  * data is the only way back in. Do not add a reset/backdoor escape hatch here.
+ *
+ * SEC-6: "locked" means visibility **and** cache eviction, not just a screen over the content.
+ * [lock] also drops the vault password, the derived-key cache, `NoteCrypto`'s plaintext cache and
+ * the decrypted note list, so a locked app has nothing decryptable in memory for a heap dump or a
+ * surface outside [LockGate] to find; the unlock path reloads the list. SEC-4 adds the decrypted
+ * media copies in `cacheDir/media` (players and image loaders need a real path) to that list.
+ *
+ * V-3 draws the line between hiding and evicting: [onBackground] hides on **every** ON_STOP (so
+ * recents never sees a note) but schedules the eviction for after [GRACE_PERIOD_MS]. A camera or
+ * file-picker trip, a notification shade pull or any other quick stop is not a user decision to
+ * leave, and evicting the vault key for it threw away a session the user never ended: the gate
+ * reopened automatically, the vault did not, and a vault note edited across the trip could no
+ * longer be saved. Short trips keep the Vault session; only a real absence evicts.
  */
 @Singleton
-class LockManager @Inject constructor(@ApplicationContext private val context: Context) {
+class LockManager @Inject constructor(
+    @ApplicationContext private val context: Context,
+    private val encryptionHelper: EncryptionHelper,
+    private val noteUseCase: NoteUseCase,
+    // V-5: `NoteCrypto`'s plaintext cache is process-wide (companion-level), so clearing it here
+    // reaches the Hilt provider, the backup seam and SettingsViewModel's injected instance alike.
+    // The provider is still injected because it owns the eviction entry point, not the cache.
+    private val noteDatabaseProvider: NoteDatabaseProvider,
+) {
 
     /**
      * Encrypted lock storage with a last-resort fallback.
@@ -165,6 +198,20 @@ class LockManager @Inject constructor(@ApplicationContext private val context: C
     private var backgroundedAt = 0L
     private var wasUnlockedInBackground = false
 
+    /**
+     * Runs the grace timer on the main thread ([Dispatchers.Main.immediate]).
+     *
+     * V-3: the timer and [onForeground]'s cancel must be ordered against each other. Both are
+     * lifecycle callbacks on Main, so Main also serialises the "still backgrounded?" check: either
+     * the return cancels the job in time and the Vault session survives, or the job has already
+     * evicted and the return that follows finds the deadline passed. A timer on Default could
+     * evict in the window between a successful grace return and its cancellation.
+     */
+    private val mainScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+
+    /** Pending grace eviction for the current background visit; null when none is scheduled. */
+    private var evictionJob: Job? = null
+
     fun anyLockEnabled(): Boolean =
         _biometricEnabled.value || _pinEnabled.value || _patternEnabled.value
 
@@ -223,28 +270,134 @@ class LockManager @Inject constructor(@ApplicationContext private val context: C
 
     // region lock state
 
+    /**
+     * Locks the app and, when a credential is configured, evicts what the lock is meant to hide.
+     *
+     * SEC-6: the flag alone only covers the UI. A locked app that still holds the vault password,
+     * the derived keys and decrypted note bodies is a locked *screen*, not locked content: a heap
+     * dump, a debugger or any surface outside [LockGate] would still find plaintext. The semantics
+     * are therefore "visibility + cache eviction" - this method evicts at once (see [onBackground]
+     * for the grace-delayed variant), and [unlock]/[onForeground]'s grace path loads the list back.
+     *
+     * Locking without any credential would strand the user on the lock screen, so that case only
+     * leaves the state alone.
+     */
     fun lock() {
-        // Locking without any credential would strand the user on the lock screen.
-        if (anyLockEnabled()) _isLocked.value = true
+        if (!anyLockEnabled()) return
+        // Explicit locks (cold start, "lock now") are a decision rather than a visit: no grace,
+        // no timer, and any timer a background visit left behind has nothing left to do.
+        cancelPendingEviction()
+        _isLocked.value = true
+        evictSensitiveState()
+    }
+
+    /**
+     * Drops everything decryptable. Idempotent on purpose: the explicit lock path, the grace timer
+     * and a return after the deadline can all reach it, and more than one of them fires per lock.
+     */
+    private fun evictSensitiveState() {
+        // Stop the producers first: a collector cancelled after the list is cleared could still
+        // deliver one last emission and put decrypted rows back into memory.
+        noteUseCase.clearSensitiveState()
+        // Vault passphrase plus its derived-key LRU (EncryptionHelper). Without this a "locked"
+        // vault note could still be decrypted with what is already in memory.
+        encryptionHelper.removePassword()
+        // `w1:` plaintext cache in NoteCrypto. V-5 moved that cache into the class' companion, so
+        // this one call covers the list's DAO, Settings' flashcards/scratchpad and the migration
+        // wrapper. The backup seam is cleared as well for the instance it may have created.
+        noteDatabaseProvider.clearCryptoCache()
+        BackupDatabase.provider(context).clearCryptoCache()
+        // SEC-4: images and recordings are encrypted at rest, but playing or showing one writes a
+        // plaintext copy into `cacheDir/media`. That copy is exactly what a heap/dump or a file
+        // browser outside the lock gate could read, so it goes with the rest of the eviction.
+        // The registry goes first: it also invalidates a decrypt that is still running, so that
+        // copy cannot be published into the directory the lock is about to delete.
+        AttachmentRegistry.clearMaterialized()
+        MediaVault.clearCache(context)
     }
 
     fun unlock() {
+        settleUnlocked()
+    }
+
+    /**
+     * Leaves the locked state and reloads the list that [evictSensitiveState] just dropped.
+     *
+     * Called from both real unlocks (PIN, pattern, biometric) and the grace-period return in
+     * [onForeground]: the latter never asks for a credential, so without this the list would stay
+     * empty after a visit the lock had already evicted. [NoteUseCase.observe] is idempotent and
+     * starts from a cleared store, so it is a fresh load here, not a no-op.
+     */
+    private fun settleUnlocked() {
+        if (!_isLocked.value) return
         _isLocked.value = false
+        noteUseCase.observe()
     }
 
-    /** Called on ON_STOP: hide the content immediately so recents never shows the notes. */
+    /**
+     * Called on ON_STOP: hides the content at once and evicts only after the grace period (V-3).
+     *
+     * Recents privacy does not wait - the gate goes up before the timer, and `FLAG_SECURE` (see
+     * [LockGate]) blocks the thumbnail as well. What must wait is the eviction. SEC-6 originally
+     * evicted on every ON_STOP, which includes a camera/album/file-picker launch or a pulled-down
+     * notification shade; the gate then reopened automatically on return, but the vault password
+     * and `NoteCrypto` cache did not come back, so a vault note edited across the trip could no
+     * longer be saved and its new text was lost. [scheduleEviction] keeps the session for those
+     * short trips and drops it only when the user is really gone.
+     */
     fun onBackground() {
+        if (!anyLockEnabled()) return
         backgroundedAt = SystemClock.elapsedRealtime()
+        // Read before the flag flips: the grace path only reopens an app that was unlocked when it
+        // left, not one that was already showing the lock screen.
         wasUnlockedInBackground = !_isLocked.value
-        lock()
+        _isLocked.value = true
+        scheduleEviction(backgroundedAt)
     }
 
-    /** Called on ON_START: keep the lock unless the app was unlocked and the grace period held. */
+    /**
+     * Called on ON_START: keep the lock unless the app was unlocked and the grace period held.
+     *
+     * Returning within the grace period keeps the Vault session: the timer is cancelled and
+     * [settleUnlocked] only reopens the gate. Returning after it (or when this visit was never
+     * unlocked) evicts now if the timer has not already, and stays locked.
+     */
     fun onForeground() {
         val elapsed = SystemClock.elapsedRealtime() - backgroundedAt
-        if (wasUnlockedInBackground && elapsed in 0..GRACE_PERIOD_MS) _isLocked.value = false
+        val withinGrace = wasUnlockedInBackground &&
+            backgroundedAt != 0L &&
+            elapsed in 0..GRACE_PERIOD_MS
+        if (withinGrace) {
+            cancelPendingEviction()
+            settleUnlocked()
+        } else if (_isLocked.value && backgroundedAt != 0L) {
+            // backgroundedAt != 0 keeps a rotation or a cold start from running a pointless
+            // eviction: this branch means there was a real ON_STOP this return is closing.
+            cancelPendingEviction()
+            evictSensitiveState()
+        }
         backgroundedAt = 0L
         wasUnlockedInBackground = false
+    }
+
+    /**
+     * Starts the grace timer for the background visit that began at [stamp].
+     *
+     * Fires only if that visit is still current and the app is still locked - a genuine absence.
+     * The stamp check is the belt to [cancelPendingEviction]'s braces: it also covers a job that
+     * started before the cancel was observed, and a visit that ended without ON_START.
+     */
+    private fun scheduleEviction(stamp: Long) {
+        cancelPendingEviction()
+        evictionJob = mainScope.launch {
+            delay(GRACE_PERIOD_MS)
+            if (backgroundedAt == stamp && _isLocked.value) evictSensitiveState()
+        }
+    }
+
+    private fun cancelPendingEviction() {
+        evictionJob?.cancel()
+        evictionJob = null
     }
 
     // endregion
@@ -412,7 +565,13 @@ class LockManager @Inject constructor(@ApplicationContext private val context: C
             30 * 60_000L    // 5th and beyond
         )
 
-        /** Re-lock only when the app stayed in the background longer than this. */
+        /**
+         * How long a background visit may last before it counts as leaving (V-3).
+         *
+         * The gate hides on every ON_STOP; this window decides whether the return auto-reopens it
+         * and whether the eviction kept the vault session. Long enough for a camera picker or a
+         * notification-shade pull, short enough that a real switch to another app still locks.
+         */
         private const val GRACE_PERIOD_MS = 20_000L
 
         fun serializePattern(cells: List<Int>): String = cells.joinToString(PATTERN_SEPARATOR)

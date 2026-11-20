@@ -36,7 +36,11 @@ fun ScratchpadScreen(
     settingsViewModel: SettingsViewModel
 ) {
     val context = LocalContext.current
+    // DAT-10: load once, then ask whether the stored value could be opened at all. An
+    // undecryptable scratchpad used to come back as "" - an empty editor whose next save wrote
+    // over the only copy of the old text.
     val originalNote = remember { settingsViewModel.loadNote() }
+    val unreadable = settingsViewModel.scratchpadUnreadable
     var textState by remember { mutableStateOf(TextFieldValue(originalNote)) }
     val hasChanges = textState.text != originalNote
 
@@ -127,12 +131,33 @@ fun ScratchpadScreen(
                     .fillMaxSize()
                     .padding(16.dp)
                 ) {
+                    // The editor is deliberately still readable (selection and copy work), but it
+                    // is read-only and saving is refused: the original ciphertext must survive.
+                    if (unreadable) {
+                        Card(
+                            colors = CardDefaults.cardColors(
+                                containerColor = MaterialTheme.colorScheme.errorContainer
+                            ),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(bottom = 12.dp),
+                            shape = appCornerShape()
+                        ) {
+                            Text(
+                                text = stringResource(R.string.restore_fix_scratchpad_unreadable),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onErrorContainer,
+                                modifier = Modifier.padding(12.dp)
+                            )
+                        }
+                    }
                     BasicTextField(
                         value = textState,
                         onValueChange = {
                             undoStack.add(textState)
                             textState = it
                         },
+                        readOnly = unreadable,
                         textStyle = TextStyle(color = MaterialTheme.colorScheme.onSurface),
                         modifier = Modifier.fillMaxSize(),
                         cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
@@ -175,12 +200,20 @@ fun ScratchpadScreen(
                         title = { Text(context.getString(R.string.unsaved_changes_title)) },
                         text = { Text(context.getString(R.string.unsaved_changes_message)) },
                         confirmButton = {
-                            TextButton(onClick = {
-                                settingsViewModel.saveNote(textState.text)
-                                Toast.makeText(context, context.getString(R.string.msg_note_saved), Toast.LENGTH_SHORT).show()
-                                showSaveDialog = false
-                                navController.navigateUp()
-                            }) {
+                            TextButton(
+                                enabled = !unreadable,
+                                onClick = {
+                                    // saveNote refuses while the stored value is unreadable, so
+                                    // the confirmation is only claimed for a real write.
+                                    if (settingsViewModel.saveNote(textState.text)) {
+                                        Toast.makeText(context, context.getString(R.string.msg_note_saved), Toast.LENGTH_SHORT).show()
+                                        showSaveDialog = false
+                                        navController.navigateUp()
+                                    } else {
+                                        Toast.makeText(context, context.getString(R.string.restore_fix_scratchpad_save_blocked), Toast.LENGTH_LONG).show()
+                                    }
+                                }
+                            ) {
                                 Text(context.getString(R.string.action_save))
                             }
                         },

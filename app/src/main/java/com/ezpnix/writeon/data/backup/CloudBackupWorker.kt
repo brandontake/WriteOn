@@ -13,9 +13,11 @@ import androidx.work.WorkerParameters
 import com.ezpnix.writeon.core.attachment.AttachmentArchive
 import com.ezpnix.writeon.core.constant.DatabaseConst
 import com.ezpnix.writeon.core.util.BackupArchiveCrypto
+import com.ezpnix.writeon.core.util.BackupRestoreLock
 import com.ezpnix.writeon.data.local.database.BackupDatabase
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import okhttp3.Credentials
 import okhttp3.Request
@@ -152,10 +154,15 @@ open class WebDAVBackupWorker(
             writeEncryptedArchive(archive, passphrase)
 
             val authorization = Credentials.basic(username, password)
-            // W4: clear the staging file an interrupted previous run left behind - best-effort,
-            // before anything else touches the server.
-            val stagingUrl = uploadingUrl(webdavUrl)
-            deleteRemote(stagingUrl, authorization)
+            // W4 + SYN-4: stage under a name that carries this install's id. The old fixed
+            // `<canonical>.uploading` was shared by every device, so the cleanup DELETE of a
+            // previous run could remove another device's in-flight upload (or the MOVE could
+            // publish it). With the id in the name every cleanup below names only this install's
+            // own staging file; a PUT replaces any leftover from an interrupted run anyway.
+            val stagingUrl = WebDavPublish.stagingUrl(
+                canonicalUrl = webdavUrl,
+                installId = WebDavBackupState.installId(applicationContext)
+            )
             val remote = fetchRemote(webdavUrl, authorization)
             var knownEtag = prefs[stringPreferencesKey(WebDavPrefs.ETAG)]
             // W5: a server without ETags still reports Last-Modified. It is the weaker validator
@@ -216,9 +223,11 @@ open class WebDAVBackupWorker(
                 return@withContext failWithNoValidator()
             }
 
-            // Preconditions for the canonical file, sent on the MOVE itself and on the direct
-            // PUT fallback (RFC preconditions apply to every method; a server that ignores them
-            // on MOVE is exactly the server that falls back to the conditional PUT anyway).
+            // Preconditions for the canonical file. SYN-2: `If-Match`/`If-None-Match`/
+            // `If-Unmodified-Since` on a MOVE are evaluated against the request URI (our staging
+            // file), never against `Destination`, so they are no longer sent on the MOVE at all -
+            // [WebDavPublish.destinationPreconditionHeaders] turns them into a tagged `If` on the
+            // destination or into a direct conditional PUT on the canonical URL.
             // Remembered validators win; the values from the HEAD above only bootstrap a device
             // that has none stored (an upgrade, or a server that started reporting them) and
             // still guard the window between that HEAD and the upload.
@@ -262,6 +271,8 @@ open class WebDAVBackupWorker(
                         if (runAttemptCount < WebDavRetry.MAX_RUN_ATTEMPTS) {
                             return@withContext Result.retry()
                         }
+                        // Terminal: this staging name is this install's own (SYN-4).
+                        deleteRemote(stagingUrl, authorization)
                         return@withContext failWithToast()
                     }
                     publishStagedArchive(
@@ -269,6 +280,9 @@ open class WebDAVBackupWorker(
                         canonicalUrl = webdavUrl,
                         authorization = authorization,
                         archive = archive,
+                        // SYN-2: the staging PUT's ETag is the proof of what the MOVE published;
+                        // the post-MOVE HEAD is compared against it.
+                        expectedEtag = staged.etag,
                         ifMatch = ifMatch,
                         ifNoneMatch = ifNoneMatch,
                         ifUnmodifiedSince = ifUnmodifiedSince
@@ -286,11 +300,17 @@ open class WebDAVBackupWorker(
         }
     }
 
-    private data class RemoteState(val exists: Boolean?, val etag: String?, val lastModified: String? = null)
+    private data class RemoteState(
+        val exists: Boolean?,
+        val etag: String?,
+        val lastModified: String? = null,
+        val contentLength: Long? = null,
+    )
 
     /**
      * One HEAD tells us whether the file on the server is still the one we uploaded last time,
-     * whether it exists at all, and - for servers that offer no ETag - when it last changed.
+     * whether it exists at all, - for servers that offer no ETag - when it last changed, and how
+     * many bytes it holds (SYN-2's post-MOVE size check rides on the same response).
      * `exists = null` means the server would not tell us.
      */
     private fun fetchRemote(url: String, authorization: String): RemoteState = try {
@@ -306,7 +326,8 @@ open class WebDAVBackupWorker(
                 response.code in 200..299 -> RemoteState(
                     exists = true,
                     etag = normalizeEtag(response.header("ETag")),
-                    lastModified = response.header("Last-Modified")
+                    lastModified = response.header("Last-Modified"),
+                    contentLength = response.header("Content-Length")?.toLongOrNull()
                 )
                 else -> RemoteState(exists = null, etag = null)
             }
@@ -363,14 +384,10 @@ open class WebDAVBackupWorker(
      * Publishes the staged file under the canonical name with a WebDAV `MOVE` (W4).
      *
      * `Destination` is the absolute URL including any query string (the same rule
-     * [conflictUrl] follows), and `Overwrite: T` lets the server replace the canonical file in
-     * one atomic step on its side - the canonical name is either the old complete archive or
-     * the new one, never a partial upload.
-     *
-     * The canonical-file preconditions travel with the MOVE as well: `Overwrite: T` is
-     * unconditional on its own, so without them the happy path would silently replace a file
-     * another device had just won (the exact race the conditional PUT used to catch with a
-     * 412 -> conflict copy, which is still how a server that rejects this header is handled).
+     * [conflictUrl] follows). SYN-2: the destination precondition arrives as [destinationHeaders]
+     * - a tagged `If: <destination> ([etag])` (RFC 4918 §10.4.1) or `Overwrite: F` for a create.
+     * Sending `If-Match`/`If-None-Match`/`If-Unmodified-Since` here would be wrong by the spec:
+     * those headers are evaluated against the request URI, which is our staging file.
      *
      * @return the HTTP status, or 0 when the request never completed.
      */
@@ -378,25 +395,14 @@ open class WebDAVBackupWorker(
         stagingUrl: String,
         destinationUrl: String,
         authorization: String,
-        ifMatch: String?,
-        ifNoneMatch: Boolean,
-        ifUnmodifiedSince: String?
+        destinationHeaders: Map<String, String>
     ): Int {
         val builder = Request.Builder()
             .url(stagingUrl)
             .method("MOVE", null)
             .header("Authorization", authorization)
             .header("Destination", destinationUrl)
-            .header("Overwrite", "T")
-        if (ifMatch != null) {
-            builder.header("If-Match", ifMatch)
-        }
-        if (ifNoneMatch) {
-            builder.header("If-None-Match", "*")
-        }
-        if (ifUnmodifiedSince != null) {
-            builder.header("If-Unmodified-Since", ifUnmodifiedSince)
-        }
+        destinationHeaders.forEach { (name, value) -> builder.header(name, value) }
         return try {
             client.newCall(builder.build()).execute().use { response -> response.code }
         } catch (e: IOException) {
@@ -406,8 +412,9 @@ open class WebDAVBackupWorker(
     }
 
     /**
-     * Best-effort DELETE used to clear a stale staging file before an upload and to drop the
-     * staging copy when the server cannot MOVE it. A 404 is the normal "nothing to delete" case.
+     * Best-effort DELETE of this install's own staging file once it is redundant: after a direct
+     * PUT fallback, and on a terminal failure. SYN-4 makes the name install-scoped, so this can
+     * never remove another device's in-flight upload. A 404 is the normal "nothing to delete" case.
      */
     private fun deleteRemote(url: String, authorization: String) {
         try {
@@ -446,8 +453,23 @@ open class WebDAVBackupWorker(
     }
 
     /**
-     * Takes the staged archive live: `MOVE` it onto the canonical name, then remember the
-     * canonical file's validators for the next run.
+     * Takes the staged archive live: `MOVE` it onto the canonical name, then verify and remember
+     * the canonical file's validators for the next run.
+     *
+     * SYN-2: after the MOVE the canonical file is re-HEADed and its ETag compared with
+     * [expectedEtag] (the ETag the staging PUT returned). Equal ETags prove the published bytes
+     * are the ones this run uploaded; a server that silently ignored a destination `If`/
+     * `Overwrite: F` and let another file replace ours is caught here.
+     *
+     * A *different* ETag is not automatically another file: some WebDAV servers mint a fresh ETag
+     * on every MOVE even though the bytes are unchanged. When the same HEAD also reports a
+     * `Content-Length` equal to [archive]'s, that is treated as a server-minted ETag for our bytes
+     * and the new value is stored, so the next backup stays conditional and converges (SYN-3).
+     * Only a mismatch whose size differs or cannot be read is unverified, because then neither
+     * ETag nor length identifies our upload; no validator is stored and the next run treats the
+     * remote as unknown rather than overwrite it. When HEAD omits the ETag entirely,
+     * `Content-Length` remains the only available check (it cannot tell two same-size files
+     * apart).
      *
      * Servers that do not implement `MOVE` (405/501) fall back to the direct conditional PUT
      * this build used before W4, with the same preconditions, and the fallback is logged so a
@@ -458,27 +480,100 @@ open class WebDAVBackupWorker(
         canonicalUrl: String,
         authorization: String,
         archive: File,
+        expectedEtag: String?,
         ifMatch: String?,
         ifNoneMatch: Boolean,
         ifUnmodifiedSince: String?,
         recoveredFromStaleValidator: Boolean = false
     ): Result {
+        val destination = WebDavPublish.destinationPreconditionHeaders(
+            destinationUrl = canonicalUrl,
+            ifMatch = ifMatch,
+            ifNoneMatch = ifNoneMatch,
+            ifUnmodifiedSince = ifUnmodifiedSince
+        )
+        // SYN-2: a Last-Modified-only validator has no destination-side form on a MOVE (the
+        // header would guard the staging file). Publish straight onto the canonical URI instead,
+        // where If-Unmodified-Since is evaluated against the file it is meant to protect.
+        if (destination.directPut) {
+            Log.i(
+                TAG,
+                "Only a Last-Modified validator is available; MOVE cannot precondition the " +
+                    "destination, publishing with a direct conditional PUT"
+            )
+            val result = directConditionalPut(
+                canonicalUrl, authorization, archive, ifMatch, ifNoneMatch, ifUnmodifiedSince
+            )
+            deleteRemote(stagingUrl, authorization)
+            return result
+        }
         val move = moveArchive(
             stagingUrl = stagingUrl,
             destinationUrl = canonicalUrl,
             authorization = authorization,
-            ifMatch = ifMatch,
-            ifNoneMatch = ifNoneMatch,
-            ifUnmodifiedSince = ifUnmodifiedSince
+            destinationHeaders = destination.headers
         )
         return when {
             move in 200..299 -> {
                 // A MOVE response often omits validators; re-HEAD the canonical file (the same
                 // rule the old post-PUT HEAD followed) so a stale validator is never stored.
+                // SYN-2: compare the staging PUT's ETag with the published file. Equal tags prove
+                // the bytes are ours; a different tag with the same length is a server-minted
+                // ETag for our bytes (see below), while a different/unknown length means the
+                // publication cannot be verified. Length alone remains the fallback for HEAD
+                // responses that omit the ETag.
                 val head = fetchRemote(canonicalUrl, authorization)
-                storeEtag(head.etag)
-                storeLastModified(head.lastModified)
-                storeRemoteWritten(true)
+                val expected = normalizeEtag(expectedEtag)
+                val published = normalizeEtag(head.etag)
+                val publishedLength = head.contentLength
+                val verified = when {
+                    expected != null && published != null -> {
+                        when {
+                            expected == published -> true
+                            // A server-minted ETag for unchanged bytes: MOVE gave the same content a
+                            // fresh tag. The length confirms our upload, and storing the new value
+                            // keeps the next run conditional instead of looping on conflict copies.
+                            publishedLength != null && publishedLength == archive.length() -> {
+                                Log.w(
+                                    TAG,
+                                    "Published archive ETag $published differs from the uploaded " +
+                                        "ETag $expected but the size matches; treating it as a server-minted ETag for our bytes"
+                                )
+                                true
+                            }
+                            else -> {
+                                Log.w(
+                                    TAG,
+                                    "Published archive ETag $published does not match the uploaded " +
+                                        "ETag $expected and its size does not confirm the upload; " +
+                                        "not remembering a validator for a file this run did not write"
+                                )
+                                false
+                            }
+                        }
+                    }
+                    else -> {
+                        if (publishedLength != null && publishedLength != archive.length()) {
+                            Log.w(
+                                TAG,
+                                "Published archive is $publishedLength bytes but the uploaded archive is " +
+                                    "${archive.length()}; not remembering a validator for a file this run did not write"
+                            )
+                            false
+                        } else {
+                            true
+                        }
+                    }
+                }
+                if (!verified) {
+                    storeEtag(null)
+                    storeLastModified(null)
+                    storeRemoteWritten(false)
+                } else {
+                    storeEtag(head.etag)
+                    storeLastModified(head.lastModified)
+                    storeRemoteWritten(true)
+                }
                 // W18: the canonical file is this device's again, so the parked-copy notices no
                 // longer describe an unresolved conflict and must not outlive it.
                 WebDavBackupState.recordSuccess(applicationContext)
@@ -488,6 +583,19 @@ open class WebDAVBackupWorker(
             move == 405 || move == 501 -> {
                 Log.w(TAG, "Server rejected MOVE with HTTP $move; falling back to a direct conditional PUT")
                 // The staged copy is about to become redundant; do not leave it in the folder.
+                deleteRemote(stagingUrl, authorization)
+                directConditionalPut(canonicalUrl, authorization, archive, ifMatch, ifNoneMatch, ifUnmodifiedSince)
+            }
+            // SYN-2 compatibility path: a server that does not understand a destination-side
+            // `If` (or rejects `Overwrite: F` on MOVE) answers 400/412. One direct conditional
+            // PUT uses the same precondition where the header is unambiguously about the target;
+            // a second 412 there is a real race and becomes a conflict copy as usual.
+            (move == BAD_REQUEST || move == PRECONDITION_FAILED) && destination.retryDirectPutOnReject -> {
+                Log.w(
+                    TAG,
+                    "MOVE rejected the destination precondition with HTTP $move; retrying once " +
+                        "as a direct conditional PUT"
+                )
                 deleteRemote(stagingUrl, authorization)
                 directConditionalPut(canonicalUrl, authorization, archive, ifMatch, ifNoneMatch, ifUnmodifiedSince)
             }
@@ -502,24 +610,41 @@ open class WebDAVBackupWorker(
                         canonicalUrl = canonicalUrl,
                         authorization = authorization,
                         archive = archive,
+                        expectedEtag = expectedEtag,
                         ifMatch = null,
                         ifNoneMatch = true,
                         ifUnmodifiedSince = null,
                         recoveredFromStaleValidator = true
                     )
                 }
+                // Terminal failure: this staging name is this install's own, so cleaning it up
+                // cannot touch another device's upload.
+                deleteRemote(stagingUrl, authorization)
                 keepConflictCopy(canonicalUrl, authorization, archive)
                 Result.failure()
             }
-            WebDavRetry.isRedirect(move) -> failWithRedirect(move)
-            else -> retryOrFail(move, "WebDAV MOVE to the canonical name failed")
+            WebDavRetry.isRedirect(move) -> {
+                deleteRemote(stagingUrl, authorization)
+                failWithRedirect(move)
+            }
+            else -> {
+                // A retry re-PUTs the whole archive, so the leftover gains nothing; removing it
+                // now also covers the terminal case.
+                deleteRemote(stagingUrl, authorization)
+                retryOrFail(move, "WebDAV MOVE to the canonical name failed")
+            }
         }
     }
 
     /**
-     * The pre-W4 publication path: one conditional PUT straight onto the canonical name. It is
-     * the fallback for servers that reject `MOVE` (405/501), and the only path those servers
-     * ever take. Success stores both validators; a lost race still becomes a conflict copy.
+     * The pre-W4 publication path: one conditional PUT straight onto the canonical name.
+     *
+     * It is the fallback for servers that reject `MOVE` (405/501), the publication path when only
+     * a Last-Modified validator exists (SYN-2: a MOVE cannot precondition `Destination` with it),
+     * and the one-shot compatibility retry when a server answers 400/412 to a destination-side
+     * `If`/`Overwrite: F`. Here the precondition headers name the request URI - the canonical
+     * file itself - so their RFC meaning is exactly what the backup wants. Success stores both
+     * validators; a lost race still becomes a conflict copy.
      */
     private suspend fun directConditionalPut(
         url: String,
@@ -680,19 +805,6 @@ open class WebDAVBackupWorker(
     private data class UploadResult(val code: Int, val etag: String?, val lastModified: String? = null)
 
     /**
-     * `notes-backup-encrypted.zip` becomes `notes-backup-encrypted.zip.uploading`, keeping any
-     * query string (the same rule [conflictUrl] follows). The staging name is what an
-     * interrupted upload leaves behind, so the canonical file is only ever written by a MOVE
-     * that had already verified the staged bytes (W4).
-     */
-    private fun uploadingUrl(url: String): String {
-        val queryIndex = url.indexOf('?')
-        val base = if (queryIndex >= 0) url.substring(0, queryIndex) else url
-        val query = if (queryIndex >= 0) url.substring(queryIndex) else ""
-        return base + UPLOADING_SUFFIX + query
-    }
-
-    /**
      * `Content-MD5` for [file]: base64(md5(bytes)), streamed so a library full of recordings
      * never has to sit in memory just to be hashed (W4).
      */
@@ -712,37 +824,54 @@ open class WebDAVBackupWorker(
     private suspend fun writeEncryptedArchive(target: File, passphrase: String) {
         val portable = File.createTempFile("webdav-portable", ".db", applicationContext.cacheDir)
         try {
-            val provider = BackupDatabase.provider(applicationContext)
-            provider.writePortableDatabaseCopy(portable)
-            val attachments = provider.attachmentDao().getAll()
+            // DAT-8: the portable copy, the attachment rows and the zip built from them are one
+            // snapshot and must share the restore mutex - a restore that closes and replaces the
+            // database in this window would otherwise produce a "new database + old attachments"
+            // archive. The upload itself stays outside the lock: a restore may wait for the
+            // snapshot, but not for a slow network.
+            BackupRestoreLock.mutex.withLock {
+                val provider = BackupDatabase.provider(applicationContext)
+                // N-5: take the attachment rows from the portable-copy transaction instead of
+                // re-querying the live table after it. A save in between could prune a row whose
+                // file was already selected, producing a row without bytes (or vice versa).
+                val attachments = provider.writePortableDatabaseCopy(portable)
 
-            val zipFile = File(target.absolutePath + ZIP_TEMP_SUFFIX)
-            try {
-                ZipOutputStream(FileOutputStream(zipFile)).use { zip ->
-                    // W6: freshness manifest as the first entry, so a restore can tell how old
-                    // this backup is before it replaces anything. Archives without one (written
-                    // by older builds) remain legal - they just have no recorded age.
-                    BackupArchiveCrypto.writeManifestEntry(
-                        zip = zip,
-                        noteCount = countNotes(portable),
-                        attachmentCount = attachments.size
-                    )
-                    zip.putNextEntry(ZipEntry(DatabaseConst.NOTES_DATABASE_FILE_NAME))
-                    FileInputStream(portable).use { db -> db.copyTo(zip) }
-                    zip.closeEntry()
-                    AttachmentArchive.writeTo(zip, attachments)
-                }
-
-                // Stream the archive through the cipher into the target file. The old
-                // readBytes() -> encrypt -> write held the whole archive (database + every
-                // recording) as up to three byte arrays at once.
-                FileOutputStream(target).use { output ->
-                    FileInputStream(zipFile).use { zipInput ->
-                        BackupArchiveCrypto.encryptStream(zipInput, output, passphrase)
+                val zipFile = File(target.absolutePath + ZIP_TEMP_SUFFIX)
+                try {
+                    ZipOutputStream(FileOutputStream(zipFile)).use { zip ->
+                        // W6: freshness manifest as the first entry, so a restore can tell how old
+                        // this backup is before it replaces anything. Archives without one (written
+                        // by older builds) remain legal - they just have no recorded age.
+                        BackupArchiveCrypto.writeManifestEntry(
+                            zip = zip,
+                            noteCount = countNotes(portable),
+                            attachmentCount = attachments.size
+                        )
+                        zip.putNextEntry(ZipEntry(DatabaseConst.NOTES_DATABASE_FILE_NAME))
+                        FileInputStream(portable).use { db -> db.copyTo(zip) }
+                        zip.closeEntry()
+                        // SEC-4: decrypting overload. `WMV1` bytes must never reach the archive:
+                        // the upload is the copy meant to be readable on another install.
+                        AttachmentArchive.writeTo(zip, attachments, applicationContext)
+                        // DAT-11: the deck is not part of the portable database, so a WebDAV
+                        // archive without it restored the notes onto a device with no cards.
+                        FlashcardArchive.writeToZip(applicationContext, zip)
+                        // PERF-2: neither is the envelope salt. A `v3:` row restored on another
+                        // install is only readable while this member travels beside it.
+                        VaultSaltArchive.writeToZip(applicationContext, zip)
                     }
+
+                    // Stream the archive through the cipher into the target file. The old
+                    // readBytes() -> encrypt -> write held the whole archive (database + every
+                    // recording) as up to three byte arrays at once.
+                    FileOutputStream(target).use { output ->
+                        FileInputStream(zipFile).use { zipInput ->
+                            BackupArchiveCrypto.encryptStream(zipInput, output, passphrase)
+                        }
+                    }
+                } finally {
+                    zipFile.delete()
                 }
-            } finally {
-                zipFile.delete()
             }
         } finally {
             portable.delete()
@@ -771,9 +900,6 @@ open class WebDAVBackupWorker(
         const val BACKUP_FILENAME = "notes-backup-encrypted.zip"
         const val ZIP_TEMP_SUFFIX = ".ziptmp"
 
-        /** Appended to the canonical file name to form the W4 staging name. */
-        const val UPLOADING_SUFFIX = ".uploading"
-
         /**
          * W7: how many conflict-copy names to try before giving up.
          *
@@ -784,6 +910,9 @@ open class WebDAVBackupWorker(
 
         /** WebDAV: the precondition failed, i.e. the remote file changed under us. */
         const val PRECONDITION_FAILED = 412
+
+        /** Some servers answer a MOVE they cannot apply the destination `If` to with a plain 400. */
+        const val BAD_REQUEST = 400
     }
 }
 
@@ -794,3 +923,105 @@ open class WebDAVBackupWorker(
  * enqueues the work with it.
  */
 const val DATA_FORCE_OVERWRITE = "force_overwrite"
+
+/**
+ * SYN-2/SYN-4: the two naming/precondition rules of the WebDAV publication, split into pure
+ * functions so the *header shape* can be tested without a server.
+ *
+ * The rules are easy to get wrong in a way only a strict server notices:
+ *  - `If-Match`, `If-None-Match` and `If-Unmodified-Since` on a `MOVE` describe the **request
+ *    URI** (the staging file), not `Destination`. The old code sent them on the MOVE anyway, so
+ *    a strict server either failed every publish with 412 or silently left the canonical file
+ *    unprotected.
+ *  - A destination precondition is expressible only as RFC 4918 §10.4.1
+ *    `If: <destination> ([etag])`, or as `Overwrite: F` for "must not exist". A Last-Modified-only
+ *    validator has no such form, so publication has to stay on the canonical URL as a conditional
+ *    `PUT`.
+ */
+internal object WebDavPublish {
+
+    /** SYN-4: inserted before the query string to make the staging name install-scoped. */
+    private const val UPLOADING_SUFFIX = ".uploading-"
+
+    /**
+     * What the MOVE must carry, and how to publish when it cannot carry anything.
+     *
+     * @property headers request headers for the MOVE (`Overwrite`, plus a tagged `If` when an ETag
+     *   is known). Empty when [directPut] is set.
+     * @property directPut true when the destination must be written by a conditional `PUT` on the
+     *   canonical URL instead of a MOVE, because no header can express the precondition.
+     * @property retryDirectPutOnReject true when the MOVE used a destination-side precondition, so
+     *   a 400/412 from a server that rejects or ignores it may be retried once as a direct PUT.
+     */
+    internal data class DestinationPrecondition(
+        val headers: Map<String, String>,
+        val directPut: Boolean,
+        val retryDirectPutOnReject: Boolean,
+    )
+
+    /**
+     * Builds the publication plan for the canonical file.
+     *
+     * Only a known ETag produces a tagged `If`: that is the one RFC 4918 form in which a MOVE can
+     * name a precondition about `Destination`. `ifNoneMatch` becomes `Overwrite: F`, which every
+     * WebDAV server understands for "do not replace"; a 412 then means the file appeared.
+     * `ifUnmodifiedSince` alone is deliberately *not* translated - see [DestinationPrecondition.directPut].
+     */
+    internal fun destinationPreconditionHeaders(
+        destinationUrl: String,
+        ifMatch: String?,
+        ifNoneMatch: Boolean,
+        ifUnmodifiedSince: String?,
+    ): DestinationPrecondition = when {
+        ifMatch != null -> DestinationPrecondition(
+            headers = mapOf(
+                "Overwrite" to "T",
+                "If" to "<$destinationUrl> ([${quoteEtag(ifMatch)}])",
+            ),
+            directPut = false,
+            retryDirectPutOnReject = true,
+        )
+        ifNoneMatch -> DestinationPrecondition(
+            headers = mapOf("Overwrite" to "F"),
+            directPut = false,
+            retryDirectPutOnReject = true,
+        )
+        ifUnmodifiedSince != null -> DestinationPrecondition(
+            // A MOVE would evaluate the header against the staging file, so it expresses
+            // nothing about the destination; the canonical PUT does.
+            headers = emptyMap(),
+            directPut = true,
+            retryDirectPutOnReject = false,
+        )
+        else -> DestinationPrecondition(
+            headers = mapOf("Overwrite" to "T"),
+            directPut = false,
+            retryDirectPutOnReject = false,
+        )
+    }
+
+    /**
+     * RFC 7232 entity-tags are quoted. Servers are supposed to return them that way, but the
+     * `If` grammar has no tolerance for a bare token, so an unquoted value is repaired here.
+     */
+    internal fun quoteEtag(etag: String): String {
+        val trimmed = etag.trim()
+        return if (trimmed.length >= 2 && trimmed.startsWith('"') && trimmed.endsWith('"')) {
+            trimmed
+        } else {
+            "\"$trimmed\""
+        }
+    }
+
+    /**
+     * `<canonical>.uploading-<installId>`, with the query string moved after the suffix so a
+     * signed URL keeps its parameters. Two installs therefore never share a staging name, and
+     * this install can delete its own leftovers without touching another device's upload.
+     */
+    internal fun stagingUrl(canonicalUrl: String, installId: String): String {
+        val queryIndex = canonicalUrl.indexOf('?')
+        val base = if (queryIndex >= 0) canonicalUrl.substring(0, queryIndex) else canonicalUrl
+        val query = if (queryIndex >= 0) canonicalUrl.substring(queryIndex) else ""
+        return base + UPLOADING_SUFFIX + installId + query
+    }
+}

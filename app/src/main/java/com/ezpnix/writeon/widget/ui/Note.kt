@@ -12,6 +12,7 @@ import androidx.glance.LocalContext
 import androidx.glance.action.clickable
 import androidx.glance.appwidget.appWidgetBackground
 import androidx.glance.appwidget.cornerRadius
+import androidx.glance.appwidget.updateAll
 import androidx.glance.background
 import androidx.glance.layout.Alignment
 import androidx.glance.layout.Box
@@ -26,6 +27,7 @@ import com.ezpnix.writeon.presentation.MainActivity
 import com.ezpnix.writeon.presentation.components.markdown.WidgetText
 import com.ezpnix.writeon.presentation.lock.LockEntryPoint
 import com.ezpnix.writeon.presentation.lock.LockManager
+import com.ezpnix.writeon.widget.NotesWidget
 import dagger.hilt.android.EntryPointAccessors
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -112,12 +114,22 @@ fun SelectedNote(note: Note, noteUseCase: NoteUseCase, widgetId: Int) {
                             // Saving a vault note without a loaded passphrase must fail loudly (see
                             // NoteUseCase.encryptNote). In a widget coroutine an uncaught throw would
                             // take the process down, so it is reported here instead of crashing.
-                            runCatching {
+                            val saved = runCatching {
                                 noteUseCase.addNote(note.copy(name = newName, description = newDesc))
-                            }.onFailure { error ->
+                            }
+                            saved.onFailure { error ->
                                 android.util.Log.e("WidgetNote", "Could not save the widget edit", error)
                             }
-                            noteUseCase.observe()
+                            if (saved.isSuccess) {
+                                // PERF-3: no observe() here. The old call started (another) full
+                                // library collector from a widget, and every one of those lived for
+                                // the process. A redraw is enough: each placed widget re-enters
+                                // provideGlance and reads only its own note (PERF-6).
+                                runCatching { NotesWidget().updateAll(context) }
+                                    .onFailure { error ->
+                                        android.util.Log.e("WidgetNote", "Could not refresh the widget", error)
+                                    }
+                            }
                         }
                     }
                 )

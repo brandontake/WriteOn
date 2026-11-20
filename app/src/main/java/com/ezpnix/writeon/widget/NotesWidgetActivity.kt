@@ -53,12 +53,15 @@ class NotesWidgetActivity : ComponentActivity() {
             val settings = hiltViewModel<SettingsViewModel>()
             val coroutineScope = rememberCoroutineScope()
 
-            // Starting the collectors here meant every recomposition cancelled and restarted them.
-            // They only need to run for the lifetime of this screen.
-            LaunchedEffect(Unit) { noteUseCase.observe() }
-
             LeafNotesTheme(settingsModel = settings) {
                 LockGate {
+                    // PERF-3/SEC-6: start the collectors inside the gate, i.e. only while the
+                    // content is actually visible. The old LaunchedEffect sat outside LockGate, so
+                    // a locked app still ran a full decrypt of the library to feed a list nobody
+                    // could see. LockManager cancels the collectors on lock, and this effect runs
+                    // again when the gate reopens.
+                    LaunchedEffect(Unit) { noteUseCase.observe() }
+
                     NotesScaffold(
                         topBar = {
                             TopBar(

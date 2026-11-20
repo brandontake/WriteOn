@@ -1,5 +1,6 @@
 package com.ezpnix.writeon.core.util
 
+import android.util.Log
 import com.ezpnix.writeon.core.constant.DatabaseConst
 import java.io.File
 import java.io.FileOutputStream
@@ -21,11 +22,19 @@ import java.util.zip.ZipInputStream
  */
 object DatabaseRestore {
 
+    private const val TAG = "DatabaseRestore"
+
     /** Staged copy of the live database; renamed over it only after it has been fully written. */
     private const val STAGING_SUFFIX = ".new"
 
     /** Previous database, kept so a failed restore can still be undone by hand. */
     private const val BACKUP_SUFFIX = ".bak"
+
+    /** Copy of `.bak` used by [rollbackFromBackup]; never written over the backup itself. */
+    private const val ROLLBACK_SUFFIX = ".rollback"
+
+    /** `.bak` next to a live database [target]; the one file [RestoreSnapshots] exposes. */
+    fun backupFile(target: File): File = File(target.absolutePath + BACKUP_SUFFIX)
 
     /**
      * Upper bound for one archive member. A notes database is comfortably under a few megabytes, so
@@ -146,28 +155,88 @@ object DatabaseRestore {
      *
      * The sequence is: stage next to the target, verify the staged file opens as a SQLite database
      * and passes the D8 compatibility gate ([assertArchiveCompatible]), copy the old database to
-     * `.bak`, then replace the target with a **single atomic move**. The target therefore exists at
-     * every instant of the operation: a crash can leave "old database" or "old database + `.bak` +
-     * new database", but never "no database" - the window the previous two-rename sequence had
-     * (rename #1 target→`.bak`, rename #2 staged→target) is gone, because the old file is copied
-     * aside instead of renamed away (W14).
+     * `.bak`, **delete the old `-wal`/`-shm`**, replace the target with a **single atomic move**,
+     * delete any sidecar that reappeared, then run `quick_check` on the installed file and roll
+     * back from `.bak` if it fails (DAT-5). The target therefore exists at every instant of the
+     * operation: a crash can leave "old database" or "old database + `.bak` + new database", but
+     * never "no database" - the window the previous two-rename sequence had (rename #1
+     * target→`.bak`, rename #2 staged→target) is gone, because the old file is copied aside
+     * instead of renamed away (W14).
+     *
+     * Sidecar ordering deserves its own note: SQLite replays `-wal` pages into whatever file sits
+     * at the database path. Deleting it after the move (the old order) meant a crash in between
+     * replayed the previous database's pages into the restored one, which no later check could
+     * undo. Callers close Room first, then this function removes both sidecars *before* the move
+     * and again afterwards in case something recreated them.
      *
      * `.bak` retention: exactly **one** backup is ever kept, and the next restore overwrites it.
      * That rotation is the cleanup outlet (W14) - the file can neither pile up nor disappear
      * before it has served its purpose. It is deliberately *not* deleted after a successful swap:
-     * nothing verifies the installed database yet, so the `.bak` is the only undo for "restored
-     * the wrong backup". Consuming it earlier (startup auto-rollback when the main file is
-     * missing, or a "restore from .bak" entry in the UI) needs a caller outside this file and
-     * stays open work.
+     * it is the undo for "restored the wrong backup", exposed by [RestoreSnapshots.restorePrevious]
+     * (DAT-1).
+     *
+     * `.bak` is only the *default* destination; the overload below takes the file explicitly, so
+     * the undo - which reads `.bak` - can park the replaced database elsewhere and rotate it in
+     * after a successful install (V-4).
      *
      * @return the backup file holding the previous database, for a caller that wants to delete it
      *   once the restored database has proven usable.
      */
-    fun replaceDatabaseAtomically(target: File, replacement: File): File? {
+    fun replaceDatabaseAtomically(target: File, replacement: File): File? =
+        replaceDatabaseAtomically(target, replacement, backupFile(target))
+
+    /**
+     * [replaceDatabaseAtomically] with the previous database parked at [backupDestination].
+     *
+     * Every restore path except the DAT-1 undo wants the default `.bak`: it is the one file
+     * [RestoreSnapshots.info] exposes and the next restore rotates. That default is exactly wrong
+     * for the undo itself, because there the snapshot *is* `.bak` - copying the current database
+     * over it would consume the only copy before the replacement is installed, so a failure after
+     * that copy could not be retried (V-4). [RestoreSnapshots.swapInPrevious] passes a separate
+     * destination and publishes it over `.bak` only after the install has fully succeeded.
+     *
+     * @return [backupDestination] when it now holds the previous database, or null when there was
+     *   no previous database to keep.
+     */
+    internal fun replaceDatabaseAtomically(
+        target: File,
+        replacement: File,
+        backupDestination: File,
+    ): File? = replaceDatabaseAtomically(target, replacement, backupDestination) { staged, installTarget ->
+        // One atomic replacement: POSIX rename(2) over an existing target swaps the file in a
+        // single step, and java.nio mirrors that on every platform this code reaches (verified
+        // on the Windows JVM the unit tests run on, where File.renameTo refuses to overwrite
+        // and would leave the restore failing forever).
+        Files.move(
+            staged.toPath(),
+            installTarget.toPath(),
+            StandardCopyOption.ATOMIC_MOVE,
+            StandardCopyOption.REPLACE_EXISTING
+        )
+    }
+
+    /**
+     * [replaceDatabaseAtomically] with the final install move supplied by the caller.
+     *
+     * Production always uses the default move. This exists because the V-4 failure cannot be
+     * produced any other way: the damage would happen *after* the live database has been copied
+     * over the backup destination, so an injected failure has to land exactly on the move that
+     * follows it. [RestoreSnapshotsTest] passes a move that throws and then asserts the snapshot
+     * survived.
+     */
+    internal fun replaceDatabaseAtomically(
+        target: File,
+        replacement: File,
+        backupDestination: File,
+        move: (staged: File, target: File) -> Unit,
+    ): File? {
         target.parentFile?.mkdirs()
 
         val staged = File(target.absolutePath + STAGING_SUFFIX)
-        val backup = File(target.absolutePath + BACKUP_SUFFIX)
+        val backup = backupDestination
+        // A caller-supplied destination may point outside the target's directory (it does not
+        // today, but the parameter is file-shaped rather than a suffix).
+        backup.parentFile?.mkdirs()
 
         // Stage on the same filesystem as the target so the final step is a rename, not a copy.
         staged.delete()
@@ -206,17 +275,16 @@ object DatabaseRestore {
             }
         }
 
+        // DAT-5: the old connection's WAL/SHM describe the *previous* database. They used to be
+        // deleted after the move, which left a crash window in which SQLite opened the freshly
+        // restored file and replayed the old journal into it - page-level corruption rather than
+        // merely stale rows. Callers have already closed Room by contract, so nothing can
+        // recreate them; deleting them before the move means the only file SQLite can find
+        // afterwards is the one just installed.
+        deleteSidecars(target, "before installing the restored database")
+
         try {
-            // One atomic replacement: POSIX rename(2) over an existing target swaps the file in a
-            // single step, and java.nio mirrors that on every platform this code reaches (verified
-            // on the Windows JVM the unit tests run on, where File.renameTo refuses to overwrite
-            // and would leave the restore failing forever).
-            Files.move(
-                staged.toPath(),
-                target.toPath(),
-                StandardCopyOption.ATOMIC_MOVE,
-                StandardCopyOption.REPLACE_EXISTING
-            )
+            move(staged, target)
         } catch (e: Exception) {
             // The move is atomic: on failure the target still holds the old database, so there is
             // nothing to roll back - only the staged copy has to go.
@@ -224,13 +292,100 @@ object DatabaseRestore {
             throw IOException("Could not install the restored database", e)
         }
 
-        // The old handle's WAL still describes the previous database; leaving it behind would let
-        // SQLite replay stale pages over the freshly restored file.
-        File(target.absolutePath + "-wal").delete()
-        File(target.absolutePath + "-shm").delete()
+        // A process that ignored the "close Room first" contract can recreate a sidecar between
+        // the two steps above; clear whatever is next to the new file before it is opened.
+        deleteSidecars(target, "after installing the restored database")
+
+        // DAT-5: verify the file that is actually live, not only the staged copy. `quick_check`
+        // returning null means Android's SQLite is a stub (plain-JVM unit tests); there is
+        // nothing to verify there, and rolling back a byte-identical install would make every
+        // JVM test fail. In production SQLite is always present, so `false` is a real failure.
+        when (quickCheckOutcome(target)) {
+            false -> {
+                val rolledBack = rollbackInstall(target, if (hadPrevious) backup else null)
+                if (rolledBack) {
+                    throw IOException(
+                        "The restored database failed its post-install integrity check; " +
+                            "the previous database was put back"
+                    )
+                }
+                throw IOException(
+                    "The restored database failed its post-install integrity check" +
+                        if (hadPrevious) " and the previous database could not be put back" else ""
+                )
+            }
+            // true: verified; null: verification unavailable on this platform (JVM tests).
+            else -> Unit
+        }
 
         return if (hadPrevious) backup else null
     }
+
+    /**
+     * Deletes `-wal` and `-shm` beside [target], logging rather than throwing.
+     *
+     * These are the two files SQLite uses to replay committed pages. Leaving them next to a
+     * replaced database is corruption, so a failed delete is worth a loud log even though the
+     * restore itself has already succeeded.
+     */
+    private fun deleteSidecars(target: File, whenDescription: String) {
+        listOf("-wal", "-shm").forEach { suffix ->
+            val sidecar = File(target.absolutePath + suffix)
+            if (sidecar.exists() && !sidecar.delete()) {
+                // Log is a stub on the plain-JVM test runtime; a failed delete there must not
+                // turn into a second exception on top of the one being handled.
+                runCatching {
+                    Log.w(
+                        TAG,
+                        "Could not delete ${sidecar.name} $whenDescription; " +
+                            "SQLite may replay stale pages into it"
+                    )
+                }
+            }
+        }
+    }
+
+    /**
+     * Put [target] back to the database held in [backup] (`on install failure` and
+     * [rollbackFromBackup]).
+     *
+     * The `.bak` is copied to a temporary name first and *that* is atomically moved over the
+     * target: moving the backup itself would make the undo single-use, and copying directly over
+     * the live path is not atomic. The backup stays untouched, so a second attempt is still
+     * possible.
+     */
+    private fun rollbackInstall(target: File, backup: File?): Boolean {
+        if (backup == null || !backup.isFile || backup.length() == 0L) return false
+        val temp = File(target.absolutePath + ROLLBACK_SUFFIX)
+        return try {
+            backup.copyTo(temp, overwrite = true)
+            RandomAccessFile(temp, "rw").use { it.fd.sync() }
+            deleteSidecars(target, "before rolling the database back")
+            Files.move(
+                temp.toPath(),
+                target.toPath(),
+                StandardCopyOption.ATOMIC_MOVE,
+                StandardCopyOption.REPLACE_EXISTING
+            )
+            deleteSidecars(target, "after rolling the database back")
+            true
+        } catch (e: Exception) {
+            temp.delete()
+            runCatching { Log.e(TAG, "Could not roll the database back from its .bak snapshot", e) }
+            false
+        }
+    }
+
+    /**
+     * Puts the `.bak` beside [target] back in place, keeping the `.bak` itself intact.
+     *
+     * Used by the restore callers when the database swap succeeded but the attachment install
+     * afterwards failed: the live database must go back to the one the still-live attachment
+     * files belong to. Returns false when there is no usable backup or the swap itself fails;
+     * the caller turns that into a user-visible error.
+     */
+    fun rollbackFromBackup(target: File): Boolean =
+        rollbackInstall(target, backupFile(target))
 
     /** SQLite files start with the 16-byte ASCII string `SQLite format 3\0`. */
     private fun looksLikeSqliteDatabase(file: File): Boolean {
@@ -252,7 +407,18 @@ object DatabaseRestore {
      *
      * @return true when the file is a SQLite database and `quick_check` reports `ok`.
      */
-    fun quickCheckPasses(file: File): Boolean {
+    fun quickCheckPasses(file: File): Boolean = quickCheckOutcome(file) == true
+
+    /**
+     * [quickCheckPasses] with "the platform has no SQLite" kept distinct from "the file is bad".
+     *
+     * `android.jar` on a plain JVM (the unit-test runtime) throws `RuntimeException("Stub!")` from
+     * every method, so both a corrupt file and the stub look like an exception. `null` says the
+     * check could not run at all; callers like the post-install gate in
+     * [replaceDatabaseAtomically] treat that as "nothing to verify" instead of rolling back a
+     * byte-identical install. Production always gets `true`/`false`.
+     */
+    private fun quickCheckOutcome(file: File): Boolean? {
         if (!looksLikeSqliteDatabase(file)) return false
         return try {
             android.database.sqlite.SQLiteDatabase.openDatabase(
@@ -263,6 +429,21 @@ object DatabaseRestore {
                 db.rawQuery("PRAGMA quick_check", null).use { cursor ->
                     cursor.moveToFirst() && cursor.getString(0).equals("ok", ignoreCase = true)
                 }
+            }
+        } catch (e: RuntimeException) {
+            // Two stub runtimes reach this catch on the JVM:
+            //  - the legacy mockable android.jar throws `RuntimeException("Stub!")`;
+            //  - the current one throws `RuntimeException("Method ... not mocked.")` unless the
+            //    test opts into return-default-values.
+            // A real Android SQLite failure is also a RuntimeException (SQLiteException), so only
+            // these two stub markers may degrade to "verification unavailable" (null). Treating
+            // every RuntimeException as null would silently disable the post-install check in
+            // production, where a corrupt database must roll back.
+            val message = e.message.orEmpty()
+            if (message.startsWith("Stub!") || message.contains("not mocked", ignoreCase = true)) {
+                null
+            } else {
+                false
             }
         } catch (e: Exception) {
             false

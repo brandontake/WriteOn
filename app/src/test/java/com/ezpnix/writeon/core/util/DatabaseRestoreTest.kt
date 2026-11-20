@@ -1,5 +1,9 @@
 package com.ezpnix.writeon.core.util
 
+import android.content.Context
+import android.database.sqlite.SQLiteDatabase
+import androidx.test.core.app.ApplicationProvider
+import com.ezpnix.writeon.core.attachment.AttachmentArchive
 import com.ezpnix.writeon.core.constant.DatabaseConst
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
@@ -7,12 +11,15 @@ import java.io.File
 import java.io.IOException
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
 
 /**
  * Regression tests for the restore path.
@@ -392,4 +399,151 @@ class DatabaseRestoreTest {
         }
         return null
     }
+
+    // -----------------------------------------------------------------------------------------
+    // DAT-5: the old -wal/-shm describe the *previous* database and must be gone before the new
+    // file lands. The test only observes the end state (both gone, database installed), which is
+    // what the crash window depended on.
+    // -----------------------------------------------------------------------------------------
+
+    @Test
+    fun `replaceDatabaseAtomically removes the old wal and shm sidecars`() {
+        val target = temporaryFolder.newFile("note-list.db").apply {
+            writeBytes(sqliteBytes("live database"))
+        }
+        val wal = File(target.absolutePath + "-wal").apply { writeBytes(byteArrayOf(1, 2, 3)) }
+        val shm = File(target.absolutePath + "-shm").apply { writeBytes(byteArrayOf(4, 5, 6)) }
+        val replacement = temporaryFolder.newFile("restored.db").apply {
+            writeBytes(sqliteBytes("restored database"))
+        }
+
+        DatabaseRestore.replaceDatabaseAtomically(target, replacement)
+
+        assertFalse("a stale WAL must not survive the swap", wal.exists())
+        assertFalse("a stale SHM must not survive the swap", shm.exists())
+        assertArrayEquals(sqliteBytes("restored database"), target.readBytes())
+    }
+
+    /**
+     * DAT-4/DAT-1: the `.bak` must be usable more than once. Rolling back copies it aside instead
+     * of moving it, so a second rollback still has the same bytes.
+     */
+    @Test
+    fun `rollbackFromBackup restores the target and leaves the snapshot intact`() {
+        val target = temporaryFolder.newFile("note-list.db").apply {
+            writeBytes(sqliteBytes("new database"))
+        }
+        val backup = File(target.absolutePath + ".bak").apply {
+            writeBytes(sqliteBytes("previous database"))
+        }
+
+        assertTrue(DatabaseRestore.rollbackFromBackup(target))
+
+        assertArrayEquals(sqliteBytes("previous database"), target.readBytes())
+        assertTrue("the .bak must survive the rollback", backup.isFile)
+        assertArrayEquals(sqliteBytes("previous database"), backup.readBytes())
+        assertTrue(
+            "the rollback copy must be cleaned up",
+            !File(target.absolutePath + ".rollback").exists()
+        )
+    }
+}
+
+/**
+ * DAT-4: `AttachmentArchive.prepare` rewrites the staged database but must leave every live
+ * attachment byte untouched until the database swap has succeeded.
+ *
+ * Robolectric supplies a real SQLite, so the staged copy has to be a database this build's D8 gate
+ * accepts: a matching `room_master_table.identity_hash` and the current `user_version`.
+ */
+@RunWith(RobolectricTestRunner::class)
+class AttachmentRestoreOrderTest {
+
+    @get:Rule
+    val temporaryFolder = TemporaryFolder()
+
+    private val context: Context = ApplicationProvider.getApplicationContext()
+
+    @Test
+    fun `a failed database swap leaves live attachment bytes unchanged`() {
+        val staging = temporaryFolder.newFolder("staging")
+        val liveDirectory = File(context.filesDir, AttachmentArchive.DIRECTORY).apply { mkdirs() }
+        val liveAttachment = File(liveDirectory, "abc123.jpg").apply { writeText("live-bytes") }
+
+        val stagedSource = File(staging, "${AttachmentArchive.DIRECTORY}/abc123.jpg").apply {
+            parentFile?.mkdirs()
+            writeText("restored-bytes")
+        }
+        val stagedDatabase = createStagedDatabase(File(staging, "note-list.db"))
+
+        val prepared = AttachmentArchive.prepare(context, staging, stagedDatabase)
+
+        assertEquals("one member is planned", 1, prepared.stagedFiles.size)
+        assertEquals(
+            "prepare must not move the staged file",
+            "restored-bytes",
+            stagedSource.readText()
+        )
+        assertEquals("prepare must not overwrite the live file", "live-bytes", liveAttachment.readText())
+        assertEquals(
+            "the staged database must already point at the final location",
+            liveAttachment.absolutePath,
+            attachmentPath(stagedDatabase)
+        )
+
+        // The swap fails (the replacement is not SQLite) after prepare has run. This is the old
+        // DAT-4 failure window: everything still on disk must be the pre-restore state.
+        val liveDatabase = context.getDatabasePath(DatabaseConst.NOTES_DATABASE_FILE_NAME).apply {
+            parentFile?.mkdirs()
+            writeBytes(byteArrayOf(0, 1, 2, 3))
+        }
+        val corrupt = temporaryFolder.newFile("corrupt.db").apply { writeText("not a database") }
+        var failed = false
+        try {
+            DatabaseRestore.replaceDatabaseAtomically(liveDatabase, corrupt)
+        } catch (_: IOException) {
+            failed = true
+        }
+
+        assertTrue("the replacement must be refused", failed)
+        assertEquals("live attachment bytes must be unchanged", "live-bytes", liveAttachment.readText())
+    }
+
+    private fun createStagedDatabase(file: File): File {
+        val database = SQLiteDatabase.openOrCreateDatabase(file, null)
+        try {
+            database.execSQL(
+                "CREATE TABLE attachments (`attachment-id` TEXT NOT NULL PRIMARY KEY, path TEXT NOT NULL)"
+            )
+            database.execSQL(
+                "INSERT INTO attachments (`attachment-id`, path) VALUES ('abc123', '/old-device/abc123.jpg')"
+            )
+            database.execSQL(
+                "CREATE TABLE room_master_table (id INTEGER PRIMARY KEY, identity_hash TEXT)"
+            )
+            database.execSQL(
+                "INSERT INTO room_master_table (id, identity_hash) VALUES (42, ?)",
+                arrayOf(DatabaseRestore.CURRENT_IDENTITY_HASH)
+            )
+            database.version = DatabaseConst.NOTES_DATABASE_VERSION
+        } finally {
+            database.close()
+        }
+        return file
+    }
+
+    private fun attachmentPath(databaseFile: File): String =
+        SQLiteDatabase.openDatabase(
+            databaseFile.absolutePath,
+            null,
+            SQLiteDatabase.OPEN_READONLY
+        ).use { database ->
+            database.rawQuery(
+                "SELECT path FROM attachments WHERE `attachment-id` = 'abc123'",
+                null
+            ).use { cursor ->
+                assertTrue(cursor.moveToFirst())
+                cursor.getString(0)
+            }
+        }
 }

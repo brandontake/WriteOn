@@ -7,16 +7,18 @@ import androidx.glance.GlanceTheme
 import androidx.glance.appwidget.GlanceAppWidget
 import androidx.glance.appwidget.GlanceAppWidgetManager
 import androidx.glance.appwidget.provideContent
-import androidx.glance.currentState
 import androidx.glance.state.GlanceStateDefinition
 import com.ezpnix.writeon.domain.usecase.NoteUseCase
+import com.ezpnix.writeon.presentation.lock.LockEntryPoint
 import com.ezpnix.writeon.widget.ui.SelectedNote
 import com.ezpnix.writeon.widget.ui.ZeroState
 import dagger.hilt.EntryPoint
 import dagger.hilt.EntryPoints
 import dagger.hilt.InstallIn
+import dagger.hilt.android.EntryPointAccessors
 import dagger.hilt.components.SingletonComponent
 import java.io.File
+import kotlinx.coroutines.flow.first
 
 @EntryPoint
 @InstallIn(SingletonComponent::class)
@@ -41,21 +43,35 @@ class NotesWidget : GlanceAppWidget() {
         val noteUseCase = getNoteUseCase(context)
         val widgetId = GlanceAppWidgetManager(context).getAppWidgetId(id)
 
-        // Which note this widget shows lives in the state DataStore, so it has to be read inside the
-        // composition. Everything else is read here, once, before the composition opens.
-        //
-        // Calling observe() inside provideContent used to start a collector that itself called
-        // updateAll, so refreshing the widget re-triggered the refresh. loadNotesOnce ends that loop.
-        noteUseCase.loadNotesOnce()
+        // PERF-6: resolve this widget's note before reading anything, so one refresh touches one
+        // row instead of decrypting the whole library. The id lives in the same NotesDataStore the
+        // configuration screen writes; reading it here (rather than inside the composition) is what
+        // lets the load happen exactly once, outside Glance's recomposition.
+        val configuredNoteId = NotesDataStore(context).data
+            .first()
+            .firstOrNull { it.first == widgetId }
+            ?.second
+
+        // SEC-6: a widget sits outside the lock gate. When a credential is configured, do not
+        // query or decrypt anything - the preview must not put plaintext in memory (or on the
+        // launcher) just because the launcher decided to refresh. The zero state is the same
+        // surface the widget already shows for "no note selected"; tapping it still opens the
+        // configuration screen, which is behind LockGate.
+        val lockManager = EntryPointAccessors
+            .fromApplication(context.applicationContext, LockEntryPoint::class.java)
+            .lockManager()
+        val selectedNote = if (lockManager.anyLockEnabled()) {
+            null
+        } else {
+            configuredNoteId?.let { noteUseCase.loadNoteOnce(it) }
+        }
 
         provideContent {
             GlanceTheme {
-                val state = currentState<List<Pair<Int, Int>>>()
-                val noteId = state.firstOrNull { it.first == widgetId }?.second
-                val selectedNote = noteId?.let { id -> noteUseCase.notes.firstOrNull { it.id == id } }
-                when {
-                    selectedNote == null -> ZeroState(widgetId = widgetId)
-                    else -> SelectedNote(selectedNote, noteUseCase, widgetId = widgetId)
+                if (selectedNote == null) {
+                    ZeroState(widgetId = widgetId)
+                } else {
+                    SelectedNote(selectedNote, noteUseCase, widgetId = widgetId)
                 }
             }
         }

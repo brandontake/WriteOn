@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Vault-locked editor fixes (V-3). See values/strings_editor_lock_fix.xml for the rationale.
+-->
+<resources>
+    <string name="editor_lock_fix_vault_locked_title">保管庫はロックされています</string>
+    <string name="editor_lock_fix_vault_locked_message">このノートを開いている間に保管庫がロックされたため、ここのテキストはまだ保存されていません。保管庫のパスワードを入力して保存するか、変更を破棄してください。</string>
+    <string name="editor_lock_fix_vault_new_note">このノートを開いている間に保管庫がロックされました。新しい保管庫ノートにはパスワードを照合できる保存済みテキストがないため、ここで安全に暗号化できません。先にホームで保管庫のロックを解除するか、このノートを破棄してください。平文で保存されることはありません。</string>
+    <string name="editor_lock_fix_vault_password">保管庫のパスワード</string>
+    <string name="editor_lock_fix_unlock_and_save">ロックを解除して保存</string>
+    <string name="editor_lock_fix_discard_and_exit">変更を破棄して終了</string>
+    <string name="editor_lock_fix_vault_wrong_password">パスワードが違います — ノートはまだ保存されていません。</string>
+    <string name="editor_lock_fix_vault_locked_status">保管庫はロック中 — 未保存</string>
+</resources>

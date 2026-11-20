@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Vault-locked editor fixes (V-3). See values/strings_editor_lock_fix.xml for the rationale.
+
+  "保险箱" matches the vault wording the rest of the UI uses (vault_locked_notes and friends).
+-->
+<resources>
+    <string name="editor_lock_fix_vault_locked_title">保险箱已锁定</string>
+    <string name="editor_lock_fix_vault_locked_message">打开此笔记时保险箱被锁定，这里的文字尚未保存。输入保险箱密码以保存，或放弃更改。</string>
+    <string name="editor_lock_fix_vault_new_note">打开此笔记时保险箱被锁定。新建的保险箱笔记没有可用于校验密码的已存内容，因此无法在此安全加密。请先从首页解锁保险箱，或放弃此笔记。不会以明文保存任何内容。</string>
+    <string name="editor_lock_fix_vault_password">保险箱密码</string>
+    <string name="editor_lock_fix_unlock_and_save">解锁并保存</string>
+    <string name="editor_lock_fix_discard_and_exit">放弃更改并退出</string>
+    <string name="editor_lock_fix_vault_wrong_password">密码错误——笔记仍未保存。</string>
+    <string name="editor_lock_fix_vault_locked_status">保险箱已锁定——未保存</string>
+</resources>

@@ -107,8 +107,14 @@ fun LibraryScreen(
         scope.launch {
             val saved = withContext(Dispatchers.IO) {
                 runCatching {
+                    // SEC-4: a saved copy must be the decrypted bytes. Plaintext (legacy) files are
+                    // returned unchanged; an encrypted file is materialised first and the copy
+                    // fails rather than writing ciphertext into the user's document.
+                    val readable = AttachmentRegistry.openablePath(source)
+                        ?.let(::File)
+                        ?: error("No readable media for $source")
                     context.contentResolver.openOutputStream(uri)?.use { output ->
-                        File(source).inputStream().use { input -> input.copyTo(output) }
+                        readable.inputStream().use { input -> input.copyTo(output) }
                     } ?: error("No output stream for $uri")
                 }.isSuccess
             }
@@ -271,7 +277,7 @@ fun LibraryScreen(
     }
 
     fullScreenAttachment?.let { attachment ->
-        val path = AttachmentRegistry.path(attachment.id)
+        val path = AttachmentRegistry.playablePath(attachment.id)
         if (path != null) {
             Dialog(
                 onDismissRequest = { fullScreenAttachment = null },
@@ -311,7 +317,8 @@ private fun LibraryImageCell(
     onOpen: () -> Unit,
     onLongPress: () -> Unit
 ) {
-    val path = AttachmentRegistry.path(attachment.id)
+    // SEC-4: an encrypted picture resolves to a decrypted cache copy; null means "not ready yet".
+    val path = AttachmentRegistry.playablePath(attachment.id)
     val shape = RoundedCornerShape((cornerRadius / 2).coerceAtLeast(8).dp)
     Box(
         modifier = Modifier
@@ -338,7 +345,7 @@ private fun LibraryAudioCell(
     cornerRadius: Int,
     onDelete: () -> Unit
 ) {
-    val path = AttachmentRegistry.path(attachment.id)
+    val path = AttachmentRegistry.playablePath(attachment.id)
     if (path == null) {
         MissingAttachment(
             radius = cornerRadius,

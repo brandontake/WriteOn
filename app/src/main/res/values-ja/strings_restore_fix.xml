@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 設定/バックアップ関連の修正（SEC-2、UX-3/DAT-1/SYN-1、UX-4、DAT-10、DAT-11/SEC-4）。 -->
+<resources>
+    <!-- SEC-2: http:// の WebDAV 設定を保存・使用する前に表示。 -->
+    <string name="restore_fix_cleartext_title">暗号化されていない接続</string>
+    <string name="restore_fix_cleartext_message">このアドレスは http:// で始まるため、WebDAV のユーザー名とパスワード、およびバックアップ全体が暗号化されずにネットワークを流れます。同じ Wi-Fi 上の誰でも読み取ったり置き換えたりできます。信頼できるローカルネットワークでのみ続行し、それ以外では https:// を使用してください。</string>
+    <string name="restore_fix_cleartext_continue">http のまま続行</string>
+
+    <!-- UX-3 / DAT-1 / SYN-1: 復元が実際に行うこと。 -->
+    <string name="restore_fix_webdav_restore_confirm_message">サーバー上のアーカイブでライブラリ全体を置き換えます。これはライブラリ全体のバックアップ/復元であり、端末間の同期ではありません。この端末の現在のノートはすべて置き換えられ、そのバックアップ作成後にこの端末で作成・編集したノートは失われます。置き換え前のデータベースは自動的に保持されるため、下の「前のデータベースを復元」から元に戻せます。</string>
+    <string name="restore_fix_local_restore_confirm_message">選択したファイルのバックアップでライブラリ全体を置き換えます。これはライブラリ全体のバックアップ/復元であり、端末間の同期ではありません。この端末の現在のノートはすべて置き換えられ、そのバックアップ作成後にこの端末で作成・編集したノートは失われます。置き換え前のデータベースは自動的に保持されるため、下の「前のデータベースを復元」から元に戻せます。</string>
+    <string name="restore_fix_auto_restore_confirm_message">%1$s に作成された自動バックアップでライブラリ全体を置き換えます。これはライブラリ全体のバックアップ/復元であり、端末間の同期ではありません。この端末の現在のノートはすべて置き換えられ、そのバックアップ以降に作成・編集したノートは失われます。置き換え前のデータベースは自動的に保持されるため、下の「前のデータベースを復元」から元に戻せます。</string>
+
+    <!-- DAT-7: データベースを閉じて入れ替える間のブロッキング表示。 -->
+    <string name="restore_fix_restoring">バックアップを復元しています…</string>
+
+    <!-- UX-3: 前回の復元で置き換えられたデータベースの復元入口。 -->
+    <string name="restore_fix_snapshot_title">前のデータベースを復元</string>
+    <string name="restore_fix_snapshot_desc">前回の復元で置き換えられたデータベース（保存日時 %1$s、%2$s）。復元するとその復元を取り消します。それ以降に作成したノートは失われます。</string>
+    <string name="restore_fix_snapshot_restore">復元</string>
+    <string name="restore_fix_snapshot_confirm_title">前のデータベースを復元しますか？</string>
+    <string name="restore_fix_snapshot_confirm_message">前回の復元で置き換えられたデータベースを戻します。それ以降に作成・編集したノートは置き換えられ、データベースを開き直すためにアプリが再起動します。</string>
+    <string name="restore_fix_snapshot_restored">前のデータベースを復元しました。再起動しています…</string>
+    <string name="restore_fix_snapshot_failed">前のデータベースを復元できませんでした: %1$s</string>
+
+    <!-- UX-4: 選択したアーカイブのヘッダーを読めなかった場合のみ表示。 -->
+    <string name="restore_fix_import_password_hint">このファイルのヘッダーを読み取れませんでした。パスワードなしのバックアップなら空欄のまま続行してください。</string>
+
+    <!-- DAT-10: 保存済みのスクラッチパッドを復号できない状態。 -->
+    <string name="restore_fix_scratchpad_unreadable">保存されたスクラッチパッドの内容をこの端末で復号できません。暗号化キーがリセットされた可能性があります。元の内容はそのまま保持され、上書きを防ぐため保存は無効になっています。必要な内容は先に他のバックアップから取り出してください。</string>
+    <string name="restore_fix_scratchpad_save_blocked">保存していません: 保存済みのスクラッチパッドを復号できないため、変更していません。</string>
+
+    <!-- DAT-11 / SEC-4: フラッシュカードはノートの鍵で封印。 -->
+    <string name="restore_fix_flashcards_save_failed">フラッシュカードを暗号化できなかったため、保存していません。保存済みのカードは変更されていません。</string>
+
+    <!-- SYN-3: 競合コピーを復元した後もサーバー上の正式なコピーは別端末のアーカイブのため、どちらを正式とするか一度だけ確認する。 -->
+    <string name="restore_fix_conflict_takeover_title">競合コピーを復元しました</string>
+    <string name="restore_fix_conflict_takeover_message">この端末には競合コピーのノートが入りました。サーバー上には別の端末のアーカイブが残っているため、次回のバックアップでまた競合コピーが作られます。どちらのライブラリをサーバー上の正式なコピーにするか選んでください。</string>
+    <string name="restore_fix_conflict_takeover_use_local">この端末のノートをサーバー上の正式なコピーにする</string>
+    <string name="restore_fix_conflict_takeover_keep_remote">サーバー上のコピーを残す</string>
+
+    <!-- DAT-13: TXT のエクスポート/インポートには添付ファイルが含まれない。 -->
+    <string name="restore_fix_txt_text_only">TXT に含まれるのはテキストのみで、画像や録音は含まれません。</string>
+</resources>

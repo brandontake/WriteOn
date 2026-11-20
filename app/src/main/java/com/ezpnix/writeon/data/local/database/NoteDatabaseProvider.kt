@@ -1,6 +1,9 @@
 package com.ezpnix.writeon.data.local.database
 
+import android.annotation.SuppressLint
 import android.app.Application
+import android.content.Context
+import android.util.Log
 import androidx.room.Room
 import androidx.room.RoomDatabase
 import androidx.room.TypeConverters
@@ -11,6 +14,7 @@ import com.ezpnix.writeon.R
 import com.ezpnix.writeon.core.constant.DatabaseConst
 import com.ezpnix.writeon.core.database.Converters
 import com.ezpnix.writeon.data.local.dao.AttachmentDao
+import com.ezpnix.writeon.data.local.dao.EncryptedAttachmentDao
 import com.ezpnix.writeon.data.local.dao.NoteDao
 import com.ezpnix.writeon.domain.model.Attachment
 import java.io.File
@@ -25,9 +29,14 @@ class NoteDatabaseProvider(private val application: Application) {
      * left the app's own one open on the file that had just been replaced. Keeping the connection
      * in the companion makes "close the database" mean what it says, whichever instance asks.
      */
-    @Synchronized
     fun instance(): NoteDatabase {
-        return sharedDatabase ?: synchronized(lock) {
+        // Both the open and the close path take the *companion* lock, not the provider instance's
+        // monitor. `@Synchronized` on an instance method only serialises calls through that same
+        // provider, and Hilt hands one provider to the UI while `BackupDatabase.provider(context)`
+        // constructs another for a worker: a worker could close the process-wide connection while
+        // the UI's `instance()` was half-way through reopening it. The shared lock is what makes
+        // "close the database" mean it for every caller in the process.
+        return synchronized(lock) {
             sharedDatabase ?: buildDatabase().also { sharedDatabase = it }
         }
     }
@@ -54,13 +63,18 @@ class NoteDatabaseProvider(private val application: Application) {
             .build()
     }
 
-    @Synchronized
     fun close() {
-        sharedDatabase?.close()
-        sharedDatabase = null
+        // Same lock as instance(): a concurrent open must never observe the connection that is
+        // being closed, and a close must never clear a connection another thread just opened.
+        synchronized(lock) {
+            sharedDatabase?.close()
+            sharedDatabase = null
+        }
     }
 
     private companion object {
+        const val TAG = "NoteDatabaseProvider"
+
         @Volatile
         var sharedDatabase: NoteDatabase? = null
 
@@ -75,7 +89,19 @@ class NoteDatabaseProvider(private val application: Application) {
         const val EXPORT_PAGE_SIZE = 50
     }
 
-    fun noteDao(): NoteDao {
+    fun noteDao(): NoteDao = encryptedNoteDao()
+
+    /**
+     * SEC-5: seals note rows that were stored before this app encrypted text at rest.
+     *
+     * Exposed here because the encrypting DAO is private: the sweep has to go through the same
+     * [NoteCrypto] instance (and its cache) every other read and write uses. Callers treat it as a
+     * once-per-process startup job - see `NoteUseCase.observe` - and check [LegacySealResult.failedRows]
+     * before recording success.
+     */
+    suspend fun sealLegacyPlaintextRows(): LegacySealResult = encryptedNoteDao().sealLegacyPlaintextRows()
+
+    private fun encryptedNoteDao(): EncryptedNoteDao {
         // Resolved at failure time so the placeholder follows the active locale; the DAO itself
         // has no Context and must not grow one just for a string.
         return EncryptedNoteDao(instance().noteDao(), noteCrypto) {
@@ -83,13 +109,50 @@ class NoteDatabaseProvider(private val application: Application) {
         }
     }
 
-    fun attachmentDao(): AttachmentDao = instance().attachmentDao()
+    /**
+     * SEC-4: attachment captions are user-authored note content and are sealed at rest with the same
+     * [NoteCrypto] as the body, while `path` stays readable for the media layer.
+     *
+     * The wrapper is built around the raw Room DAO on every call, sharing the provider's one
+     * [NoteCrypto] instance (and its plaintext cache). Export and backup paths call this DAO too, so
+     * they receive decrypted captions: that is intentional - a portable archive is already protected
+     * by its own password, and encrypting the copy with a Keystore key that cannot leave this device
+     * would make it unreadable after restore.
+     */
+    fun attachmentDao(): AttachmentDao = EncryptedAttachmentDao(instance().attachmentDao(), noteCrypto)
 
     /**
-     * Writes a copy of the note database in which every note is stored as plain text again, so that
-     * the file can be restored on another device. The content is read through the normal
+     * SEC-4: seals captions that a restore brought back as plaintext, through the same [NoteCrypto]
+     * (and cache) every other write uses.
+     *
+     * Like [sealLegacyPlaintextRows], callers treat it as a once-per-process startup job and check
+     * the returned failure count before recording success - see [LegacyCaptionBackfillFlag].
+     */
+    suspend fun sealLegacyCaptions(): Int =
+        EncryptedAttachmentDao(instance().attachmentDao(), noteCrypto).sealLegacyCaptions()
+
+    /**
+     * PERF-1: drops the in-memory plaintext cache when the app locks.
+     *
+     * `NoteCrypto` keeps decrypted bodies so a Room emission does not re-run the Keystore for every
+     * unchanged row. Callers that hide the UI behind a lock (or hand the process to the background)
+     * call this so the cache cannot outlive the lock screen.
+     */
+    fun clearCryptoCache() {
+        noteCrypto.clearCache()
+    }
+
+    /**
+     * Writes a copy of the note database in which readable notes are stored as plain text again, so
+     * that the file can be restored on another device. The content is read through the normal
      * (encrypting) [noteDao], written into a throwaway database and copied out of the databases
      * directory.
+     *
+     * DAT-3: a row this process cannot open keeps its original `w1:` ciphertext, and a vault row
+     * keeps whichever password-sealed form it has (`v3:` envelope, `v2:` PBKDF2, or legacy).
+     * New writes always use `v3:` (PERF-2), but old databases are still readable here. All of
+     * these are the only recoverable form of that note; substituting the display placeholder
+     * would destroy it on restore.
      *
      * D9: the note rows and the attachment rows are read inside **one** [withTransaction] block, so
      * both queries hit the same connection and therefore the same database snapshot. Read one after
@@ -99,8 +162,13 @@ class NoteDatabaseProvider(private val application: Application) {
      * onto the transaction's own connection, so no other write can slip in between; the decryption
      * in [EncryptedNoteDao] happens in its map layer, after the row is read, and needs no special
      * handling here.
+     *
+     * @return the same attachment rows written into [destination]. N-5: backup callers must put
+     *   **this** list into the zip instead of re-querying the live table after the transaction.
+     *   The second query was outside the snapshot, so a save that pruned an attachment in between
+     *   produced an archive with a row but no file (or a file but no row).
      */
-    suspend fun writePortableDatabaseCopy(destination: File) {
+    suspend fun writePortableDatabaseCopy(destination: File): List<Attachment> {
         // cacheDir, not getDatabasePath(): the export is a plaintext copy of the whole library, and
         // the databases directory is where a half-finished run used to leave one behind (a killed
         // process skips the finally). cacheDir is excluded from Android's auto backup by default
@@ -118,6 +186,14 @@ class NoteDatabaseProvider(private val application: Application) {
             .setJournalMode(RoomDatabase.JournalMode.TRUNCATE)
             .build()
 
+        // DAT-3: rows the Keystore cannot open are exported as their original `w1:` ciphertext
+        // (see EncryptedNoteDao.getNotesPage), never as the localized placeholder. Count them so
+        // the result is visible in logcat; a placeholder here would permanently replace the only
+        // copy of the ciphertext once the archive was restored.
+        var undecryptableRows = 0
+        var vaultRows = 0
+        var attachmentRows: List<Attachment> = emptyList()
+
         try {
             // W12: same single transaction as before (D9's consistent snapshot), but only one page
             // of notes is ever alive. Room routes queries issued from the transaction coroutine
@@ -126,23 +202,39 @@ class NoteDatabaseProvider(private val application: Application) {
             // layer, after each row is read. The portable database is a separate connection, so
             // writing into it from here cannot join or extend the source transaction.
             instance().withTransaction {
-                val dao = noteDao()
+                val dao = encryptedNoteDao()
                 var afterId = Int.MIN_VALUE
                 while (true) {
-                    val page = dao.getNotesPage(afterId, EXPORT_PAGE_SIZE)
-                    if (page.isEmpty()) break
-                    page.forEach { exportDatabase.noteDao().addNote(it) }
-                    afterId = page.last().id
+                    val page = dao.getNotesPageForExport(afterId, EXPORT_PAGE_SIZE)
+                    if (page.notes.isEmpty()) break
+                    page.notes.forEach { note ->
+                        if (note.encrypted) {
+                            vaultRows++
+                        } else if (note.id in page.undecryptableIds) {
+                            undecryptableRows++
+                        }
+                        exportDatabase.noteDao().addNote(note)
+                    }
+                    afterId = page.notes.last().id
                 }
                 // 2.0 bodies only store attachment ids, so the exported file must carry the
                 // id -> path map too, otherwise a restored note cannot resolve a single image. The
                 // paths themselves are only meaningful on this device; see STATUS.md for the
                 // cross-device caveat. Attachment rows hold no body, so they stay in one query.
-                val attachmentRows = attachmentDao().getAll()
+                attachmentRows = attachmentDao().getAll()
                 if (attachmentRows.isNotEmpty()) exportDatabase.attachmentDao().upsert(attachmentRows)
             }
         } finally {
             exportDatabase.close()
+        }
+
+        if (undecryptableRows > 0 || vaultRows > 0) {
+            Log.w(
+                TAG,
+                "Portable export kept $undecryptableRows unreadable rows as their original " +
+                    "`w1:` ciphertext and $vaultRows vault rows password-sealed; no placeholder " +
+                    "text was written"
+            )
         }
 
         try {
@@ -150,6 +242,7 @@ class NoteDatabaseProvider(private val application: Application) {
         } finally {
             exportFile.delete()
         }
+        return attachmentRows
     }
 
     private val noteCrypto by lazy { NoteCrypto() }
@@ -374,5 +467,43 @@ internal class LegacyBodyRewriteMigration(
                 )
             )
         }
+    }
+}
+
+/**
+ * SEC-4: the install-wide "legacy attachment captions have been sealed" marker.
+ *
+ * The note equivalent lives in `LegacyPlaintextBackfillFlag`; this is deliberately a separate flag
+ * in the same `notes_prefs` file because the two sweeps protect different columns and can succeed
+ * independently. A database restored from a portable archive carries plaintext captions again, so
+ * the SAF/WebDAV restore paths clear this marker next to the note one. `RestoreSnapshots` only
+ * knows the note marker, so [com.ezpnix.writeon.domain.usecase.NoteUseCase] also clears this one at
+ * startup when it sees the note marker absent - before the note sweep re-marks it.
+ */
+object LegacyCaptionBackfillFlag {
+
+    private const val PREFS_NAME = "notes_prefs"
+    private const val KEY = "legacy_caption_backfill_done"
+
+    fun isDone(context: Context): Boolean =
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .getBoolean(KEY, false)
+
+    fun markDone(context: Context) {
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .putBoolean(KEY, true)
+            .apply()
+    }
+
+    @SuppressLint("ApplySharedPref")
+    fun reset(context: Context) {
+        // commit(): same reason as LegacyPlaintextBackfillFlag.reset - the restore path restarts
+        // the process right after this call, and an apply() that loses the race would skip the
+        // caption sweep for the restored rows.
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .remove(KEY)
+            .commit()
     }
 }

@@ -19,6 +19,46 @@ import androidx.compose.ui.text.withStyle
  */
 private val MARKDOWN_LINK_REGEX = Regex("\\[([^\\]]+)\\]\\(([^\\)]+)\\)")
 
+/** Longest URL a markdown link may carry; anything longer is treated as malformed input. */
+internal const val MAX_LINK_URL_LENGTH = 2048
+
+/**
+ * The only schemes a note link may open.
+ *
+ * Notes arrive from imports, shares and pasted text, so a link is untrusted input. Compose's
+ * default `UriHandler` turns any `LinkAnnotation.Url` into `ACTION_VIEW`, which means `file://`
+ * (FileUriExposedException on targetSdk 36), `intent://` (arbitrary component launch) and unknown
+ * schemes (ActivityNotFoundException) used to reach the platform unchecked. http(s) covers reading,
+ * mailto covers replying; nothing a note needs lives outside these three.
+ */
+private val ALLOWED_LINK_SCHEMES = setOf("http", "https", "mailto")
+
+/** RFC 3986 scheme grammar, so `java script:` or `1http:` cannot sneak past the set above. */
+private val LINK_SCHEME_REGEX = Regex("[A-Za-z][A-Za-z0-9+.\\-]*")
+
+/**
+ * Returns [raw] trimmed and ready for `LinkAnnotation.Url`, or null when it must render as plain
+ * text instead. Rejects unknown schemes, control characters and embedded whitespace (a newline in
+ * the middle of a URL is how a `javascript:` payload hides from a naive prefix check), and caps
+ * the length so a pasted blob cannot become a link.
+ */
+fun sanitizeLinkUrl(raw: String): String? {
+    val url = raw.trim()
+    if (url.isEmpty() || url.length > MAX_LINK_URL_LENGTH) return null
+    // Whitespace inside the URL also covers the Unicode separators; isISOControl covers the C0/C1
+    // bytes (including \n, \r and \t) that some parsers strip before reading the scheme.
+    if (url.any { it.isWhitespace() || it.isISOControl() }) return null
+    val separator = url.indexOf(':')
+    if (separator <= 0) return null
+    val scheme = url.substring(0, separator)
+    if (!LINK_SCHEME_REGEX.matches(scheme) || scheme.lowercase() !in ALLOWED_LINK_SCHEMES) {
+        return null
+    }
+    // `mailto:` or `https:` with nothing after the colon opens nothing useful.
+    if (separator == url.lastIndex) return null
+    return url
+}
+
 /**
  * The inline markers, in merge order (later markers win where they overlap).
  *
@@ -156,26 +196,32 @@ private fun buildLinkedString(
                 append(buildStyledRunString(input.substring(lastIndex, range.first), defaultFontWeight))
             }
             val linkText = match.groupValues[1]
-            val linkUrl = match.groupValues[2]
+            // A link only becomes tappable when its scheme passes the whitelist. Otherwise the
+            // text is still appended (with its inline styling) but carries no annotation, so a
+            // `file://` or `javascript:` target renders exactly like plain prose and cannot be
+            // opened by mistake.
+            val linkUrl = sanitizeLinkUrl(match.groupValues[2])
             val styledLinkText = buildStyledRunString(linkText, defaultFontWeight)
 
             val startPos = length
             append(styledLinkText)
             val endPos = length
 
-            addLink(
-                url = LinkAnnotation.Url(
-                    url = linkUrl,
-                    styles = TextLinkStyles(
-                        style = SpanStyle(
-                            color = linkColor,
-                            textDecoration = TextDecoration.Underline
+            if (linkUrl != null) {
+                addLink(
+                    url = LinkAnnotation.Url(
+                        url = linkUrl,
+                        styles = TextLinkStyles(
+                            style = SpanStyle(
+                                color = linkColor,
+                                textDecoration = TextDecoration.Underline
+                            )
                         )
-                    )
-                ),
-                start = startPos,
-                end = endPos
-            )
+                    ),
+                    start = startPos,
+                    end = endPos
+                )
+            }
             lastIndex = range.last + 1
         }
         if (lastIndex < input.length) {

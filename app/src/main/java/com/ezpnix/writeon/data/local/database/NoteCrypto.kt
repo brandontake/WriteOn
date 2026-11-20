@@ -5,7 +5,6 @@ import android.security.keystore.KeyProperties
 import android.util.Base64
 import android.util.Log
 import java.security.KeyStore
-import java.util.Collections
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
@@ -20,9 +19,10 @@ import javax.inject.Inject
  * cannot be read. That is why the backup feature stores note text in portable plain text and why
  * the note database is excluded from Android's auto backup (see res/xml/backup_rules.xml).
  *
- * Values are sealed as `w1:<base64 iv + ciphertext>`; anything without that marker is treated as
- * plain text, so rows written before this class existed (and rows restored from an old backup) stay
- * readable, and saved rows are re-encrypted the next time they are written.
+ * Values are sealed as `w1:<base64 iv + ciphertext>`; anything that does not carry that marker *and*
+ * decode to an IV plus at least one ciphertext block is treated as plain text, so rows written
+ * before this class existed (and rows restored from an old backup) stay readable - including one
+ * that merely starts with `w1:`. Saved rows are re-encrypted the next time they are written.
  *
  * Encryption failures are surfaced to the caller; note text is never silently written in plaintext.
  */
@@ -49,18 +49,46 @@ class NoteCrypto @Inject constructor() {
 
     /** Reads a value produced by [seal]; plain text values pass through unchanged. */
     fun open(stored: String): String {
-        if (!stored.startsWith(MARKER)) return stored
+        if (!isSealed(stored)) return stored
 
-        cache[stored]?.let { return it }
+        cacheGet(stored)?.let { return it }
 
         val plaintext = openOrNull(stored)
             ?: throw IllegalStateException("Could not decrypt stored note text; refusing to replace it")
-        cache[stored] = plaintext
+        cachePut(stored, plaintext)
         return plaintext
     }
 
-    /** True when [value] was produced by [seal] rather than stored as plain text. */
-    fun isSealed(value: String): Boolean = value.startsWith(MARKER)
+    /**
+     * True when [value] was produced by [seal] rather than stored as plain text.
+     *
+     * V-11: the `w1:` marker alone is not proof. A note written before this class existed can start
+     * with `w1:` of its own accord ("w1:hello"); the read paths used to treat it as ciphertext, fail
+     * to decrypt it and show the undecryptable placeholder over a perfectly readable note. Only a
+     * value whose payload decodes to an IV plus at least one GCM block can be a seal, and that
+     * structural test is what every read path now uses.
+     */
+    fun isSealed(value: String): Boolean = NoteSealFormat.isSealedValue(value)
+
+    /**
+     * The decoded payload of a [stored] value shaped like `w1:` ciphertext, null for plain text.
+     *
+     * The length test is "longer than the IV", not "not empty": [seal] always writes a 12 byte IV
+     * followed by the GCM ciphertext, so anything that does not decode as base64 or that fits in
+     * the IV alone is structurally impossible and must read back as the plain text it is. A value
+     * that passes this test but still fails to open is the other case - real ciphertext this
+     * process cannot decrypt - and [openOrNull] keeps returning null for it so a caller never
+     * overwrites the only copy with garbage.
+     */
+    private fun sealedPayload(stored: String): ByteArray? {
+        if (!stored.startsWith(MARKER)) return null
+        val payload = try {
+            Base64.decode(stored.substring(MARKER.length), Base64.NO_WRAP)
+        } catch (e: IllegalArgumentException) {
+            return null
+        }
+        return payload.takeIf { it.size > IV_BYTES }
+    }
 
     /**
      * Like [open], but returns null when a sealed value cannot be decrypted, so a caller that
@@ -68,13 +96,15 @@ class NoteCrypto @Inject constructor() {
      * touch" instead of writing garbage back over an unreadable note.
      */
     fun openOrNull(stored: String): String? {
-        if (!stored.startsWith(MARKER)) return stored
+        // Same structural test as isSealed: a malformed `w1:` value is plain text, and the caller
+        // gets it back unchanged so no write path can "repair" it into something else.
+        if (!isSealed(stored)) return stored
 
-        cache[stored]?.let { return it }
+        cacheGet(stored)?.let { return it }
 
         return try {
             withSecretKey { key -> decryptPayload(stored, key) }
-                .also { cache[stored] = it }
+                .also { cachePut(stored, it) }
         } catch (e: Exception) {
             Log.e(TAG, "Could not decrypt note text, leaving the row untouched", e)
             null
@@ -163,6 +193,10 @@ class NoteCrypto @Inject constructor() {
      * The Keystore key, kept after the first successful load so the list does not re-open the
      * provider for every row. Volatile because the decrypting DAO maps flows on IO while a save can
      * seal on another thread.
+     *
+     * Unlike the plaintext cache this stays per instance: it is only a reference to the same
+     * Keystore entry, so nothing secret is shared, and each instance's invalidation retry then
+     * reloads independently instead of one caller's stale key forcing every other caller to reload.
      */
     @Volatile
     private var cachedKey: SecretKey? = null
@@ -171,15 +205,51 @@ class NoteCrypto @Inject constructor() {
     private val keyLock = Any()
 
     /**
-     * Recently read values, so re-reading an unchanged note is not a Keystore round trip. Sealing
-     * is randomised, which means a freshly saved note misses the cache while everything else hits.
+     * Drops every cached plaintext value, for this instance and every other one in the process.
+     *
+     * PERF-1 keeps decrypted bodies in memory so an unchanged list is not decrypted again on every
+     * Room emission. That is exactly what must not survive a lock: the app calls this when it is
+     * locked or backgrounded (see `NoteDatabaseProvider.clearCryptoCache`) so plaintext does not
+     * sit in the heap behind the lock screen.
+     *
+     * V-5: the cache lives in the companion, so this call reaches all of it. `NoteCrypto` is
+     * injected in several places and constructed directly in others (the Hilt provider behind the
+     * list's DAO, `BackupDatabase.provider()`, the migration wrapper, `SettingsViewModel` for
+     * flashcards/scratchpad). With a per-instance cache, `LockManager` could only clear the
+     * instance it happened to hold while Settings kept decrypted scratchpad text across a lock.
      */
-    private val cache = Collections.synchronizedMap(
-        object : LinkedHashMap<String, String>(CACHE_INITIAL_CAPACITY, 0.75f, true) {
-            override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, String>): Boolean =
-                size > MAX_CACHE_ENTRIES
+    fun clearCache() {
+        synchronized(cacheLock) {
+            cache.clear()
+            cachedPlaintextBytes = 0L
         }
-    )
+    }
+
+    private fun cacheGet(key: String): String? = synchronized(cacheLock) { cache[key] }
+
+    private fun cachePut(key: String, plaintext: String) {
+        synchronized(cacheLock) {
+            cache.put(key, plaintext)?.let { cachedPlaintextBytes -= plaintextBytes(it) }
+            cachedPlaintextBytes += plaintextBytes(plaintext)
+
+            // Evict least-recently-used entries until both budgets fit. The newest entry is kept
+            // even when it alone is larger than the budget: dropping it immediately would just
+            // force the same decrypt on the next read.
+            val eldest = cache.entries.iterator()
+            while (
+                (cachedPlaintextBytes > MAX_CACHE_BYTES || cache.size > MAX_CACHE_ENTRIES) &&
+                cache.size > 1 &&
+                eldest.hasNext()
+            ) {
+                val entry = eldest.next()
+                eldest.remove()
+                cachedPlaintextBytes -= plaintextBytes(entry.value)
+            }
+        }
+    }
+
+    /** UTF-8 is the on-disk form of a note body, so this tracks what the cache actually holds. */
+    private fun plaintextBytes(value: String): Long = value.toByteArray(Charsets.UTF_8).size.toLong()
 
     private companion object {
         const val TAG = "NoteCrypto"
@@ -192,6 +262,63 @@ class NoteCrypto @Inject constructor() {
         const val TAG_BITS = 128
         const val KEY_SIZE_BITS = 256
         const val CACHE_INITIAL_CAPACITY = 64
-        const val MAX_CACHE_ENTRIES = 512
+
+        /**
+         * Recently read values, so re-reading an unchanged note is not a Keystore round trip. Sealing
+         * is randomised, which means a freshly saved note misses the cache while everything else hits.
+         *
+         * PERF-1: the old bound was 512 *entries*, which allowed long bodies to retain tens of
+         * megabytes while short notes could not. The bound is now the total plaintext bytes (plus a
+         * generous entry cap for tiny notes), evicting in access order - the least recently read body
+         * goes first. Both map and byte counter are guarded by [cacheLock]; the map is deliberately
+         * access-ordered so `get` is also a write and needs the same lock.
+         *
+         * V-5: the cache is in the companion because it is process-wide state, not a per-instance
+         * memo. Every `NoteCrypto` opens the same Keystore entry and encrypts the same note text;
+         * duplicating the cache per instance only meant that locking could clear one copy (the
+         * list's DAO) while the copy Settings uses for flashcards and the scratchpad stayed behind.
+         * Keeping it shared also means two instances cannot hold two different plaintext budgets.
+         */
+        val cache = LinkedHashMap<String, String>(CACHE_INITIAL_CAPACITY, 0.75f, true)
+        var cachedPlaintextBytes = 0L
+        val cacheLock = Any()
+
+        /**
+         * A hard cap for tiny notes that never reach the byte budget; large bodies are bounded by
+         * [MAX_CACHE_BYTES] long before this.
+         */
+        const val MAX_CACHE_ENTRIES = 4_096
+
+        /**
+         * PERF-1: plaintext retained for repeat reads, not ciphertext entries. ~28 MB holds a
+         * large but sane working set on a low-end phone while leaving the heap to Room, Compose
+         * and the editor; the previous 512-entry cache could hold far more when bodies were long.
+         */
+        const val MAX_CACHE_BYTES = 28L * 1024 * 1024
+    }
+}
+
+/**
+ * Structural test shared by the note read paths and the TXT export filter.
+ *
+ * It is deliberately outside [NoteCrypto] and uses `java.util.Base64` (available from API 26) so a
+ * plain-JVM unit test can call it without Robolectric or an Android Keystore. A value is sealed
+ * only when its payload decodes to more than the 12-byte IV: that is the smallest shape `seal`
+ * can produce, and anything shorter is either old plain text or a truncated payload. The latter
+ * still fails authentication later; this helper only answers "does it look like ciphertext".
+ */
+internal object NoteSealFormat {
+
+    const val MARKER = "w1:"
+    const val IV_BYTES = 12
+
+    fun isSealedValue(value: String): Boolean {
+        if (!value.startsWith(MARKER)) return false
+        val payload = try {
+            java.util.Base64.getDecoder().decode(value.substring(MARKER.length))
+        } catch (e: IllegalArgumentException) {
+            return false
+        }
+        return payload.size > IV_BYTES
     }
 }

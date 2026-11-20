@@ -7,9 +7,16 @@ import androidx.core.database.getStringOrNull
 import com.ezpnix.writeon.R
 import com.ezpnix.writeon.core.attachment.AttachmentArchive
 import com.ezpnix.writeon.core.constant.DatabaseConst
+import com.ezpnix.writeon.core.security.SharedPreferencesVaultKeyStore
 import com.ezpnix.writeon.core.util.AutoBackupCrypto
 import com.ezpnix.writeon.core.util.BackupArchiveCrypto
 import com.ezpnix.writeon.core.util.DatabaseRestore
+import com.ezpnix.writeon.core.util.RestoreCoordinator
+import com.ezpnix.writeon.data.backup.FlashcardArchive
+import com.ezpnix.writeon.data.backup.SnapshotSidecar
+import com.ezpnix.writeon.data.backup.VaultSaltArchive
+import com.ezpnix.writeon.data.local.database.LegacyCaptionBackfillFlag
+import com.ezpnix.writeon.data.local.database.LegacyPlaintextBackfillFlag
 import com.ezpnix.writeon.data.local.database.NoteDatabaseProvider
 import com.ezpnix.writeon.domain.model.Note
 import com.ezpnix.writeon.domain.repository.NoteFileReader
@@ -71,8 +78,9 @@ class ImportExportRepository(
                         val portableFile = File.createTempFile("portable", ".db", context.cacheDir)
                         val tempZipFile = File.createTempFile("backup", ".zip", context.cacheDir)
                         try {
-                            provider.writePortableDatabaseCopy(portableFile)
-                            val attachments = provider.attachmentDao().getAll()
+                            // N-5: the list comes from the portable-copy transaction, so the
+                            // archive's rows and files describe the same instant.
+                            val attachments = provider.writePortableDatabaseCopy(portableFile)
 
                             ZipOutputStream(FileOutputStream(tempZipFile)).use { zipOutputStream ->
                                 FileInputStream(portableFile).use { inputStream ->
@@ -80,7 +88,17 @@ class ImportExportRepository(
                                     inputStream.copyTo(zipOutputStream)
                                     zipOutputStream.closeEntry()
                                 }
-                                AttachmentArchive.writeTo(zipOutputStream, attachments)
+                                // SEC-4: the decrypting overload, so an encrypted attachment is
+                                // stored as plaintext the restoring device can open. A member that
+                                // cannot be decrypted aborts the export instead of shipping `WMV1`.
+                                AttachmentArchive.writeTo(zipOutputStream, attachments, context)
+                                // DAT-11: the deck lives in SharedPreferences, outside the
+                                // database copy above; without this member an export/import round
+                                // trip lost all cards while reporting success.
+                                FlashcardArchive.writeToZip(context, zipOutputStream)
+                                // PERF-2: so does the `v3:` envelope salt. A portable archive
+                                // restored on another install has no other source for it.
+                                VaultSaltArchive.writeToZip(context, zipOutputStream)
                             }
 
                             // Streamed end to end: the zip is copied into the cipher stream, which
@@ -202,8 +220,10 @@ class ImportExportRepository(
     }
 
     /**
-     * Extracts a plain (already decrypted) zip stream, rewrites the staged database's attachment
-     * paths and swaps the database in - the shared tail of every restore path.
+     * Extracts a plain (already decrypted) zip stream, validates it, prepares the attachment
+     * plan, swaps the database in and only then installs the attachment bytes - the shared tail
+     * of every restore path. The ordering is the DAT-4 fix: a failed swap never touches a live
+     * image or recording.
      */
     private fun restoreFromZipStream(zipStream: java.io.InputStream) {
         // Keep the extracted files alive until the atomic replacement has completed. The
@@ -216,11 +236,6 @@ class ImportExportRepository(
             val restored = java.util.zip.ZipInputStream(zipStream).use { zip ->
                 DatabaseRestore.extractAll(zip, tempDir, DatabaseConst.NOTES_DATABASE_FILE_NAME)
             }
-            // Rewrite the staged database's attachment paths before it becomes live, so a
-            // restore on another device no longer leaves every image and recording pointing
-            // at the previous device's file system. The staged copy carries the archive's
-            // own compatibility header, so this also runs the D8 version/identity check
-            // before a single file lands in filesDir.
             val dbFile = context.getDatabasePath(DatabaseConst.NOTES_DATABASE_FILE_NAME)
             // quick_check walks the real pages while the live file is still untouched: a
             // database that would open but lose rows is rejected here, before any attachment
@@ -229,15 +244,103 @@ class ImportExportRepository(
             if (!DatabaseRestore.quickCheckPasses(restored)) {
                 throw IOException(context.getString(R.string.import_failed, "backup database failed integrity check"))
             }
-            AttachmentArchive.restore(context, tempDir, restored)
-            // Room holds the old file open; it must be closed before the rename. This is
-            // deliberately the only remaining close() on the export/import path.
-            provider.close()
-            DatabaseRestore.replaceDatabaseAtomically(dbFile, restored)
-            // Same post-swap reconciliation as the cloud path: rows without files are
-            // reported, files without rows go to quarantine (no-op for archives that
-            // predate the attachments table).
-            AttachmentArchive.reconcileAfterRestore(context, dbFile)
+            // D8: refuse a newer or unrecognised schema before the first side effect.
+            DatabaseRestore.assertArchiveCompatible(restored)
+
+            // DAT-4: prepare rewrites the staged database's attachment paths but deliberately
+            // writes nothing into filesDir. A rejected archive or a failed swap therefore
+            // cannot overwrite a single live image or recording. Pre-2.0 archives without an
+            // `attachments/` directory return an empty plan, which is a no-op below.
+            val preparedAttachments = AttachmentArchive.prepare(context, tempDir, restored)
+            // PERF-2: capture the live salt before Room closes. A failed attachment install rolls
+            // the database back, and the salt has to follow it or the old `v3:` rows lose the KEK
+            // they were sealed with.
+            val oldSalt = SharedPreferencesVaultKeyStore(context).encodedSalt()
+            // N-2: same reasoning for the flashcard deck. The archive may overwrite it below; the
+            // `.bak` snapshot of the current database needs the deck that belonged to it.
+            val oldDeck = FlashcardArchive.readRaw(context)
+            // DAT-7: everything validated and staged; the next statement closes the shared Room
+            // connection. Publishing the restore now covers the app and stops the note collectors
+            // *before* the connection dies, instead of leaving them to hit a closed database in
+            // the restart window. A rejected archive never reaches here, so it cannot blank the UI.
+            RestoreCoordinator.begin()
+            try {
+                // Room holds the old file open; it must be closed before the rename. This is
+                // deliberately the only remaining close() on the export/import path.
+                provider.close()
+                val previousBackup = DatabaseRestore.replaceDatabaseAtomically(dbFile, restored)
+                // N-1/N-2: `.bak` is now the replaced database. Stamp it with the salt and deck
+                // that database expects, so "restore the previous database" can put all three
+                // back together. A failed stamp rolls the swap back: an undo that silently
+                // applies the archive's salt to the old rows is exactly the bug this fixes.
+                if (previousBackup != null &&
+                    !SnapshotSidecar.write(previousBackup, oldSalt, oldDeck)
+                ) {
+                    val rolledBack = DatabaseRestore.rollbackFromBackup(dbFile)
+                    if (rolledBack) {
+                        VaultSaltArchive.restoreEncoded(context, oldSalt)
+                        FlashcardArchive.restoreRaw(context, oldDeck)
+                    }
+                    throw IOException(
+                        context.getString(R.string.import_failed, "could not record snapshot metadata")
+                    )
+                }
+                // The archive's salt must be live before any failure-prone attachment work: from
+                // here on the restored database is the one Room will open. A present-but-invalid
+                // member is refused like a corrupt database rather than left to make every `v3:`
+                // row unreadable.
+                val saltAccepted = VaultSaltArchive.restoreFromStaging(context, tempDir)
+                if (File(tempDir, VaultSaltArchive.ENTRY_NAME).isFile && !saltAccepted) {
+                    val rolledBack = DatabaseRestore.rollbackFromBackup(dbFile)
+                    if (rolledBack) VaultSaltArchive.restoreEncoded(context, oldSalt)
+                    throw IOException(
+                        context.getString(R.string.import_failed, "backup vault salt is invalid")
+                    )
+                }
+                // Only now may the bytes land: the file every row points at is the restored database.
+                try {
+                    AttachmentArchive.install(context, preparedAttachments)
+                } catch (e: IOException) {
+                    // The database was already swapped but the attachments could not follow it. Put
+                    // the previous database (whose files install() has just restored) back in place
+                    // rather than leave rows pointing at a half-installed set of files.
+                    val rolledBack = DatabaseRestore.rollbackFromBackup(dbFile)
+                    // The salt belongs to the database that is live again; keeping the archive's
+                    // would make the rolled-back rows unreadable even though their file was restored.
+                    if (rolledBack) VaultSaltArchive.restoreEncoded(context, oldSalt)
+                    throw IOException(
+                        if (rolledBack) {
+                            "Attachments could not be installed; the previous database was restored"
+                        } else {
+                            "Attachments could not be installed and the previous database could not be restored"
+                        },
+                        e
+                    )
+                }
+                // SEC-5: a restored old database may contain plaintext rows again. Clear the
+                // install-wide "already sealed" marker so the next launch sweeps the restored copy
+                // instead of trusting a flag written against the database that was just replaced.
+                LegacyPlaintextBackfillFlag.reset(context)
+                // SEC-4: captions travel plaintext inside the archive for the same reason the deck
+                // does, so the caption sweep needs the same reset; otherwise the flag from the
+                // replaced database would leave restored captions readable.
+                LegacyCaptionBackfillFlag.reset(context)
+                // DAT-11: the deck travels beside the database (extractAll already unpacked it into
+                // tempDir). It is reapplied here, after the swap, so a rejected archive never
+                // rewrites the stored deck; pre-DAT-11 archives have no member and keep the
+                // current one.
+                FlashcardArchive.restoreFromStaging(context, tempDir)
+                // Same post-swap reconciliation as the cloud path: rows without files are
+                // reported, files without rows go to quarantine (no-op for archives that
+                // predate the attachments table).
+                AttachmentArchive.reconcileAfterRestore(context, dbFile)
+            } catch (e: Throwable) {
+                // Every failure/rollback path lands here: the caller reports it and the app must
+                // become usable again. Success deliberately falls through with the flag still set;
+                // the caller restarts the process for the database that was just installed.
+                RestoreCoordinator.end()
+                throw e
+            }
         } finally {
             tempDir.deleteRecursively()
         }

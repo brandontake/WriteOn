@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Vault-locked editor fixes (V-3).
+
+  Kept in its own file so this lane does not rewrite the shared strings table. Every key is prefixed
+  editor_lock_fix_ and has en/zh/ja entries: the unlock dialog is the only thing standing between a
+  locked vault and unsaved text, so it must not fall back to English on a localised device.
+-->
+<resources>
+    <string name="editor_lock_fix_vault_locked_title">Vault locked</string>
+    <string name="editor_lock_fix_vault_locked_message">The vault locked while this note was open, so the text here is not saved yet. Enter the vault password to save it, or discard the changes.</string>
+    <string name="editor_lock_fix_vault_new_note">The vault locked while this note was open. A new vault note has no stored text to check a password against, so it cannot be sealed safely from here. Unlock the vault from Home first, or discard this note. Nothing is saved in plain text.</string>
+    <string name="editor_lock_fix_vault_password">Vault password</string>
+    <string name="editor_lock_fix_unlock_and_save">Unlock and save</string>
+    <string name="editor_lock_fix_discard_and_exit">Discard changes and exit</string>
+    <string name="editor_lock_fix_vault_wrong_password">Wrong password — the note is still not saved.</string>
+    <string name="editor_lock_fix_vault_locked_status">Vault locked — not saved</string>
+</resources>

@@ -3,6 +3,9 @@ package com.ezpnix.writeon.core.attachment
 import android.content.Context
 import com.ezpnix.writeon.domain.model.Attachment
 import java.io.File
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 /**
  * Owns the folders attachment files live in, and deletes only inside them.
@@ -22,6 +25,15 @@ object AttachmentFiles {
 
     /** Files no `attachments` row references any more wait here - see [quarantineAll]. */
     const val QUARANTINE_DIRECTORY = "attachments-quarantine"
+
+    /** One directory per reconciliation round, timestamped so name order is age order. */
+    private const val QUARANTINE_GENERATION_PREFIX = "round-"
+
+    /**
+     * DAT-6: how many generations survive. One is the round just finished, so a file wrongly
+     * quarantined stays recoverable through the next **two** reconciliations before it ages out.
+     */
+    private const val QUARANTINE_GENERATIONS_KEPT = 3
 
     /** Directory new files of [type] should be written to. Created on demand by the caller. */
     fun directoryFor(context: Context, type: String): File = when (type) {
@@ -52,14 +64,21 @@ object AttachmentFiles {
     fun delete(context: Context, attachment: Attachment): Boolean =
         deletePath(context, attachment.path, attachment.type)
 
-    fun deletePath(context: Context, path: String, type: String): Boolean = runCatching {
-        val file = File(path).canonicalFile
-        rootsFor(context, type).any { root ->
-            file != root &&
-                file.path.startsWith(root.path + File.separator) &&
-                file.delete()
-        }
-    }.getOrDefault(false)
+    fun deletePath(context: Context, path: String, type: String): Boolean {
+        val deleted = runCatching {
+            val file = File(path).canonicalFile
+            rootsFor(context, type).any { root ->
+                file != root &&
+                    file.path.startsWith(root.path + File.separator) &&
+                    file.delete()
+            }
+        }.getOrDefault(false)
+        // SEC-4: the decrypted copy in `cacheDir/media` is plaintext and must not outlive the file
+        // the user deleted. Best effort, and deliberately also on a refused delete: the row is
+        // already gone either way, so a cached copy left behind is unreachable and unencrypted.
+        MediaVault.deleteCached(context, path)
+        return deleted
+    }
 
     fun deleteAll(context: Context, attachments: Collection<Attachment>) {
         attachments.forEach { delete(context, it) }
@@ -153,6 +172,11 @@ object AttachmentFiles {
      * audio directory. The legacy external root is deliberately absent - files there are never
      * quarantined, because outside this directory pair they are a different class of storage and
      * the conservative D7 policy only *reports* what it does not manage.
+     *
+     * [QUARANTINE_DIRECTORY] is deliberately **not** a root either: it is a sibling
+     * (`filesDir/attachments-quarantine`), and the reconcile scan is a non-recursive `listFiles`
+     * over these two roots, so a surviving generation can never be re-quarantined or aged out by
+     * the scan that is supposed to leave it alone (DAT-6).
      */
     fun internalRoots(context: Context): List<File> =
         listOf(
@@ -169,43 +193,92 @@ object AttachmentFiles {
      * Re-checks the canonical location exactly like [deletePath] does: a stale or hostile path
      * must not be able to pull arbitrary files into (or out of) the app's directories.
      *
+     * SEC-4: the decrypted copy in `cacheDir/media` is dropped after a successful move, so
+     * quarantine cannot leave plaintext behind for a file that is no longer in the library. That
+     * eviction is best effort and never blocks the quarantine.
+     *
      * @return true when the file now lives in quarantine.
      */
-    fun quarantine(context: Context, file: File): Boolean {
+    fun quarantine(context: Context, file: File): Boolean = runCatching {
+        val directory = newGenerationDirectory(quarantineDirectory(context)).apply { mkdirs() }
+        moveIntoQuarantine(context, file, directory)
+    }.getOrDefault(false)
+
+    /**
+     * Moves one file into [directory], refusing anything that is not under an app-owned root.
+     *
+     * Re-checks the canonical location exactly like [deletePath] does: a stale or hostile path
+     * must not be able to pull arbitrary files into (or out of) the app's directories.
+     */
+    private fun moveIntoQuarantine(context: Context, file: File, directory: File): Boolean {
         val canonical = runCatching { file.canonicalFile }.getOrNull() ?: return false
         val allowed = internalRoots(context)
         if (allowed.none { canonical.path.startsWith(it.path + File.separator) }) return false
         if (!canonical.isFile) return false
         return runCatching {
-            val directory = quarantineDirectory(context)
-            directory.mkdirs()
             val destination = File(directory, canonical.name)
             if (destination.exists()) destination.delete()
-            canonical.renameTo(destination) || run {
+            val moved = canonical.renameTo(destination) || run {
                 canonical.copyTo(destination, overwrite = true)
                 canonical.delete()
                 destination.isFile
             }
+            // SEC-4: a quarantined file leaves the live library, so its decrypted copy in
+            // `cacheDir/media` is plaintext debris that must not outlive it. Best effort and
+            // deliberately non-blocking: quarantine must succeed even when the cache cannot be
+            // touched. The cached name is keyed by the path alone, so this also works now that
+            // the source has moved.
+            if (moved) runCatching { MediaVault.deleteCached(context, canonical.path) }
+            moved
         }.getOrDefault(false)
     }
 
     /**
-     * Quarantines [files] as one round, first dropping whatever the previous round left.
+     * Quarantines [files] as **one timestamped generation**, then deletes only generations older
+     * than the newest [QUARANTINE_GENERATIONS_KEPT] (DAT-6).
      *
-     * Retention rule (the D7 counterpart of the `.bak` rotation in `DatabaseRestore`): nothing
-     * consumes this directory yet - no UI, no worker - so keeping rounds forever would turn the
-     * recyclable area into a new unbounded store of files, the exact problem it exists to avoid.
-     * One round therefore survives until the next reconciliation: a file wrongly quarantined once
-     * is either still orphaned then (and cleaned up) or comes back with the archive that owns it.
-     * When a TTL worker appears ("move to trash, delete after 7 days"), switch this to rolling
-     * retention instead of clearing.
+     * The previous rule wiped the whole directory at the start of every round, so a file that was
+     * quarantined by mistake was gone on the very next reconciliation - before anyone could
+     * notice it missing. Rolling retention keeps the round just finished plus two more, which is
+     * the window a user (or a later UI) has to recover it. Nothing deletes inside the surviving
+     * generations; older rounds are removed by age alone.
+     *
+     * No `attachments/` directory / no orphans is a no-op: no empty generation is created.
+     *
+     * SEC-4: every file that moves also loses its decrypted cache copy (see [quarantine]).
      *
      * @return how many files were moved this round.
      */
     fun quarantineAll(context: Context, files: Collection<File>): Int {
-        runCatching { quarantineDirectory(context).deleteRecursively() }
         if (files.isEmpty()) return 0
-        quarantineDirectory(context).mkdirs()
-        return files.count { quarantine(context, it) }
+        val quarantineRoot = quarantineDirectory(context)
+        val generation = newGenerationDirectory(quarantineRoot).apply { mkdirs() }
+        val moved = files.count { moveIntoQuarantine(context, it, generation) }
+        pruneGenerations(quarantineRoot)
+        return moved
+    }
+
+    /**
+     * A unique generation directory under [quarantineRoot], named so lexical order is age order.
+     * The suffix loop covers two rounds starting inside the same millisecond.
+     */
+    private fun newGenerationDirectory(quarantineRoot: File): File {
+        val stamp = SimpleDateFormat("yyyyMMdd-HHmmss-SSS", Locale.US).format(Date())
+        var candidate = File(quarantineRoot, QUARANTINE_GENERATION_PREFIX + stamp)
+        var attempt = 1
+        while (candidate.exists()) {
+            candidate = File(quarantineRoot, QUARANTINE_GENERATION_PREFIX + stamp + "-" + attempt++)
+        }
+        return candidate
+    }
+
+    /** Deletes only `round-*` generations outside the retention window; loose files stay. */
+    private fun pruneGenerations(quarantineRoot: File) {
+        quarantineRoot.listFiles { file ->
+            file.isDirectory && file.name.startsWith(QUARANTINE_GENERATION_PREFIX)
+        }.orEmpty()
+            .sortedBy { it.name }
+            .dropLast(QUARANTINE_GENERATIONS_KEPT)
+            .forEach { runCatching { it.deleteRecursively() } }
     }
 }

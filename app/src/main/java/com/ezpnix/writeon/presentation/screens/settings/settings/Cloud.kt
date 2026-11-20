@@ -26,6 +26,7 @@ import androidx.compose.material.icons.rounded.ArrowCircleUp
 import androidx.compose.material.icons.rounded.Backup
 import androidx.compose.material.icons.rounded.Cloud
 import androidx.compose.material.icons.rounded.Description
+import androidx.compose.material.icons.rounded.History
 import androidx.compose.material.icons.rounded.Restore
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -73,6 +74,7 @@ import androidx.work.WorkManager
 import com.ezpnix.writeon.R
 import com.ezpnix.writeon.core.constant.DatabaseConst
 import com.ezpnix.writeon.core.util.BackupArchiveCrypto
+import com.ezpnix.writeon.core.util.RestoreSnapshots
 import com.ezpnix.writeon.presentation.screens.edit.components.CustomTextField
 import com.ezpnix.writeon.presentation.screens.settings.SettingsScaffold
 import com.ezpnix.writeon.data.backup.TxtBackupHelper
@@ -95,6 +97,7 @@ import okhttp3.Request
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.util.UUID
 
 /**
  * Unique work name shared by the WebDAV upload and download workers.
@@ -111,6 +114,39 @@ import java.util.Locale
 private const val WEBDAV_SYNC_WORK = "WebDAVSync"
 
 private const val TAG = "CloudScreen"
+
+/**
+ * SYN-3: the conflict-copy restore whose success owes the user a convergence choice.
+ *
+ * Restoring a conflict copy replaces the local library with the copy the app kept when the remote
+ * had changed, but the canonical file on the server still belongs to the other device. Without a
+ * prompt the very next backup sees the same disagreement and parks yet another conflict copy, so
+ * the restored one silently rots. The work id - not just a boolean - identifies the exact restore:
+ * this chain also runs ordinary backups and restores, and a later unrelated success must not pop
+ * the prompt.
+ *
+ * It is persisted because the restore worker restarts the process about two seconds after success
+ * (see [com.ezpnix.writeon.data.backup.WebDAVRestoreWorker]). An in-memory flag would die in the
+ * very gap between "the copy landed" and "the user can answer", so the choice is offered again the
+ * next time this screen opens, as long as WorkManager still knows that work succeeded.
+ */
+private const val CONFLICT_RESTORE_PREFS = "webdav_conflict_restore"
+private const val CONFLICT_RESTORE_WORK_ID = "work_id"
+
+private fun storedConflictRestoreWorkId(context: Context): UUID? =
+    context.getSharedPreferences(CONFLICT_RESTORE_PREFS, Context.MODE_PRIVATE)
+        .getString(CONFLICT_RESTORE_WORK_ID, null)
+        ?.let { runCatching { UUID.fromString(it) }.getOrNull() }
+
+private fun storeConflictRestoreWorkId(context: Context, id: UUID) {
+    context.getSharedPreferences(CONFLICT_RESTORE_PREFS, Context.MODE_PRIVATE)
+        .edit().putString(CONFLICT_RESTORE_WORK_ID, id.toString()).apply()
+}
+
+private fun clearConflictRestoreWorkId(context: Context) {
+    context.getSharedPreferences(CONFLICT_RESTORE_PREFS, Context.MODE_PRIVATE)
+        .edit().remove(CONFLICT_RESTORE_WORK_ID).apply()
+}
 
 /**
  * W16: every WebDAV transfer needs connectivity before it may start.
@@ -149,6 +185,68 @@ private sealed interface RestoreManifestState {
 /** Formats a manifest timestamp the same way the automatic-backup confirmation does. */
 private fun formatArchiveTime(epochMillis: Long): String =
     SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).format(Date(epochMillis))
+
+/** Human-readable size for the rollback entry; units are not translated on purpose. */
+private fun formatSize(bytes: Long): String = when {
+    bytes >= 1024L * 1024L -> String.format(Locale.getDefault(), "%.1f MB", bytes / (1024.0 * 1024.0))
+    bytes >= 1024L -> String.format(Locale.getDefault(), "%d KB", bytes / 1024L)
+    else -> "$bytes B"
+}
+
+/**
+ * UX-4: does the picked archive carry an encrypted header?
+ *
+ * The restore path used to decide this from `settings.encryptBackup`, which is the *current*
+ * preference and has nothing to do with the file in hand: an archive exported while encryption was
+ * on failed to import after the switch was turned off (it was read as a plain zip), and a plain zip
+ * asked for a password it never had. Both encrypted layouts - the `WBK2` header and the older
+ * `salt || iv || ciphertext` form - start with random bytes, while a plain archive is a zip and
+ * starts with `PK`. Two bytes are enough, and they are read from the file itself.
+ *
+ * Returns null when the stream cannot be opened or is too short to tell; the caller then falls back
+ * to asking for an optional passphrase instead of guessing.
+ */
+private fun archiveIsEncrypted(context: Context, uri: Uri): Boolean? = try {
+    context.contentResolver.openInputStream(uri)?.use { input ->
+        val head = ByteArray(2)
+        var read = 0
+        while (read < head.size) {
+            val count = input.read(head, read, head.size - read)
+            if (count < 0) break
+            read += count
+        }
+        if (read < head.size) null
+        else !(head[0] == 'P'.code.toByte() && head[1] == 'K'.code.toByte())
+    }
+} catch (e: Exception) {
+    Log.w(TAG, "Could not read the picked archive header", e)
+    null
+}
+
+/**
+ * What a WebDAV control was about to do when the SEC-2 cleartext warning interrupted it.
+ *
+ * Holding the intent rather than the action keeps the warning in one place: Save, Backup, the
+ * conflict card's force overwrite and both restore entry points all persist the same URL and all
+ * send the same credentials, so none of them may run before the user has seen that http:// sends
+ * them in the clear.
+ */
+private sealed interface WebDavIntent {
+    object Save : WebDavIntent
+    object Backup : WebDavIntent
+    object Restore : WebDavIntent
+    data class ConflictRestore(val url: String) : WebDavIntent
+
+    /**
+     * The conflict card's "take over the remote": an upload that ignores the validator (V-10).
+     *
+     * It is an intent of its own rather than a flag on [Backup] because it is a *different*
+     * confirmation dialog that used to enqueue the worker directly, which skipped the cleartext
+     * warning for exactly the case it matters most - a fresh install of a build that stored a
+     * plain-http server before this install had ever acknowledged it.
+     */
+    object ForceBackup : WebDavIntent
+}
 
 /**
  * The freshness line under the restore confirmation warning (W6): "backed up on X, N notes",
@@ -192,6 +290,33 @@ fun CloudScreen(navController: NavController, settingsViewModel: SettingsViewMod
             info.state == WorkInfo.State.BLOCKED
     }
 
+    // SYN-3: the conflict-copy restore this screen is waiting on, restored from disk so a success
+    // that dies with the process (the restore worker restarts it) is still answered on the next
+    // visit. Null means the last conflict restore failed, was cancelled, or was already answered.
+    var conflictRestoreWorkId by remember { mutableStateOf(storedConflictRestoreWorkId(context)) }
+    /** True when that restore succeeded and the convergence dialog should be shown. */
+    var showConflictTakeover by remember { mutableStateOf(false) }
+
+    // Match the tracked restore against the same unique-work observation the progress card uses.
+    // "Some work just succeeded" is not enough: this chain also carries ordinary uploads and
+    // restores, and treating one of those as the conflict restore would offer to overwrite the
+    // server for no reason.
+    LaunchedEffect(conflictRestoreWorkId, workInfos) {
+        val workId = conflictRestoreWorkId ?: return@LaunchedEffect
+        val info = workInfos.firstOrNull { it.id == workId } ?: return@LaunchedEffect
+        when (info.state) {
+            WorkInfo.State.SUCCEEDED -> showConflictTakeover = true
+            WorkInfo.State.FAILED, WorkInfo.State.CANCELLED -> {
+                // Terminal and not a success: forget the id, or a later unrelated success in this
+                // shared chain could be mistaken for the conflict restore.
+                conflictRestoreWorkId = null
+                clearConflictRestoreWorkId(context)
+            }
+            // ENQUEUED / RUNNING / BLOCKED: keep waiting.
+            else -> Unit
+        }
+    }
+
     val aead = remember {
         WebDavPrefsCipher.aead(context)
     }
@@ -204,6 +329,19 @@ fun CloudScreen(navController: NavController, settingsViewModel: SettingsViewMod
     var webdavUrl by remember { mutableStateOf("") }
     var webdavUsername by remember { mutableStateOf("") }
     var webdavPassword by remember { mutableStateOf("") }
+
+    /**
+     * The database the last restore replaced (DAT-1/UX-3), if the restore path kept one.
+     *
+     * It is read from disk rather than cached in the view model because the restore that writes it
+     * runs in a worker or behind a picker result, so the screen only learns about it by asking. The
+     * counter forces a re-read after a rollback and on resume, when the file may have appeared or
+     * gone.
+     */
+    var snapshotVersion by remember { mutableStateOf(0) }
+    val restoreSnapshot = remember(snapshotVersion) { RestoreSnapshots.info(context) }
+    var showSnapshotRestoreConfirm by remember { mutableStateOf(false) }
+
     /**
      * True once the user actually edited the password field. The field is populated from storage
      * on open, but if the stored value cannot be decrypted it shows blank - saving that blank used
@@ -259,6 +397,9 @@ fun CloudScreen(navController: NavController, settingsViewModel: SettingsViewMod
 
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
         conflictBackupUrls = WebDavBackupState.conflicts(context)
+        // A WebDAV restore that finished while the app was in the background leaves a fresh
+        // snapshot behind; re-reading on resume is what makes the rollback card appear.
+        snapshotVersion++
     }
 
     var txtBackupUri by remember { mutableStateOf<Uri?>(null) }
@@ -309,26 +450,54 @@ fun CloudScreen(navController: NavController, settingsViewModel: SettingsViewMod
         onResult = { uri -> if (uri != null) settingsViewModel.onExportBackup(uri, context) }
     )
 
+    /** The archive picked for a local restore, waiting for the passphrase dialog. */
+    var pendingImportUri by remember { mutableStateOf<Uri?>(null) }
+    /** True when the archive header says it is encrypted, so a blank passphrase cannot work. */
+    var pendingImportNeedsPassword by remember { mutableStateOf(false) }
+
+    /**
+     * Restores the archive at [uri] and restarts only on a real success.
+     *
+     * Awaiting the real result: the old fire-and-forget call returned before the archive was even
+     * decrypted, so the fixed one-second delay restarted the process mid-restore - "restored,
+     * restarting" for a restore that had not begun, or a database without its attachments.
+     */
+    suspend fun restoreLocal(uri: Uri) {
+        try {
+            val success = settingsViewModel.importBackupAndWait(uri, context)
+            if (success) {
+                Toast.makeText(context, context.getString(R.string.cloud_restored_restart), Toast.LENGTH_LONG).show()
+                kotlinx.coroutines.delay(1000)
+                ProcessPhoenix.triggerRebirth(context)
+            }
+            // A failure already showed its own toast (bad password, damaged file); no restart, so
+            // the user can retry without losing the running app.
+        } catch (e: Exception) {
+            Toast.makeText(context, context.getString(R.string.cloud_restore_failed, e.message ?: ""), Toast.LENGTH_LONG).show()
+        }
+    }
+
     val importBackupLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument(),
         onResult = { uri ->
             if (uri != null) {
                 coroutineScope.launch {
-                    try {
-                        // Awaiting the real result: the old fire-and-forget call returned before the
-                        // archive was even decrypted, so the fixed one-second delay restarted the
-                        // process mid-restore - "restored, restarting" for a restore that had not
-                        // begun, or a database without its attachments. Restart only on success.
-                        val success = settingsViewModel.importBackupAndWait(uri, context)
-                        if (success) {
-                            Toast.makeText(context, context.getString(R.string.cloud_restored_restart), Toast.LENGTH_LONG).show()
-                            kotlinx.coroutines.delay(1000)
-                            ProcessPhoenix.triggerRebirth(context)
+                    // UX-4: the file's own header decides, not `settings.encryptBackup`. A plain
+                    // zip restores straight away with no password; an encrypted one asks for it;
+                    // an unreadable header asks with a blank allowed (see the dialog below).
+                    when (archiveIsEncrypted(context, uri)) {
+                        false -> {
+                            settingsViewModel.password = null
+                            restoreLocal(uri)
                         }
-                        // A failure already showed its own toast (bad password, damaged file); no
-                        // restart, so the user can retry without losing the running app.
-                    } catch (e: Exception) {
-                        Toast.makeText(context, context.getString(R.string.cloud_restore_failed, e.message ?: ""), Toast.LENGTH_LONG).show()
+                        true -> {
+                            pendingImportNeedsPassword = true
+                            pendingImportUri = uri
+                        }
+                        null -> {
+                            pendingImportNeedsPassword = false
+                            pendingImportUri = uri
+                        }
                     }
                 }
             }
@@ -336,7 +505,6 @@ fun CloudScreen(navController: NavController, settingsViewModel: SettingsViewMod
     )
 
     var showBackupPasswordPrompt by remember { mutableStateOf(false) }
-    var showRestorePasswordPrompt by remember { mutableStateOf(false) }
     var showWebDavRestoreConfirm by remember { mutableStateOf(false) }
     var showLocalRestoreConfirm by remember { mutableStateOf(false) }
 
@@ -351,17 +519,22 @@ fun CloudScreen(navController: NavController, settingsViewModel: SettingsViewMod
     var showForceOverwriteConfirm by remember { mutableStateOf(false) }
     /** Freshness of the archive the restore dialog is about to confirm (W6); Idle while closed. */
     var restoreManifestState by remember { mutableStateOf<RestoreManifestState>(RestoreManifestState.Idle) }
+    /** WebDAV action waiting for the SEC-2 cleartext warning to be accepted; null when none. */
+    var pendingWebDavIntent by remember { mutableStateOf<WebDavIntent?>(null) }
 
-    // Cleartext http is DELIBERATELY accepted - do not reintroduce a rejection here.
+    // Cleartext http is DELIBERATELY accepted. Nothing in this file rejects it.
     //
     // A self-hosted WebDAV server on a LAN commonly has no TLS, and the product owner asked for the
-    // earlier "plain http is not allowed" restriction to be removed. Two consequences to keep in
-    // mind if this is ever revisited:
-    //   1. `android:usesCleartextTraffic="true"` is declared in the manifest. Without it targetSdk 36
+    // earlier "plain http is not allowed" restriction to be removed. Three things keep that
+    // decision coherent, and a future change must revisit all of them together:
+    //   1. `persistWebDavConfig` below does NOT validate the scheme. It only writes what the user
+    //      typed; adding a rejection there would break the LAN case the product asked for.
+    //   2. `android:usesCleartextTraffic="true"` is declared in the manifest. Without it targetSdk 36
     //      rejects the socket and OkHttp throws UnknownServiceException before a byte is sent, so
-    //      removing only this check would leave http silently broken rather than working.
-    //   2. Basic-auth credentials therefore cross the network in the clear on such a server. That is
-    //      a conscious trade-off for the LAN case, not an oversight.
+    //      removing only the check would leave http silently broken rather than working.
+    //   3. The guard is the confirmation dialog (`dispatchWebDav`), not the persistence helper:
+    //      before an http config is saved or used the user is told that credentials and the archive
+    //      travel unencrypted, and the acceptance is remembered per URL.
 
     /**
      * Writes the URL/credentials the workers read, clearing the remote validator when the server
@@ -400,6 +573,86 @@ fun CloudScreen(navController: NavController, settingsViewModel: SettingsViewMod
     }
 
     /**
+     * The Save button: persists the config and the archive passphrase, then says so.
+     *
+     * The passphrase is written only here because only this button can change it (the operation
+     * paths reuse whatever is already saved). A blank field means "unchanged", never "clear":
+     * removing it wiped the stored passphrase on every save and made all archives already on the
+     * server unreadable.
+     */
+    suspend fun saveWebDavConfig() {
+        if (!persistWebDavConfig()) return
+        context.webDavDataStore.edit { prefs ->
+            if (backupPassphrase.isNotBlank()) {
+                prefs[backupPassphraseKey] = WebDavPrefsCipher.encrypt(aead, backupPassphrase)
+                hasBackupPassphrase = true
+            }
+        }
+        savedWebDavUrl = webdavUrl
+        backupPassphrase = ""
+        Toast.makeText(context, context.getString(R.string.cloud_webdav_saved), Toast.LENGTH_SHORT).show()
+    }
+
+    /**
+     * Enqueues the upload; the caller has already checked the URL, credentials and passphrase.
+     *
+     * [forceOverwrite] is the conflict card's "take over the remote": the worker then uploads
+     * without consulting the ETag / "we wrote the remote" flags, because the user has just agreed
+     * to replace the other device's archive. It goes through the same persist step so the URL the
+     * worker reads is the one the dialog was about.
+     */
+    fun startWebDavBackup(forceOverwrite: Boolean = false) {
+        coroutineScope.launch {
+            if (!persistWebDavConfig()) return@launch
+            val request = OneTimeWorkRequestBuilder<com.ezpnix.writeon.data.backup.WebDAVBackupWorker>()
+                .apply {
+                    if (forceOverwrite) {
+                        setInputData(
+                            androidx.work.Data.Builder()
+                                .putBoolean(DATA_FORCE_OVERWRITE, true)
+                                .build()
+                        )
+                    }
+                }
+                .setConstraints(webDavNetworkConstraints)
+                .build()
+            workManager.enqueueUniqueWork(
+                WEBDAV_SYNC_WORK,
+                ExistingWorkPolicy.APPEND_OR_REPLACE,
+                request
+            )
+            Toast.makeText(context, context.getString(R.string.cloud_webdav_backup_started), Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    /** Runs a WebDAV action that has already been cleared by [dispatchWebDav]. */
+    fun performWebDav(intent: WebDavIntent) {
+        when (intent) {
+            WebDavIntent.Save -> coroutineScope.launch { saveWebDavConfig() }
+            WebDavIntent.Backup -> startWebDavBackup()
+            WebDavIntent.ForceBackup -> startWebDavBackup(forceOverwrite = true)
+            WebDavIntent.Restore -> showWebDavRestoreConfirm = true
+            is WebDavIntent.ConflictRestore -> conflictRestoreUrl = intent.url
+        }
+    }
+
+    /**
+     * SEC-2: the single gate in front of every WebDAV write or transfer.
+     *
+     * `persistWebDavConfig` deliberately accepts http, so nothing below it stops a cleartext server
+     * from being saved. This is where the user is told what that means - Basic credentials and the
+     * whole archive readable by anyone on the same network - and nothing is persisted until the
+     * dialog is accepted. https and already-accepted URLs fall straight through.
+     */
+    fun dispatchWebDav(intent: WebDavIntent) {
+        if (!settingsViewModel.isCleartextWebDavAcknowledged(webdavUrl)) {
+            pendingWebDavIntent = intent
+            return
+        }
+        performWebDav(intent)
+    }
+
+    /**
      * Both restore paths replace the whole local database. A single tap used to start that
      * immediately - the download runs in the background, so even "cancel" on a toast would not
      * have stopped it. The dialog is the only point where the user can still say no, so it states
@@ -431,14 +684,20 @@ fun CloudScreen(navController: NavController, settingsViewModel: SettingsViewMod
     fun startConflictRestore(url: String) {
         coroutineScope.launch {
             if (!persistWebDavConfig()) return@launch
+            val request = OneTimeWorkRequestBuilder<com.ezpnix.writeon.data.backup.WebDAVRestoreWorker>()
+                .setInputData(androidx.work.Data.Builder().putString(DATA_RESTORE_URL, url).build())
+                .setConstraints(webDavNetworkConstraints)
+                .build()
             workManager.enqueueUniqueWork(
                 WEBDAV_SYNC_WORK,
                 ExistingWorkPolicy.APPEND_OR_REPLACE,
-                OneTimeWorkRequestBuilder<com.ezpnix.writeon.data.backup.WebDAVRestoreWorker>()
-                    .setInputData(androidx.work.Data.Builder().putString(DATA_RESTORE_URL, url).build())
-                    .setConstraints(webDavNetworkConstraints)
-                    .build()
+                request
             )
+            // SYN-3: remember this exact work so its success can offer to make the restored copy
+            // the canonical remote. Persisted before the screen can be torn down by the worker's
+            // post-success restart.
+            conflictRestoreWorkId = request.id
+            storeConflictRestoreWorkId(context, request.id)
             Toast.makeText(context, context.getString(R.string.cloud_webdav_restore_started), Toast.LENGTH_SHORT).show()
         }
     }
@@ -612,26 +871,10 @@ fun CloudScreen(navController: NavController, settingsViewModel: SettingsViewMod
             )
             Spacer(Modifier.height(8.dp))
             Button(onClick = {
-                coroutineScope.launch {
-                    // URL, username and password go through the shared helper, which rejects
-                    // cleartext addresses and clears the stored validator when the server changed.
-                    if (!persistWebDavConfig()) return@launch
-                    // The archive passphrase is written here because only this button can change it
-                    // (the operation paths reuse whatever is already saved).
-                    context.webDavDataStore.edit { prefs ->
-                        // This field is never populated from storage, so blank means "unchanged",
-                        // not "clear": removing here wiped the stored passphrase on every save and
-                        // made all archives already on the server unreadable. Typing a new value
-                        // overwrites it; there is deliberately no blank-to-clear affordance.
-                        if (backupPassphrase.isNotBlank()) {
-                            prefs[backupPassphraseKey] = WebDavPrefsCipher.encrypt(aead, backupPassphrase)
-                            hasBackupPassphrase = true
-                        }
-                    }
-                    savedWebDavUrl = webdavUrl
-                    backupPassphrase = ""
-                    Toast.makeText(context, context.getString(R.string.cloud_webdav_saved), Toast.LENGTH_SHORT).show()
-                }
+                // CQ-1: `persistWebDavConfig` does NOT validate the scheme - it accepts http on
+                // purpose and only writes what was typed. The cleartext guard is the warning dialog
+                // in `dispatchWebDav`; a rejection added here would break the LAN case.
+                dispatchWebDav(WebDavIntent.Save)
             }) {
                 Text(context.getString(R.string.cloud_save_webdav_info))
             }
@@ -696,7 +939,9 @@ fun CloudScreen(navController: NavController, settingsViewModel: SettingsViewMod
                                 if (!hasBackupPassphrase) {
                                     Toast.makeText(context, context.getString(R.string.cloud_backup_passphrase_missing), Toast.LENGTH_LONG).show()
                                 } else {
-                                    conflictRestoreUrl = conflictUrl
+                                    // Same cleartext gate as the canonical restore: the copy is on
+                                    // the same server and is fetched with the same credentials.
+                                    dispatchWebDav(WebDavIntent.ConflictRestore(conflictUrl))
                                 }
                             }) {
                                 Text(stringResource(R.string.cloud_conflict_restore))
@@ -740,17 +985,9 @@ fun CloudScreen(navController: NavController, settingsViewModel: SettingsViewMod
                             Toast.makeText(context, context.getString(R.string.cloud_backup_passphrase_missing), Toast.LENGTH_LONG).show()
                         }
                         else -> {
-                            coroutineScope.launch {
-                                if (!persistWebDavConfig()) return@launch
-                                workManager.enqueueUniqueWork(
-                                    WEBDAV_SYNC_WORK,
-                                    ExistingWorkPolicy.APPEND_OR_REPLACE,
-                                    OneTimeWorkRequestBuilder<com.ezpnix.writeon.data.backup.WebDAVBackupWorker>()
-                                        .setConstraints(webDavNetworkConstraints)
-                                        .build()
-                                )
-                                Toast.makeText(context, context.getString(R.string.cloud_webdav_backup_started), Toast.LENGTH_SHORT).show()
-                            }
+                            // SEC-2 gate: an http config that has never been acknowledged
+                            // shows the cleartext warning before the upload is queued.
+                            dispatchWebDav(WebDavIntent.Backup)
                         }
                     }
                 },
@@ -762,7 +999,7 @@ fun CloudScreen(navController: NavController, settingsViewModel: SettingsViewMod
                         !hasBackupPassphrase -> {
                             Toast.makeText(context, context.getString(R.string.cloud_backup_passphrase_missing), Toast.LENGTH_LONG).show()
                         }
-                        else -> showWebDavRestoreConfirm = true
+                        else -> dispatchWebDav(WebDavIntent.Restore)
                     }
                 }
             )
@@ -812,6 +1049,17 @@ fun CloudScreen(navController: NavController, settingsViewModel: SettingsViewMod
                 }
             )
 
+            // DAT-13: a TXT export is text only. The card's wording ("Backup as TXT") suggested a
+            // complete backup, so a restored library was expected to have its images and
+            // recordings and silently did not. Say it next to the buttons, not in a toast after
+            // the fact.
+            Text(
+                text = stringResource(R.string.restore_fix_txt_text_only),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(start = 4.dp, top = 4.dp, end = 4.dp)
+            )
+
             Spacer(Modifier.height(16.dp))
 
             BackupOptionCard(
@@ -840,7 +1088,94 @@ fun CloudScreen(navController: NavController, settingsViewModel: SettingsViewMod
                 primaryButtonText = stringResource(R.string.restore),
                 onPrimaryClick = { showAutoBackupPicker = true }
             )
+
+            // DAT-1/UX-3: every restore path keeps the database it replaced next to the live one.
+            // Without this entry that copy was unreachable from inside the app, so "a backup, not a
+            // sync" had no undo: notes written on this device after the backup was taken were
+            // simply gone. Shown only when the restore path actually left a snapshot behind.
+            restoreSnapshot?.let { snapshot ->
+                Spacer(Modifier.height(16.dp))
+                BackupOptionCard(
+                    icon = Icons.Rounded.History,
+                    title = stringResource(R.string.restore_fix_snapshot_title),
+                    description = stringResource(
+                        R.string.restore_fix_snapshot_desc,
+                        formatArchiveTime(snapshot.savedAtMillis),
+                        formatSize(snapshot.sizeBytes)
+                    ),
+                    primaryButtonText = stringResource(R.string.restore_fix_snapshot_restore),
+                    onPrimaryClick = { showSnapshotRestoreConfirm = true }
+                )
+            }
         }
+    }
+
+    // SEC-2: the one dialog that stands between an http:// server and the network. It is shown
+    // before the config is written and before any upload or download starts, and accepting it
+    // records the URL so the same server is not asked again. Cancelling leaves both storage and
+    // the remote untouched.
+    pendingWebDavIntent?.let { intent ->
+        AlertDialog(
+            onDismissRequest = { pendingWebDavIntent = null },
+            title = { Text(stringResource(R.string.restore_fix_cleartext_title)) },
+            text = { Text(stringResource(R.string.restore_fix_cleartext_message)) },
+            confirmButton = {
+                TextButton(onClick = {
+                    settingsViewModel.acknowledgeCleartextWebDav(webdavUrl)
+                    pendingWebDavIntent = null
+                    performWebDav(intent)
+                }) {
+                    Text(stringResource(R.string.restore_fix_cleartext_continue))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingWebDavIntent = null }) {
+                    Text(stringResource(R.string.cancel))
+                }
+            }
+        )
+    }
+
+    // DAT-1/UX-3: rollback of the last restore. Same restart discipline as every other restore
+    // path: the swapped-in database is only picked up by a fresh process.
+    if (showSnapshotRestoreConfirm) {
+        AlertDialog(
+            onDismissRequest = { showSnapshotRestoreConfirm = false },
+            title = { Text(stringResource(R.string.restore_fix_snapshot_confirm_title)) },
+            text = { Text(stringResource(R.string.restore_fix_snapshot_confirm_message)) },
+            confirmButton = {
+                TextButton(onClick = {
+                    showSnapshotRestoreConfirm = false
+                    coroutineScope.launch {
+                        // restorePrevious does its own IO dispatch and closes/rebuilds the shared
+                        // Room connection; the restart below is the same contract every other
+                        // restore path follows.
+                        val result = RestoreSnapshots.restorePrevious(context)
+                        // Re-read either way: a failed rollback may already have consumed the
+                        // snapshot, and a stale card would then offer a restore that cannot work.
+                        snapshotVersion++
+                        result.onSuccess {
+                            Toast.makeText(context, context.getString(R.string.restore_fix_snapshot_restored), Toast.LENGTH_LONG).show()
+                            kotlinx.coroutines.delay(1000)
+                            ProcessPhoenix.triggerRebirth(context)
+                        }.onFailure { e ->
+                            Toast.makeText(
+                                context,
+                                context.getString(R.string.restore_fix_snapshot_failed, e.message ?: ""),
+                                Toast.LENGTH_LONG
+                            ).show()
+                        }
+                    }
+                }) {
+                    Text(stringResource(R.string.restore_fix_snapshot_restore))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showSnapshotRestoreConfirm = false }) {
+                    Text(stringResource(R.string.cancel))
+                }
+            }
+        )
     }
 
     if (showBackupPasswordPrompt) {
@@ -858,16 +1193,21 @@ fun CloudScreen(navController: NavController, settingsViewModel: SettingsViewMod
         )
     }
 
-    if (showRestorePasswordPrompt) {
+    // UX-4: the passphrase dialog is only reached when the picked archive's header says it is
+    // encrypted (or could not be read). Blank is accepted only in the second case, where it means
+    // "this archive has no passphrase" and the import runs with no password instead.
+    pendingImportUri?.let { uri ->
         PasswordPrompt(
             context = context,
             text = stringResource(id = R.string.database_restore),
             settingsViewModel = settingsViewModel,
+            allowBlank = !pendingImportNeedsPassword,
+            hint = if (pendingImportNeedsPassword) null else stringResource(R.string.restore_fix_import_password_hint),
             onExit = { password ->
-                showRestorePasswordPrompt = false
+                pendingImportUri = null
                 if (password != null) {
-                    settingsViewModel.password = password.text
-                    importBackupLauncher.launch(arrayOf("application/zip"))
+                    settingsViewModel.password = password.text.ifBlank { null }
+                    coroutineScope.launch { restoreLocal(uri) }
                 }
             }
         )
@@ -879,7 +1219,7 @@ fun CloudScreen(navController: NavController, settingsViewModel: SettingsViewMod
             title = { Text(stringResource(R.string.cloud_webdav_restore_confirm_title)) },
             text = {
                 Column {
-                    Text(stringResource(R.string.cloud_webdav_restore_confirm_message))
+                    Text(stringResource(R.string.restore_fix_webdav_restore_confirm_message))
                     RestoreManifestLine(restoreManifestState)
                 }
             },
@@ -900,6 +1240,43 @@ fun CloudScreen(navController: NavController, settingsViewModel: SettingsViewMod
         )
     }
 
+    // SYN-3: the conflict copy is local now, but the canonical file on the server still holds the
+    // other device's archive. Doing nothing guarantees another conflict copy on the next upload,
+    // so this asks once which library should win and then uses the normal upload path (ForceBackup
+    // included the SEC-2 cleartext gate).
+    if (showConflictTakeover) {
+        AlertDialog(
+            onDismissRequest = {
+                // Same as "keep the remote copy": the restored notes stay local and nothing is
+                // uploaded, so the next backup may conflict again - which the dialog just said.
+                showConflictTakeover = false
+                conflictRestoreWorkId = null
+                clearConflictRestoreWorkId(context)
+            },
+            title = { Text(stringResource(R.string.restore_fix_conflict_takeover_title)) },
+            text = { Text(stringResource(R.string.restore_fix_conflict_takeover_message)) },
+            confirmButton = {
+                TextButton(onClick = {
+                    showConflictTakeover = false
+                    conflictRestoreWorkId = null
+                    clearConflictRestoreWorkId(context)
+                    dispatchWebDav(WebDavIntent.ForceBackup)
+                }) {
+                    Text(stringResource(R.string.restore_fix_conflict_takeover_use_local))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = {
+                    showConflictTakeover = false
+                    conflictRestoreWorkId = null
+                    clearConflictRestoreWorkId(context)
+                }) {
+                    Text(stringResource(R.string.restore_fix_conflict_takeover_keep_remote))
+                }
+            }
+        )
+    }
+
     if (showForceOverwriteConfirm) {
         AlertDialog(
             onDismissRequest = { showForceOverwriteConfirm = false },
@@ -908,15 +1285,10 @@ fun CloudScreen(navController: NavController, settingsViewModel: SettingsViewMod
             confirmButton = {
                 TextButton(onClick = {
                     showForceOverwriteConfirm = false
-                    workManager.enqueueUniqueWork(
-                        WEBDAV_SYNC_WORK,
-                        ExistingWorkPolicy.APPEND_OR_REPLACE,
-                        OneTimeWorkRequestBuilder<com.ezpnix.writeon.data.backup.WebDAVBackupWorker>()
-                            .setInputData(androidx.work.Data.Builder().putBoolean(DATA_FORCE_OVERWRITE, true).build())
-                            .setConstraints(webDavNetworkConstraints)
-                            .build()
-                    )
-                    Toast.makeText(context, context.getString(R.string.cloud_webdav_backup_started), Toast.LENGTH_SHORT).show()
+                    // V-10: "take over" is still an upload, so it goes through the same SEC-2 gate
+                    // as Backup. Enqueuing here directly meant an http:// server that had never
+                    // been acknowledged could receive the archive without a cleartext warning.
+                    dispatchWebDav(WebDavIntent.ForceBackup)
                 }) {
                     Text(stringResource(R.string.cloud_conflict_take_over))
                 }
@@ -935,7 +1307,10 @@ fun CloudScreen(navController: NavController, settingsViewModel: SettingsViewMod
             title = { Text(stringResource(R.string.cloud_webdav_restore_confirm_title)) },
             text = {
                 Column {
-                    Text(stringResource(R.string.cloud_webdav_restore_confirm_message))
+                    // UX-3/DAT-1: "backup, not sync" plus what is lost, plus the rollback that
+                    // exists. The old text said "cannot be undone", which the kept snapshot makes
+                    // untrue.
+                    Text(stringResource(R.string.restore_fix_webdav_restore_confirm_message))
                     // W6: how old the backup on the server actually is, read while the dialog
                     // is open - the user sees it before confirming an irreversible restore.
                     RestoreManifestLine(restoreManifestState)
@@ -961,16 +1336,14 @@ fun CloudScreen(navController: NavController, settingsViewModel: SettingsViewMod
         AlertDialog(
             onDismissRequest = { showLocalRestoreConfirm = false },
             title = { Text(stringResource(R.string.cloud_local_restore_confirm_title)) },
-            text = { Text(stringResource(R.string.cloud_local_restore_confirm_message)) },
+            text = { Text(stringResource(R.string.restore_fix_local_restore_confirm_message)) },
             confirmButton = {
                 TextButton(onClick = {
                     showLocalRestoreConfirm = false
-                    if (settingsViewModel.settings.value.encryptBackup) {
-                        showRestorePasswordPrompt = true
-                    } else {
-                        settingsViewModel.password = null
-                        importBackupLauncher.launch(arrayOf("application/zip"))
-                    }
+                    // UX-4: open the picker first. Whether a passphrase is needed is read from the
+                    // archive's own header when it comes back - never from the current encryption
+                    // setting, which is about the *next* export, not this file.
+                    importBackupLauncher.launch(arrayOf("application/zip"))
                 }) {
                     Text(stringResource(R.string.restore))
                 }
@@ -1040,7 +1413,9 @@ fun CloudScreen(navController: NavController, settingsViewModel: SettingsViewMod
             onDismissRequest = { pickedAutoBackup = null },
             title = { Text(stringResource(R.string.auto_backup_restore_confirm_title)) },
             text = {
-                Text(stringResource(R.string.auto_backup_restore_confirm_message, stamp))
+                // Same "backup, not sync" statement as the other two paths, so the three dialogs
+                // do not describe the same destructive action in three different ways.
+                Text(stringResource(R.string.restore_fix_auto_restore_confirm_message, stamp))
             },
             confirmButton = {
                 TextButton(onClick = {
@@ -1126,6 +1501,13 @@ fun PasswordPrompt(
     text: String,
     settingsViewModel: SettingsViewModel,
     onExit: (TextFieldValue?) -> Unit,
+    /**
+     * UX-4: a blank field is a valid answer meaning "this archive has no passphrase". Only used
+     * when the picked file's header could not be read and the app therefore has to ask.
+     */
+    allowBlank: Boolean = false,
+    /** Extra line under the field, for callers that need to explain an optional password. */
+    hint: String? = null,
 ) {
     var password by remember { mutableStateOf(TextFieldValue("")) }
     Dialog(
@@ -1153,13 +1535,22 @@ fun PasswordPrompt(
                 placeholder = stringResource(id = R.string.password_prompt),
                 modifier = Modifier.padding(12.dp)
             )
+            if (hint != null) {
+                Text(
+                    text = hint,
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier
+                        .align(Alignment.Start)
+                        .padding(horizontal = 12.dp)
+                )
+            }
             Button(
                 modifier = Modifier
                     .wrapContentWidth()
                     .align(Alignment.End)
                     .padding(12.dp),
                 onClick = {
-                    if (password.text.isNotBlank()) {
+                    if (password.text.isNotBlank() || allowBlank) {
                         onExit(password)
                     } else {
                         Toast.makeText(context, R.string.invalid_input, Toast.LENGTH_SHORT).show()

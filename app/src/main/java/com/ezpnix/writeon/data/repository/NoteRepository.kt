@@ -110,6 +110,19 @@ class NoteRepositoryImpl @Inject constructor(
         provider.noteDao().batchUpdateNotes(notes)
     }
 
+    /**
+     * SEC-5: only the failure count crosses into the domain layer.
+     *
+     * The sealed/already-sealed split is diagnostic and stays in the data layer's log; what the
+     * startup job needs to decide "mark done or retry next launch" is whether anything was left
+     * unsealed.
+     */
+    override suspend fun sealLegacyPlaintextRows(): Int =
+        provider.sealLegacyPlaintextRows().failedRows
+
+    /** SEC-4: the repository only forwards the failure count; success is "nothing left plain". */
+    override suspend fun sealLegacyCaptions(): Int = provider.sealLegacyCaptions()
+
     override suspend fun getAllAttachments() = provider.attachmentDao().getAll()
 
     override suspend fun getAttachmentsForNote(noteId: Int) =

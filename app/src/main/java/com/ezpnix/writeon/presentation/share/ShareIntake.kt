@@ -9,6 +9,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.setValue
 import com.ezpnix.writeon.core.attachment.AttachmentFiles
+import com.ezpnix.writeon.core.attachment.MediaVault
 import com.ezpnix.writeon.domain.model.Attachment
 import java.io.File
 import java.io.IOException
@@ -149,6 +150,16 @@ private fun importImage(context: Context, uri: Uri): String? {
             }
             true
         } ?: return null
+
+        // SEC-4: the copy is complete, so it is encrypted before its path is ever handed to the
+        // editor. A share does not go through the save-with-retry an editor save does: if the bytes
+        // cannot be encrypted the plaintext copy is deleted and the import fails, because a file
+        // that was never referenced by a row is not worth a permanent plaintext picture.
+        if (!MediaVault.encryptInPlace(context, file)) {
+            Log.e("ShareIntake", "Could not encrypt a shared image; dropping the plaintext copy")
+            runCatching { file.delete() }
+            return null
+        }
         file.absolutePath
     } catch (throwable: Throwable) {
         Log.e("ShareIntake", "Could not import a shared image", throwable)

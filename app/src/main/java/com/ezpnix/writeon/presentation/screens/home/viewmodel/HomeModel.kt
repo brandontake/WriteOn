@@ -54,6 +54,9 @@ class HomeViewModel @Inject constructor(
     val trashedAttachmentsFlow get() = noteUseCase.getTrashedAttachmentsFlow()
 
     init {
+        // PERF-3: the one collector pair for the whole app. Room's own emission is what refreshes
+        // the list after a pin/tag/delete, so those actions no longer restart it (see the methods
+        // below); restarting was re-querying and re-decrypting the library after every change.
         noteUseCase.observe()
     }
 
@@ -71,23 +74,26 @@ class HomeViewModel @Inject constructor(
      *
      * The passphrase lives in memory only (EncryptionHelper holds a StringBuilder, not persisted
      * state), so it has to be re-entered after every process death - the same contract the vault
-     * had before its UI was removed. Re-running [NoteUseCase.observe] re-decrypts every row with
-     * the new passphrase; rows that still fail keep counting toward the lock banner, which is how
-     * a wrong password is reported.
+     * had before its UI was removed. [NoteUseCase.refresh] forces the list through the new
+     * passphrase; rows that still fail keep counting toward the lock banner, which is how a wrong
+     * password is reported.
      */
     fun unlockVault(password: String) {
         _vaultUnlockAttempted.value = true
         encryptionHelper.setPassword(password)
-        noteUseCase.observe()
-        // A4: the unlock is the only moment the passphrase is in memory, so it is also the only
-        // moment a note still sealed with the pre-PBKDF2 (single SHA-256) layout can be re-sealed
-        // with the current one. Without this the weak layout survived until the user happened to
-        // open *and save* that exact note. The sweep authenticates every row before writing, so a
-        // wrong passphrase leaves all of them byte-for-byte untouched.
+        // Not observe(): the collectors are already running while the app is unlocked, so the
+        // idempotent observe would keep the rows that were hidden by the missing password.
+        noteUseCase.refresh()
+        // A4/PERF-2: the unlock is the only moment the passphrase is in memory, so it is also the
+        // only moment rows still sealed by an earlier build (`v2:` or the pre-PBKDF2 single
+        // SHA-256 layout) can be re-sealed into the `v3` envelope. Without this, unlocking a large
+        // library kept paying one 120k-iteration PBKDF2 per note. The sweep authenticates every row
+        // before writing, so a wrong passphrase leaves all of them byte-for-byte untouched, and on
+        // the second unlock it does nothing (every row already starts with `v3:`).
         viewModelScope.launch(Dispatchers.IO) {
             val upgraded = noteUseCase.upgradeLegacyVaultRows()
             if (upgraded > 0) {
-                Log.i(TAG, "Re-sealed $upgraded vault note(s) with the current PBKDF2 layout")
+                Log.i(TAG, "Re-sealed $upgraded vault note(s) into the envelope (v3) layout")
             }
         }
     }
@@ -109,11 +115,10 @@ class HomeViewModel @Inject constructor(
     }
 
     fun pinOrUnpinNote(note: Note) {
+        // Flag-only write. The shared collector receives Room's emission and updates the list;
+        // observe() after every pin used to restart both collectors and re-decrypt everything.
         viewModelScope.launch(Dispatchers.IO) {
             noteUseCase.updatePinStatus(note.id, !note.pinned)
-            launch(Dispatchers.Main) {
-                noteUseCase.observe()
-            }
         }
     }
 
@@ -147,12 +152,12 @@ class HomeViewModel @Inject constructor(
         }
     }
 
-    /** Undo for [trashNote]/[trashNotes]: puts the rows back and refreshes the list afterwards. */
+    /** Undo for [trashNote]/[trashNotes]: puts the rows back; Room's emission restores the list. */
     fun restoreTrashedNotes(notes: List<Note>) {
         if (notes.isEmpty()) return
+        // Room emits the un-trashed rows; no explicit re-observe needed.
         viewModelScope.launch(Dispatchers.IO) {
             notes.forEach { noteUseCase.setTrashed(it.id, false) }
-            launch(Dispatchers.Main) { noteUseCase.observe() }
         }
     }
 
@@ -164,9 +169,9 @@ class HomeViewModel @Inject constructor(
     private fun mutateSelection(write: suspend (List<Note>) -> Unit) {
         viewModelScope.launch(Dispatchers.IO) {
             write(selectedNotes.toList())
+            // Only the selection state needs clearing; the list itself follows Room's emission.
             launch(Dispatchers.Main) {
                 selectedNotes.clear()
-                noteUseCase.observe()
             }
         }
     }
@@ -199,7 +204,7 @@ class HomeViewModel @Inject constructor(
                         ).show()
                         selectedNotes.clear()
                         newTagName.value = ""
-                        noteUseCase.observe()
+                        // The tag index follows the same Room emission as the list.
                     }
                 } else {
                     launch(Dispatchers.Main) {
@@ -264,7 +269,6 @@ class HomeViewModel @Inject constructor(
                     ).show()
                     selectedNotes.clear()
                     selectedTagsToRemove.clear()
-                    noteUseCase.observe()
                 }
             } else {
                 launch(Dispatchers.Main) {
@@ -275,7 +279,6 @@ class HomeViewModel @Inject constructor(
                     ).show()
                     selectedNotes.clear()
                     selectedTagsToRemove.clear()
-                    noteUseCase.observe()
                 }
             }
         }
@@ -293,27 +296,17 @@ class HomeViewModel @Inject constructor(
                 if (currentFilter.value.lowercase() == tag.lowercase()) {
                     setFilter("all")
                 }
-                noteUseCase.observe()
             }
         }
     }
 
     fun restoreNote(note: Note) {
-        viewModelScope.launch(Dispatchers.IO) {
-            noteUseCase.restoreFromTrash(note)
-            launch(Dispatchers.Main) {
-                noteUseCase.observe()
-            }
-        }
+        // The use case owns the write scope; Room's emission restores the row in the list.
+        noteUseCase.restoreFromTrash(note)
     }
 
     fun permanentlyDeleteNote(note: Note) {
-        viewModelScope.launch(Dispatchers.IO) {
-            noteUseCase.permanentlyDeleteNoteById(note.id)
-            launch(Dispatchers.Main) {
-                noteUseCase.observe()
-            }
-        }
+        noteUseCase.permanentlyDeleteNoteById(note.id)
     }
 
     /** Puts one trashed attachment back into its note and refreshes the id -> path registry. */
@@ -328,13 +321,13 @@ class HomeViewModel @Inject constructor(
      * Moves one attachment shown on a home card to the recycle bin.
      *
      * The use case also removes the `attachment://` line from the note body, so the card stops
-     * showing the recording and reopening the note does not resurrect it. The list is refreshed
-     * afterwards because the note itself changed, not only the attachment row.
+     * showing the recording and reopening the note does not resurrect it. The shared collector
+     * re-emits the changed note, which is why no explicit re-observe is needed.
      */
     fun deleteAttachment(id: String) {
+        // The body changes with the attachment row, so the shared collector re-emits the note.
         viewModelScope.launch(Dispatchers.IO) {
             noteUseCase.trashAttachment(id)
-            launch(Dispatchers.Main) { noteUseCase.observe() }
         }
     }
 

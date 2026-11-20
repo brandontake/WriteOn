@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Settings/backup UX findings: cleartext warning (SEC-2), "backup is not sync" restore text and
+    the rollback entry (UX-3 / DAT-1 / SYN-1), archive-header password detection (UX-4),
+    scratchpad decrypt failure (DAT-10) and sealed flashcards (DAT-11 / SEC-4).
+    Kept in its own file so parallel fixes never merge into the main strings.xml.
+-->
+<resources>
+    <!-- SEC-2: shown before an http:// WebDAV config is saved or used. -->
+    <string name="restore_fix_cleartext_title">Unencrypted connection</string>
+    <string name="restore_fix_cleartext_message">This address starts with http://, so the WebDAV username and password and the whole backup archive travel across the network unencrypted. Anyone on the same Wi-Fi can read them or replace the archive. Continue only on a trusted local network; use https:// anywhere else.</string>
+    <string name="restore_fix_cleartext_continue">Use http anyway</string>
+
+    <!-- UX-3 / DAT-1 / SYN-1: what a restore actually does. -->
+    <string name="restore_fix_webdav_restore_confirm_message">This replaces the whole library with the archive on the server. It is a library backup/restore, not a sync between devices. Every note currently on this device is replaced, and notes you created or edited on this device after that backup was written will be lost. The app automatically keeps the database it replaces, so you can roll back with the Restore previous database entry below.</string>
+    <string name="restore_fix_local_restore_confirm_message">This replaces the whole library with the backup in the selected file. It is a library backup/restore, not a sync between devices. Every note currently on this device is replaced, and notes you created or edited on this device after that backup was written will be lost. The app automatically keeps the database it replaces, so you can roll back with the Restore previous database entry below.</string>
+    <string name="restore_fix_auto_restore_confirm_message">This replaces the whole library with the automatic backup made %1$s. It is a library backup/restore, not a sync between devices. Every note currently on this device is replaced, and notes created or edited after that backup will be lost. The app automatically keeps the database it replaces, so you can roll back with the Restore previous database entry below.</string>
+
+    <!-- DAT-7: blocking overlay while the database is closed and swapped. -->
+    <string name="restore_fix_restoring">Restoring backup…</string>
+
+    <!-- UX-3: rollback entry for the database the last restore replaced. -->
+    <string name="restore_fix_snapshot_title">Restore previous database</string>
+    <string name="restore_fix_snapshot_desc">The database the last restore replaced, saved %1$s (%2$s). Restoring it undoes that restore; notes written since then are lost.</string>
+    <string name="restore_fix_snapshot_restore">Restore</string>
+    <string name="restore_fix_snapshot_confirm_title">Restore the previous database?</string>
+    <string name="restore_fix_snapshot_confirm_message">This puts back the database that the last restore replaced. Notes created or edited since that restore are replaced by it, and the app restarts to reopen the database.</string>
+    <string name="restore_fix_snapshot_restored">Previous database restored. Restarting…</string>
+    <string name="restore_fix_snapshot_failed">Could not restore the previous database: %1$s</string>
+
+    <!-- UX-4: only shown when the picked archive header could not be read. -->
+    <string name="restore_fix_import_password_hint">The header of this file could not be read. Leave the field blank if the backup has no password.</string>
+
+    <!-- DAT-10: the stored scratchpad value exists but cannot be decrypted. -->
+    <string name="restore_fix_scratchpad_unreadable">The saved scratchpad content cannot be decrypted on this device, possibly because the encryption key was reset. It is left exactly as stored and saving is disabled so the original text is not overwritten. Copy anything you still need out of another backup first.</string>
+    <string name="restore_fix_scratchpad_save_blocked">Not saved: the stored scratchpad could not be decrypted, so it was left unchanged.</string>
+
+    <!-- DAT-11 / SEC-4: flashcards are sealed with the note key. -->
+    <string name="restore_fix_flashcards_save_failed">The flashcards could not be encrypted, so nothing was saved. The stored deck is unchanged.</string>
+
+    <!-- SYN-3: after a conflict copy was restored, the canonical remote still holds the other
+         device's archive, so ask once which library should become the canonical copy. -->
+    <string name="restore_fix_conflict_takeover_title">Conflict copy restored</string>
+    <string name="restore_fix_conflict_takeover_message">This device now holds the notes from the conflict copy. The server still has the other device\'s archive, so the next backup would park another conflict copy there. Choose which library should become the canonical copy on the server.</string>
+    <string name="restore_fix_conflict_takeover_use_local">Use this device\'s notes as the canonical remote</string>
+    <string name="restore_fix_conflict_takeover_keep_remote">Keep the remote copy</string>
+
+    <!-- DAT-13: the TXT export/import never carries attachments. -->
+    <string name="restore_fix_txt_text_only">TXT contains text only and does not include images or recordings.</string>
+</resources>

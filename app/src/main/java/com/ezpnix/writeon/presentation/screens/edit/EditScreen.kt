@@ -56,9 +56,11 @@ import androidx.compose.material.icons.rounded.Numbers
 import androidx.compose.material.icons.rounded.PushPin
 import androidx.compose.material.icons.rounded.RemoveRedEye
 import androidx.compose.material.icons.rounded.Share
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CenterAlignedTopAppBar
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ElevatedCard
@@ -66,6 +68,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBarDefaults
@@ -76,6 +79,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.compositionLocalOf
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -96,6 +100,7 @@ import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -118,6 +123,7 @@ import com.ezpnix.writeon.presentation.components.SaveButton
 import com.ezpnix.writeon.presentation.components.TxtButton
 import com.ezpnix.writeon.presentation.components.UndoButton
 import com.ezpnix.writeon.presentation.components.markdown.MarkdownText
+import com.ezpnix.writeon.presentation.navigation.BackGestureRouter
 import com.ezpnix.writeon.presentation.screens.edit.components.CustomIconButton
 import com.ezpnix.writeon.presentation.screens.edit.components.CustomTextField
 import com.ezpnix.writeon.presentation.screens.edit.components.NoteImageSaveHost
@@ -125,6 +131,7 @@ import com.ezpnix.writeon.presentation.screens.edit.components.ScrollableNoteFie
 import com.ezpnix.writeon.presentation.screens.edit.components.SegmentedEditor
 import com.ezpnix.writeon.presentation.screens.edit.components.TextFormattingToolbar
 import com.ezpnix.writeon.presentation.screens.edit.model.EditViewModel
+import com.ezpnix.writeon.presentation.screens.edit.model.SaveState
 import com.ezpnix.writeon.presentation.screens.settings.model.SettingsViewModel
 import com.ezpnix.writeon.presentation.screens.settings.settings.shapeManager
 import com.ezpnix.writeon.presentation.screens.settings.widgets.ActionType
@@ -171,23 +178,90 @@ fun EditNoteView(
     // the whole exit animation. Dropping focus first makes it disappear immediately; the system back
     // gesture is handled the same way in PredictiveBackHost.
     val focusManager = LocalFocusManager.current
-    val exitEditor = {
-        focusManager.clearFocus(force = true)
-        onClickBack()
-    }
 
-    // The editor persists on ON_STOP, so a note can be saved by a gesture the user did not think of
-    // as saving. The global snackbar is the only way back (U2): it survives leaving the editor,
-    // unlike the old in-screen bar, and the action uses [PendingSaveUndo] so it still works after
-    // this destination's ViewModel scope has been cancelled.
+    // The global snackbar outlives this destination, which is what makes it usable for the save
+    // that happens on the way out (U2).
     val snackbar = LocalAppSnackbar.current
     val undoMessage = stringResource(R.string.msg_note_saved)
+    val trashMessage = stringResource(R.string.editor_fix_moved_to_trash)
     val undoLabel = stringResource(R.string.cd_undo)
+
+    // Save-then-leave (UX-1/DAT-9): every explicit navigation callback waits for the write before
+    // popping the destination, so the last paragraph is committed while the indicator is still on
+    // screen. A failed write keeps the editor open with a retryable error instead of leaving
+    // silently. The back *gesture* reaches this same lambda through [BackGestureRouter] (see
+    // below), so it no longer falls back to the host's bare pop; even if it did, that write is
+    // NonCancellable and no longer runs on viewModelScope, so the teardown could not cancel it.
+    var isLeaving by remember { mutableStateOf(false) }
+    // Set when the user actually tried to leave and the save was refused by a locked vault. The
+    // unlock dialog then knows that a successful unlock should finish the exit instead of merely
+    // closing. A dialog that appeared from an ON_STOP save leaves this false, so "Unlock and save"
+    // keeps the editor open, which is what the user asked for by unlocking.
+    var exitAfterUnlock by remember { mutableStateOf(false) }
+    val exitEditor: () -> Unit = {
+        if (!isLeaving) {
+            isLeaving = true
+            focusManager.clearFocus(force = true)
+            coroutineScope.launch {
+                val tokenBefore = viewModel.undoToken
+                if (viewModel.saveBeforeExit()) {
+                    // The undo snackbar has to be shown before the pop: the LaunchedEffect below is
+                    // disposed with this destination, so a token change observed only after
+                    // navigation would race the pop and usually lose the snackbar entirely.
+                    if (viewModel.undoToken != tokenBefore && viewModel.canUndoSave) {
+                        snackbar?.show(
+                            message = if (viewModel.lastSaveMovedToTrash) trashMessage else undoMessage,
+                            actionLabel = undoLabel,
+                            duration = SnackbarDuration.Long,
+                            onAction = { PendingSaveUndo.undo() },
+                        )
+                    }
+                    onClickBack()
+                } else {
+                    // Stay on the note. A locked vault is resolved in place through the dialog
+                    // below; a write failure stays visible in the status line with Retry.
+                    exitAfterUnlock = viewModel.saveState.value == SaveState.VaultLocked
+                    isLeaving = false
+                }
+            }
+        }
+    }
+    // Three-button back on destinations the predictive host does not own still needs this screen's
+    // save-then-leave path rather than the navigation callback's bare pop.
+    BackHandler(onBack = exitEditor)
+
+    // V-3: the *gesture* never reaches the BackHandler above. PredictiveBackHost owns the gesture
+    // and used to pop this destination directly, which skipped saveBeforeExit - the same lost-last-
+    // paragraph window that save-then-leave exists to close, and for a vault note (no draft, SEC-7)
+    // the only copy. Publishing this screen's exit through the router makes the gesture take the
+    // normal path, including the vault unlock dialog. Updated on every recomposition because the
+    // lambda closes over the current save-state; the slot is cleared on dispose so a gesture after
+    // this destination is gone cannot call back into it.
+    val gestureHandlerSlot = remember { mutableStateOf<(() -> Unit)?>(null) }
+    SideEffect {
+        gestureHandlerSlot.value = exitEditor
+        BackGestureRouter.handler = exitEditor
+    }
+    DisposableEffect(Unit) {
+        onDispose {
+            // Identity check: when another editor has already registered during a transition,
+            // clearing unconditionally would strip the new destination's gesture handler.
+            if (BackGestureRouter.handler === gestureHandlerSlot.value) {
+                BackGestureRouter.handler = null
+            }
+        }
+    }
+
     val undoToken = viewModel.undoToken
+    val movedToTrash = viewModel.lastSaveMovedToTrash
     LaunchedEffect(undoToken) {
-        if (undoToken > 0 && viewModel.canUndoSave) {
+        // `isLeaving` skips the exit save, which shows its own snackbar in exitEditor; without it
+        // the same save could pop the snackbar twice (dismiss + re-show).
+        if (!isLeaving && undoToken > 0 && viewModel.canUndoSave) {
             snackbar?.show(
-                message = undoMessage,
+                // UX-2: clearing the body moves the note to the recycle bin. Reusing "Note Saved!"
+                // there made a deliberate move look like a silent delete.
+                message = if (movedToTrash) trashMessage else undoMessage,
                 actionLabel = undoLabel,
                 duration = SnackbarDuration.Long,
                 onAction = { PendingSaveUndo.undo() },
@@ -205,6 +279,30 @@ fun EditNoteView(
             content = { PagerContent(pagerState, coroutineScope, viewModel, settingsViewModel, exitEditor) }
         )
     }
+
+    // V-3: shown over the pager, not inside the editor page, so a lock that happens while the
+    // preview page is on screen cannot hide the one action that keeps the text.
+    VaultUnlockDialog(
+        viewModel = viewModel,
+        coroutineScope = coroutineScope,
+        onSaved = {
+            if (exitAfterUnlock) {
+                exitAfterUnlock = false
+                // Reuse the normal exit: the text is committed by now, so saveBeforeExit returns
+                // immediately and the usual focus/snackbar handling still applies.
+                exitEditor()
+            }
+        },
+        onDiscard = {
+            exitAfterUnlock = false
+            // Same focus handling as the normal exit: leaving a focused field keeps a blinking
+            // caret over the page for the whole pop animation.
+            focusManager.clearFocus(force = true)
+            // Pop without saving. discardVaultLockedSave already made the fields look saved to the
+            // ON_STOP that follows this pop, so the discarded text cannot be written later.
+            onClickBack()
+        },
+    )
 }
 
 @OptIn(ExperimentalFoundationApi::class)
@@ -539,6 +637,11 @@ fun EditScreen(
                 .fillMaxHeight()
                 .padding(16.dp)
         ) {
+        // The save state sits directly above the writing surface so "Saving…", "Saved" and a
+        // retryable failure are visible without leaving the page (UX-1). It renders nothing in the
+        // idle state for a plain note, so it costs no height in the common case.
+        SaveStatusIndicator(viewModel)
+
         // The five quick actions used to hide behind a floating "Options" button that covered the
         // bottom of the note. They now sit on one always-visible row above the note - the place the
         // formatting toolbar used to occupy - and the formatting toolbar moved down to the bottom,
@@ -608,6 +711,194 @@ fun EditScreen(
         }
         }
     }
+}
+
+/**
+ * Compact save status for the editor (UX-1).
+ *
+ * The meaningful states are rendered as text next to the note instead of a Toast, so a write that
+ * is still in flight, one that finished, one that failed with a retry, and one that was refused by
+ * a locked vault all stay legible. [SaveState.Error] is not dismissible: leaving with a failed
+ * write is exactly the data loss this indicator exists to prevent, so Retry is the only action it
+ * offers. [SaveState.VaultLocked] needs the dialog instead of a Retry, because no number of retries
+ * can produce the missing passphrase.
+ */
+@Composable
+private fun SaveStatusIndicator(viewModel: EditViewModel) {
+    val state = viewModel.saveState.value
+    val movedToTrash = viewModel.lastSaveMovedToTrash
+
+    if (state == SaveState.Idle) {
+        // SEC-7: vault notes deliberately have no SavedStateHandle draft, so a process death
+        // cannot recover them. Saying so where the save state normally appears is better than
+        // letting the user discover it after the text is gone.
+        if (viewModel.isEncrypted.value) {
+            Text(
+                text = stringResource(R.string.editor_fix_vault_draft_disabled),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(start = 4.dp, bottom = 4.dp)
+            )
+        }
+        return
+    }
+    // "Saved" must not survive the next keystroke: the fields no longer match the stored row.
+    if (state == SaveState.Saved && viewModel.isDirty) return
+
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(start = 4.dp, bottom = 4.dp)
+    ) {
+        when (state) {
+            SaveState.Saving -> {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(14.dp),
+                    strokeWidth = 1.5.dp
+                )
+                Spacer(modifier = Modifier.size(6.dp))
+                Text(
+                    text = stringResource(R.string.editor_fix_saving),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            SaveState.Saved -> Text(
+                // UX-2: the note was saved and moved to the recycle bin; naming only the save
+                // would hide the second, surprising half of the operation.
+                text = stringResource(
+                    if (movedToTrash) R.string.editor_fix_moved_to_trash else R.string.editor_fix_saved
+                ),
+                style = MaterialTheme.typography.labelMedium,
+                color = if (movedToTrash) {
+                    MaterialTheme.colorScheme.error
+                } else {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                }
+            )
+            is SaveState.Error -> {
+                Text(
+                    text = stringResource(state.messageRes),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.weight(1f, fill = false)
+                )
+                TextButton(onClick = { viewModel.retrySave() }) {
+                    Text(text = stringResource(R.string.editor_fix_retry))
+                }
+            }
+            // V-3: a Retry cannot succeed without the passphrase, so the indicator names the
+            // problem and leaves the resolving action to the dialog. It stays visible under the
+            // dialog so the state is not implied only by a modal.
+            SaveState.VaultLocked -> Text(
+                text = stringResource(R.string.editor_lock_fix_vault_locked_status),
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.error
+            )
+            SaveState.Idle -> Unit
+        }
+    }
+}
+
+/**
+ * V-3: the save was refused because the vault passphrase is no longer loaded.
+ *
+ * Shown while [SaveState.VaultLocked] is the current state and deliberately not dismissible: a tap
+ * outside or a back press would otherwise close it and leave the user on an editor whose text has
+ * nowhere to go - the exact silent loss this exists to stop (a vault note has no draft, SEC-7). The
+ * two honest exits are an unlock that verifies, and an explicit discard.
+ *
+ * The password is Compose state only, never [androidx.lifecycle.SavedStateHandle], so a
+ * configuration change clears it instead of putting the vault key in the saved-instance bundle.
+ *
+ * For a brand-new vault note there is no stored ciphertext to check a password against, so the
+ * dialog explains that the vault must be unlocked from Home and offers only the discard (see
+ * [EditViewModel.unlockVaultAndRetry]).
+ */
+@Composable
+private fun VaultUnlockDialog(
+    viewModel: EditViewModel,
+    coroutineScope: CoroutineScope,
+    onSaved: () -> Unit,
+    onDiscard: () -> Unit,
+) {
+    if (viewModel.saveState.value != SaveState.VaultLocked) return
+
+    val cannotVerify = viewModel.vaultUnlockUnverifiable
+    var password by remember { mutableStateOf("") }
+    var submitting by remember { mutableStateOf(false) }
+
+    AlertDialog(
+        // No dismiss path: see the KDoc. Android back and a scrim tap both land here.
+        onDismissRequest = {},
+        title = { Text(stringResource(R.string.editor_lock_fix_vault_locked_title)) },
+        text = {
+            Column {
+                Text(
+                    text = stringResource(
+                        if (cannotVerify) {
+                            R.string.editor_lock_fix_vault_new_note
+                        } else {
+                            R.string.editor_lock_fix_vault_locked_message
+                        }
+                    ),
+                    style = MaterialTheme.typography.bodyMedium
+                )
+                if (!cannotVerify) {
+                    Spacer(modifier = Modifier.height(12.dp))
+                    OutlinedTextField(
+                        value = password,
+                        onValueChange = { password = it },
+                        label = { Text(stringResource(R.string.editor_lock_fix_vault_password)) },
+                        singleLine = true,
+                        enabled = !submitting,
+                        visualTransformation = PasswordVisualTransformation(),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+                if (viewModel.vaultUnlockError.value) {
+                    Text(
+                        text = stringResource(R.string.editor_lock_fix_vault_wrong_password),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.padding(top = 8.dp)
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            if (!cannotVerify) {
+                TextButton(
+                    enabled = password.isNotEmpty() && !submitting,
+                    onClick = {
+                        submitting = true
+                        // The destination's scope, not one created here: the dialog leaves
+                        // composition as soon as the retry save reports Saving, and a
+                        // dialog-scoped coroutine would be cancelled before it could navigate.
+                        coroutineScope.launch {
+                            val saved = viewModel.unlockVaultAndRetry(password)
+                            submitting = false
+                            password = ""
+                            if (saved) onSaved()
+                        }
+                    }
+                ) {
+                    Text(stringResource(R.string.editor_lock_fix_unlock_and_save))
+                }
+            }
+        },
+        dismissButton = {
+            TextButton(
+                onClick = {
+                    viewModel.discardVaultLockedSave()
+                    onDiscard()
+                }
+            ) {
+                Text(stringResource(R.string.editor_lock_fix_discard_and_exit))
+            }
+        }
+    )
 }
 
 @OptIn(ExperimentalFoundationApi::class)

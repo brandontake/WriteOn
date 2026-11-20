@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.systemBarsPadding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
@@ -19,6 +20,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Fingerprint
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material3.Button
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -30,6 +32,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -41,7 +44,10 @@ import androidx.core.content.ContextCompat
 import androidx.fragment.app.FragmentActivity
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.ezpnix.writeon.R
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 private const val TICK_MS = 1_000L
 
@@ -65,6 +71,11 @@ fun LockScreen(lockManager: LockManager, modifier: Modifier = Modifier) {
     var remainingSeconds by remember { mutableIntStateOf(0) }
     var pin by remember { mutableStateOf("") }
     var pattern by remember { mutableStateOf(emptyList<Int>()) }
+    // PERF-4: PBKDF2 at 600k iterations took 0.5-2 s on a low-end device; running it from the
+    // onClick callback froze the UI (and an ANR was possible). The verifier now runs on
+    // Dispatchers.Default while the credential UI is disabled and shows progress.
+    var verifying by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
 
     val activity = context as? FragmentActivity
     val biometricUnavailable = biometricEnabled && !isBiometricAvailable(context)
@@ -115,22 +126,40 @@ fun LockScreen(lockManager: LockManager, modifier: Modifier = Modifier) {
     val hasCredentialFallback = pinEnabled || patternEnabled
 
     val submitPin: () -> Unit = {
-        if (lockManager.verifyPin(pin)) {
-            errorMessage = null
-            lockManager.unlock()
-        } else {
-            pin = ""
-            errorMessage = context.getString(R.string.lock_wrong_pin)
+        // Guarded instead of disabled in one place: the keypad stays usable to correct a typo
+        // until submission, and a double tap must not start two PBKDF2 runs.
+        if (!verifying && pin.length >= LockManager.MIN_PIN_LENGTH) {
+            val attempt = pin
+            verifying = true
+            scope.launch {
+                // verifyPin also updates the failure/lockout counters; those writes are shared
+                // preferences, which are safe off the main thread, and the throttle schedule is
+                // untouched.
+                val matches = withContext(Dispatchers.Default) { lockManager.verifyPin(attempt) }
+                verifying = false
+                if (matches) {
+                    errorMessage = null
+                    lockManager.unlock()
+                } else {
+                    pin = ""
+                    errorMessage = context.getString(R.string.lock_wrong_pin)
+                }
+            }
         }
     }
 
     val submitPattern: (List<Int>) -> Unit = { drawn ->
-        if (drawn.size >= LockManager.MIN_PATTERN_CELLS) {
-            if (lockManager.verifyPattern(drawn)) {
-                errorMessage = null
-                lockManager.unlock()
-            } else {
-                errorMessage = context.getString(R.string.lock_wrong_pattern)
+        if (!verifying && drawn.size >= LockManager.MIN_PATTERN_CELLS) {
+            verifying = true
+            scope.launch {
+                val matches = withContext(Dispatchers.Default) { lockManager.verifyPattern(drawn) }
+                verifying = false
+                if (matches) {
+                    errorMessage = null
+                    lockManager.unlock()
+                } else {
+                    errorMessage = context.getString(R.string.lock_wrong_pattern)
+                }
             }
         }
         pattern = emptyList()
@@ -172,23 +201,42 @@ fun LockScreen(lockManager: LockManager, modifier: Modifier = Modifier) {
                 Spacer(Modifier.height(32.dp))
 
                 when {
-                    showPatternUi -> PatternGrid(
-                        pattern = pattern,
-                        onPatternChange = { pattern = it },
-                        onPatternFinished = submitPattern,
-                        modifier = Modifier
-                            .fillMaxWidth(0.85f)
-                            .widthIn(max = 320.dp),
-                    )
+                    showPatternUi -> {
+                        PatternGrid(
+                            pattern = pattern,
+                            onPatternChange = { pattern = it },
+                            onPatternFinished = submitPattern,
+                            modifier = Modifier
+                                .fillMaxWidth(0.85f)
+                                .widthIn(max = 320.dp),
+                        )
+                        if (verifying) {
+                            Spacer(Modifier.height(16.dp))
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(22.dp),
+                                strokeWidth = 2.dp,
+                            )
+                        }
+                    }
 
                     showPinUi -> {
-                        PinKeypad(value = pin, onValueChange = { pin = it })
+                        PinKeypad(
+                            value = pin,
+                            onValueChange = { if (!verifying) pin = it },
+                        )
                         Spacer(Modifier.height(16.dp))
                         Button(
                             onClick = submitPin,
-                            enabled = pin.length >= LockManager.MIN_PIN_LENGTH,
+                            enabled = pin.length >= LockManager.MIN_PIN_LENGTH && !verifying,
                         ) {
-                            Text(text = stringResource(id = R.string.lock_unlock))
+                            if (verifying) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(18.dp),
+                                    strokeWidth = 2.dp,
+                                )
+                            } else {
+                                Text(text = stringResource(id = R.string.lock_unlock))
+                            }
                         }
                     }
                 }

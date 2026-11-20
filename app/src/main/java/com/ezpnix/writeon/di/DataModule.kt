@@ -6,6 +6,9 @@ import android.os.Handler
 import android.os.Looper
 import com.ezpnix.writeon.core.attachment.AttachmentIndex
 import com.ezpnix.writeon.core.security.EncryptionHelper
+import com.ezpnix.writeon.core.security.SharedPreferencesVaultKeyStore
+import com.ezpnix.writeon.core.security.VaultKeyStore
+import com.ezpnix.writeon.core.util.BackupRestoreLock
 import com.ezpnix.writeon.core.widget.WidgetRefresher
 import com.ezpnix.writeon.data.local.database.NoteDatabaseProvider
 import com.ezpnix.writeon.data.repository.ImportExportRepository
@@ -73,11 +76,14 @@ object ApplicationModule {
      *
      * This was unscoped, so Hilt handed every injection site its own `Mutex` and the mutual
      * exclusion it was written for never actually held. It has to be a singleton for the lock to
-     * mean anything.
+     * mean anything - and DAT-8 took that one step further: `WorkManager`-built workers reach the
+     * lock through a Hilt *entry point*, while producers that are not Hilt-constructed need a
+     * plain object. Returning [BackupRestoreLock.mutex] makes both routes the same instance
+     * instead of two look-alike singletons.
      */
     @Provides
     @Singleton
-    fun provideMutex(): Mutex = Mutex()
+    fun provideMutex(): Mutex = BackupRestoreLock.mutex
 
     @Provides
     @Singleton
@@ -141,10 +147,25 @@ object ApplicationModule {
         return StringBuilder()
     }
 
+    /**
+     * The library-wide envelope salt, on disk (PERF-2).
+     *
+     * It has to be the same instance for every session: the `v3:` rows can only be opened by the
+     * KEK derived from this salt plus the user's password. `SharedPreferencesVaultKeyStore` persists
+     * it in `notes_prefs`, which the backup rules exclude along with the database it protects.
+     */
     @Provides
     @Singleton
-    fun provideEncryptionHelper(mutableVaultPassword: StringBuilder): EncryptionHelper {
-        return EncryptionHelper(mutableVaultPassword)
+    fun provideVaultKeyStore(@ApplicationContext context: Context): VaultKeyStore =
+        SharedPreferencesVaultKeyStore(context)
+
+    @Provides
+    @Singleton
+    fun provideEncryptionHelper(
+        mutableVaultPassword: StringBuilder,
+        keyStore: VaultKeyStore,
+    ): EncryptionHelper {
+        return EncryptionHelper(mutableVaultPassword, keyStore)
     }
 
     @Provides

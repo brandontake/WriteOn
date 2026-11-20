@@ -1,6 +1,7 @@
 package com.ezpnix.writeon.presentation.screens.settings
 
 import com.ezpnix.writeon.data.backup.TxtBackupHelper
+import com.ezpnix.writeon.domain.model.Note
 import java.io.ByteArrayInputStream
 import java.nio.charset.StandardCharsets
 import java.util.zip.ZipEntry
@@ -175,6 +176,43 @@ class TxtBackupWorkerTest {
         assertTrue(
             TxtBackupHelper.noteKey("Same", "one", untitled) !=
                 TxtBackupHelper.noteKey("Same", "two", untitled),
+        )
+    }
+
+    /** DAT-3/DAT-13: a TXT package must never contain a placeholder, a vault body, or ciphertext. */
+    @Test
+    fun `txt export drops vault undecryptable and still-sealed rows`() {
+        val placeholder = "Cannot decrypt this note"
+        val notes = listOf(
+            Note(id = 1, name = "Plain", description = "body"),
+            Note(id = 2, name = "v2:salt:iv", description = "v2:salt:iv:payload", encrypted = true),
+            Note(id = 3, name = placeholder, description = placeholder),
+            // Structurally valid `w1:` payload: base64 of 32 bytes, longer than the 12-byte IV.
+            Note(
+                id = 4,
+                name = "w1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+                description = "w1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+            ),
+            Note(id = 5, name = "Title", description = "v2:leaked-body"),
+            // V-11: this is a plain note that merely starts with the marker and must be exported.
+            Note(id = 6, name = "w1:hello", description = "plain body"),
+        )
+
+        val selection = TxtBackupHelper.selectExportableNotes(notes, failedIds = setOf(3))
+
+        assertEquals(listOf("Plain", "w1:hello"), selection.notes.map { it.title })
+        assertEquals(listOf("body", "plain body"), selection.notes.map { it.content })
+        assertEquals(1, selection.skippedVault)
+        assertEquals(1, selection.skippedUndecryptable)
+        assertEquals(2, selection.skippedSealedText)
+        assertEquals(4, selection.skippedTotal)
+        assertTrue(
+            "no marker or placeholder may reach the archive",
+            selection.notes.none {
+                it.content == placeholder ||
+                    it.content.contains("v2:") ||
+                    it.content.contains("w1:")
+            },
         )
     }
 

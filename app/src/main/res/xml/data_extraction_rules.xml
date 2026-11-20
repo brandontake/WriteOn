@@ -14,11 +14,19 @@
              at it. Leaving it out also keeps the backup small. -->
         <exclude domain="file" path="audios/" />
         <exclude domain="file" path="attachments/" />
+        <!-- Reconcile parks orphaned media here rather than deleting it, so the bytes are intact.
+             Nothing on another device could ever reference them, and they are the media the user
+             believes was removed. -->
+        <exclude domain="file" path="attachments-quarantine/" />
         <exclude domain="file" path="BackupFolder/" />
         <!-- Glance widget state (files/glance/widget-state/) maps appWidgetId -> note id and holds
              no note text today, but this is a negative list: any new files/ subdirectory travels
              with a backup by default. Keep it out before widget state starts holding note content. -->
         <exclude domain="file" path="glance/" />
+        <!-- Custom note fonts (files/fonts/) are downloaded, not authored: a backup would only
+             carry them to a device that can fetch them again. This is a negative list, so they
+             leave the device unless named here. -->
+        <exclude domain="file" path="fonts/" />
     </cloud-backup>
     <device-transfer>
         <exclude domain="database" path="." />
@@ -27,9 +35,15 @@
         <exclude domain="file" path="datastore/" />
         <exclude domain="file" path="audios/" />
         <exclude domain="file" path="attachments/" />
+        <!-- A device transfer also moves to new hardware, where the quarantine's bytes could never
+             be matched to a note row. Once here, they must not ride along either. -->
+        <exclude domain="file" path="attachments-quarantine/" />
         <exclude domain="file" path="BackupFolder/" />
         <!-- Same negative-list reasoning as above: widget state must not ride along to a new
              device either. -->
         <exclude domain="file" path="glance/" />
+        <!-- Same negative-list reasoning as in cloud-backup: a transferred font would only be
+             re-fetched, and an unnamed directory rides along by default. -->
+        <exclude domain="file" path="fonts/" />
     </device-transfer>
 </data-extraction-rules>

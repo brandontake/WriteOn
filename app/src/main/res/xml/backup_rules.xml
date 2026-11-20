@@ -20,6 +20,11 @@
          it. The app's own Backup feature packages the database and these files together. -->
     <exclude domain="file" path="audios/" />
     <exclude domain="file" path="attachments/" />
+    <!-- The restore reconcile moves media it judges orphaned here instead of deleting it, so the
+         bytes are still complete pictures and recordings. A copy restored elsewhere would have no
+         note row pointing at it, and these are the files the user believes were removed: omitting
+         this line would put them on Drive. -->
+    <exclude domain="file" path="attachments-quarantine/" />
     <!-- Automatic backups are encrypted with a device-bound Tink key. Restoring them elsewhere
          would only produce files nothing can open, and they can grow to several copies of the
          database. -->
@@ -29,4 +34,8 @@
          is backed up by default. Keep this one out before widget state starts holding note
          content, which would then leave the device through cloud backup without this file changing. -->
     <exclude domain="file" path="glance/" />
+    <!-- Custom note fonts downloaded by the editor live in files/fonts/. They are not secrets, but
+         this list is a negative one: anything under files/ travels to Drive and onto new hardware
+         unless named here. A font can be fetched again on the device that needs it. -->
+    <exclude domain="file" path="fonts/" />
 </full-backup-content>
