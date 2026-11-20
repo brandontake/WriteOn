@@ -480,6 +480,12 @@ fun MarkdownText(
     fontSize: TextUnit,
     spacing: Dp = 2.dp,
     onContentChange: (String) -> Unit = {},
+    /**
+     * SPL-1: when set, a checkbox tap reports the parsed line/text instead of rebuilding the whole
+     * markdown from this (possibly debounced) snapshot. The split preview uses it to toggle against
+     * the editor's live body; the preview page and export leave it null and keep the old behaviour.
+     */
+    onCheckboxToggle: ((lineNumber: Int, text: String, checked: Boolean) -> Unit)? = null,
     maxLines: Int = Int.MAX_VALUE,
     overflow: TextOverflow = TextOverflow.Clip,
     useLazyColumn: Boolean = true,
@@ -537,6 +543,7 @@ fun MarkdownText(
             fontSize = fontSize,
             lines = lines,
             onContentChange = onContentChange,
+            onCheckboxToggle = onCheckboxToggle,
             maxLines = maxLines,
             overflow = overflow,
             useLazyColumn = useLazyColumn,
@@ -579,6 +586,7 @@ fun MarkdownContent(
     fontSize: TextUnit,
     lines: List<String>,
     onContentChange: (String) -> Unit,
+    onCheckboxToggle: ((lineNumber: Int, text: String, checked: Boolean) -> Unit)? = null,
     maxLines: Int,
     overflow: TextOverflow,
     useLazyColumn: Boolean,
@@ -598,6 +606,7 @@ fun MarkdownContent(
                     lines = lines,
                     isPreview = true,
                     onContentChange = onContentChange,
+                    onCheckboxToggle = onCheckboxToggle,
                     maxLines = maxLines,
                     overflow = overflow,
                     onImageLoaded = onImageLoaded,
@@ -622,6 +631,7 @@ fun MarkdownContent(
                             lines = lines,
                             isPreview = isPreview,
                             onContentChange = onContentChange,
+                            onCheckboxToggle = onCheckboxToggle,
                             maxLines = maxLines,
                             overflow = overflow,
                             onImageLoaded = onImageLoaded,
@@ -647,6 +657,7 @@ fun MarkdownContent(
                             lines = lines,
                             isPreview = isPreview,
                             onContentChange = onContentChange,
+                            onCheckboxToggle = onCheckboxToggle,
                             maxLines = maxLines,
                             overflow = overflow,
                             onImageLoaded = onImageLoaded,
@@ -670,6 +681,7 @@ fun RenderMarkdownElement(
     lines: List<String>,
     isPreview: Boolean,
     onContentChange: (String) -> Unit,
+    onCheckboxToggle: ((lineNumber: Int, text: String, checked: Boolean) -> Unit)? = null,
     maxLines: Int,
     overflow: TextOverflow,
     onImageLoaded: (String) -> Unit = {},
@@ -712,11 +724,19 @@ fun RenderMarkdownElement(
                     },
                     checked = element.checked,
                     onCheckedChange = { newChecked ->
-                        val updatedLines = lines.toMutableList()
-                        val prefix = if (newChecked) "[x]" else "[ ]"
-                        updatedLines[element.lineNumber] = "$prefix ${element.text}"
-                        val updatedMarkdown = updatedLines.joinToString("\n")
-                        onContentChange(updatedMarkdown)
+                        val semanticToggle = onCheckboxToggle
+                        if (semanticToggle != null) {
+                            // SPL-1: the caller owns the live body. Rebuilding from `lines` here
+                            // would write a debounced snapshot over anything typed since it was
+                            // sampled.
+                            semanticToggle(element.lineNumber, element.text, newChecked)
+                        } else {
+                            val updatedLines = lines.toMutableList()
+                            val prefix = if (newChecked) "[x]" else "[ ]"
+                            updatedLines[element.lineNumber] = "$prefix ${element.text}"
+                            val updatedMarkdown = updatedLines.joinToString("\n")
+                            onContentChange(updatedMarkdown)
+                        }
                     }
                 )
             }

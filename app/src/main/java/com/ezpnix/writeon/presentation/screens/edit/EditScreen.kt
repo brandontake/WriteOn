@@ -1002,7 +1002,11 @@ private fun LivePreviewPane(viewModel: EditViewModel, settingsViewModel: Setting
                             .fillMaxSize()
                             .verticalScroll(previewScrollState),
                         fontSize = settings.fontSize.sp,
-                        onContentChange = { viewModel.updateNoteDescriptionFromRendered(it) },
+                        // SPL-1: `rendered` is a debounced snapshot. Never rebuild the note from
+                        // it; report the checkbox line and let the ViewModel toggle the live body.
+                        onCheckboxToggle = { lineNumber, text, checked ->
+                            viewModel.toggleCheckboxFromRendered(lineNumber, text, checked)
+                        },
                         onAttachmentDelete = { viewModel.trashAttachmentById(it) },
                         useLazyColumn = false
                     )

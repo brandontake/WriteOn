@@ -901,6 +901,27 @@ class EditViewModel @Inject constructor(
         )
     }
 
+    /**
+     * SPL-1: toggles a checkbox reported by the split preview against the **live** body.
+     *
+     * The split pane deliberately renders a debounced snapshot, so the old "rebuild the body from
+     * this snapshot" path could erase characters typed after the snapshot was sampled. This method
+     * only replaces the matching marker line in the current text; when the checkbox line itself
+     * changed in the meantime, [CheckboxLineToggle] returns null and nothing is written.
+     *
+     * @return true when a line was toggled, false when the request was stale.
+     */
+    fun toggleCheckboxFromRendered(lineNumber: Int, text: String, checked: Boolean): Boolean {
+        val current = _noteDescription.value
+        val updated = CheckboxLineToggle.toggle(current.text, lineNumber, text, checked) ?: return false
+        if (updated == current.text) return true
+        // Preserve the caret exactly where the editor had it; the toggle never reorders text.
+        val start = current.selection.start.coerceIn(0, updated.length)
+        val end = current.selection.end.coerceIn(0, updated.length)
+        updateNoteDescription(current.copy(text = updated, selection = TextRange(start, end)))
+        return true
+    }
+
     /** Told by the segmented editor so attachment insertion can follow its caret rules. */
     fun setSegmentedEditing(value: Boolean) {
         segmentedEditing = value
