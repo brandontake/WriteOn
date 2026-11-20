@@ -2,8 +2,10 @@ package com.ezpnix.writeon.data.backup
 
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
+import com.ezpnix.writeon.core.attachment.AttachmentSnapshots
 import com.ezpnix.writeon.core.constant.DatabaseConst
 import com.ezpnix.writeon.core.security.SharedPreferencesVaultKeyStore
+import com.ezpnix.writeon.core.util.DatabaseRestore
 import com.ezpnix.writeon.data.local.database.LegacyCaptionBackfillFlag
 import com.ezpnix.writeon.data.local.database.LegacyPlaintextBackfillFlag
 import java.io.File
@@ -40,6 +42,7 @@ class RestoreJournalTest {
     @Before
     fun resetState() {
         RestoreJournal.clear(context)
+        AttachmentSnapshots.pruneExcept(context, null)
         LegacyPlaintextBackfillFlag.reset(context)
         LegacyCaptionBackfillFlag.reset(context)
     }
@@ -108,6 +111,60 @@ class RestoreJournalTest {
             context.getSharedPreferences("flashcards_prefs", Context.MODE_PRIVATE)
                 .getString("flashcards_key", null)
         )
+    }
+
+    /**
+     * N-6: after a successful undo, the pre-undo attachment tree is now the new `.bak`'s pair.
+     * A crash between rotation and journal deletion must not make startup delete that tree.
+     */
+    @Test
+    fun `recovery keeps the redo tree referenced by the current backup sidecar`() {
+        val restored = stagedDb()
+        liveDb().writeBytes(restored.readBytes())
+        val backup = DatabaseRestore.backupFile(liveDb()).apply {
+            writeBytes("previous database".toByteArray())
+        }
+        val redo = AttachmentSnapshots.capture(context)!!
+        assertTrue(SnapshotSidecar.write(backup, null, null, redo))
+        assertTrue(
+            RestoreJournal.write(
+                context,
+                restored,
+                newSalt = null,
+                newDeckSealed = null,
+                setSalt = false,
+                setDeck = false,
+                attachmentTarget = null,
+                attachmentDiscard = redo,
+            )
+        )
+
+        RestoreJournal.recover(context)
+
+        assertTrue("the new .bak still points at this tree", AttachmentSnapshots.exists(context, redo))
+    }
+
+    @Test
+    fun `recovery drops a discard tree no sidecar references`() {
+        val restored = stagedDb()
+        liveDb().writeBytes(restored.readBytes())
+        val discard = AttachmentSnapshots.capture(context)!!
+        assertTrue(
+            RestoreJournal.write(
+                context,
+                restored,
+                newSalt = null,
+                newDeckSealed = null,
+                setSalt = false,
+                setDeck = false,
+                attachmentTarget = null,
+                attachmentDiscard = discard,
+            )
+        )
+
+        RestoreJournal.recover(context)
+
+        assertFalse(AttachmentSnapshots.exists(context, discard))
     }
 
     @Test

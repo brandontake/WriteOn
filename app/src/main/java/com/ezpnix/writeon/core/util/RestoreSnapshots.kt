@@ -99,35 +99,46 @@ object RestoreSnapshots {
         }
 
         return withContext(Dispatchers.IO) {
-            // N-1: the `.bak` is only half of the snapshot. The Vault salt and flashcard deck it
-            // was captured with live in a sidecar next to it. A file that exists but describes
-            // different bytes is worse than no file at all - applying it would silently swap the
-            // KEK under every `v3:` row - so the undo refuses instead of guessing.
-            val sidecar = SnapshotSidecar.read(snapshot)
-            if (sidecar is SnapshotSidecar.ReadResult.Mismatch) {
-                return@withContext Result.failure(
-                    IOException(
-                        "The previous database snapshot does not match its Vault/flashcard " +
-                            "metadata; refusing to restore it"
-                    )
-                )
-            }
-            // N-1: a snapshot from before sidecars has no recorded salt. That is safe only if it
-            // also predates the `v3:` format; an envelope row would need a KEK we cannot recover.
-            if (sidecar is SnapshotSidecar.ReadResult.Missing &&
-                DatabaseRestore.containsEnvelopeRows(snapshot)
-            ) {
-                return@withContext Result.failure(
-                    IOException(
-                        "The previous database snapshot predates Vault metadata and contains " +
-                            "envelope-encrypted notes; restoring it safely is not possible"
-                    )
-                )
-            }
-
             // Waiting for the lock is still cancellable: nothing has been closed or written yet,
             // so a cancelled caller simply sees CancellationException and the files are untouched.
             BackupRestoreLock.mutex.withLock {
+                // N-7: read the snapshot and its metadata *inside* the same lock every restore
+                // takes. The outer existence check is only a fast fail; another import/cloud
+                // restore can replace both files between it and the lock, and applying the old
+                // sidecar to the new database would hand every `v3:` row the wrong KEK.
+                if (!snapshot.isFile || snapshot.length() <= 0L) {
+                    return@withLock Result.failure(
+                        IOException("There is no previous database snapshot to restore")
+                    )
+                }
+                // N-1: the `.bak` is only half of the snapshot. The Vault salt, flashcard deck and
+                // attachment tree it was captured with live in a sidecar next to it. A file that
+                // exists but describes different bytes is worse than no file at all - applying it
+                // would silently swap the KEK under every `v3:` row - so the undo refuses instead
+                // of guessing.
+                val sidecar = SnapshotSidecar.read(snapshot)
+                if (sidecar is SnapshotSidecar.ReadResult.Mismatch) {
+                    return@withLock Result.failure(
+                        IOException(
+                            "The previous database snapshot does not match its Vault/flashcard " +
+                                "metadata; refusing to restore it"
+                        )
+                    )
+                }
+                // N-1: a snapshot from before sidecars has no recorded salt. That is safe only if
+                // it also predates the `v3:` format; an envelope row would need a KEK we cannot
+                // recover.
+                if (sidecar is SnapshotSidecar.ReadResult.Missing &&
+                    DatabaseRestore.containsEnvelopeRows(snapshot)
+                ) {
+                    return@withLock Result.failure(
+                        IOException(
+                            "The previous database snapshot predates Vault metadata and contains " +
+                                "envelope-encrypted notes; restoring it safely is not possible"
+                        )
+                    )
+                }
+
                 withContext(NonCancellable) {
                     swapInPrevious(context, target, snapshot, sidecar, install)
                 }

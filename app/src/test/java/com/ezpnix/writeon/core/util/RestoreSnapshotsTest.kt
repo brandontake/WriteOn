@@ -10,7 +10,13 @@ import com.ezpnix.writeon.data.backup.SnapshotSidecar
 import java.io.File
 import java.io.IOException
 import java.util.Base64
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.sync.withLock
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -340,6 +346,54 @@ class RestoreSnapshotsTest {
             result.exceptionOrNull()?.message.orEmpty().contains("predates Vault metadata", ignoreCase = true)
         )
         assertArrayEquals("the refused snapshot must survive byte for byte", snapshotBytes, backup.readBytes())
+        assertArrayEquals("the live database must not change", currentBytes, live.readBytes())
+    }
+
+    /**
+     * N-7: another restore cannot replace `.bak` between the sidecar read and the shared lock.
+     * The test holds the lock, starts the undo, replaces the snapshot with different bytes while it
+     * is waiting, then releases: the lock-scoped re-read must notice the sidecar hash mismatch and
+     * leave the live database untouched.
+     */
+    @Test
+    fun `snapshot metadata is re-read after the restore lock is acquired`() = runBlocking {
+        val live = liveDatabase()
+        val currentBytes = "current database".toByteArray()
+        live.writeBytes(currentBytes)
+        val first = compatibleDatabase(temporaryFolder.newFile("first.db")).readBytes()
+        val backup = snapshot().apply {
+            parentFile?.mkdirs()
+            writeBytes(first)
+        }
+        assertTrue(SnapshotSidecar.write(backup, null, null))
+
+        val locked = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val holder = launch(Dispatchers.IO) {
+            BackupRestoreLock.mutex.withLock {
+                locked.complete(Unit)
+                release.await()
+            }
+        }
+        locked.await()
+
+        val restore = async(Dispatchers.IO) { RestoreSnapshots.restorePrevious(context) }
+        delay(100)
+        // Simulate a concurrent restore that replaced both `.bak` and its sidecar while this undo
+        // was waiting for the lock. The old sidecar now describes different bytes.
+        val second = compatibleDatabase(temporaryFolder.newFile("second.db")).readBytes() +
+            byteArrayOf(0x42)
+        backup.writeBytes(second)
+
+        release.complete(Unit)
+        holder.join()
+        val result = restore.await()
+
+        assertTrue("a sidecar that no longer matches must be refused", result.isFailure)
+        assertTrue(
+            "the failure must name the metadata hash, was: ${result.exceptionOrNull()?.message}",
+            result.exceptionOrNull()?.message.orEmpty().contains("does not match", ignoreCase = true)
+        )
         assertArrayEquals("the live database must not change", currentBytes, live.readBytes())
     }
 

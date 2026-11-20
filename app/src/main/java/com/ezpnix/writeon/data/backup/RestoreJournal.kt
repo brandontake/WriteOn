@@ -4,6 +4,7 @@ import android.content.Context
 import android.util.Log
 import com.ezpnix.writeon.core.attachment.AttachmentSnapshots
 import com.ezpnix.writeon.core.constant.DatabaseConst
+import com.ezpnix.writeon.core.util.DatabaseRestore
 import com.ezpnix.writeon.data.local.database.LegacyCaptionBackfillFlag
 import com.ezpnix.writeon.data.local.database.LegacyPlaintextBackfillFlag
 import com.google.gson.JsonNull
@@ -167,8 +168,14 @@ object RestoreJournal {
                 !AttachmentSnapshots.install(context, pending.attachmentTarget)
             ) {
                 runCatching { Log.w(TAG, "Recovered attachment tree could not be installed") }
-            } else {
-                AttachmentSnapshots.delete(context, pending.attachmentDiscard)
+            }
+            // N-6: `attachmentDiscard` is the pre-undo tree. In the normal undo it becomes the
+            // *new* `.bak`'s paired tree, so deleting it here just because a kill landed after
+            // rotation would break the next undo. The sidecar is the authority: keep the tree
+            // when it names it, drop it only when it is genuinely unreferenced.
+            val discard = pending.attachmentDiscard
+            if (discard != null && !isCurrentBackupAttachment(context, discard)) {
+                AttachmentSnapshots.delete(context, discard)
             }
             // The restored database may carry plaintext rows/captions again, exactly like the
             // normal path: the next launch must sweep it instead of trusting the replaced DB's
@@ -182,6 +189,20 @@ object RestoreJournal {
             AttachmentSnapshots.delete(context, pending.attachmentDiscard)
         }
         runCatching { journal.delete() }
+    }
+
+    /**
+     * True when the sidecar beside the current `.bak` names [attachmentSnapshot].
+     *
+     * The undo rotates the redo tree into that sidecar before clearing its journal; a kill in
+     * between leaves this as the only way to know the directory is still live state.
+     */
+    private fun isCurrentBackupAttachment(context: Context, attachmentSnapshot: String): Boolean {
+        val liveDb = context.getDatabasePath(DatabaseConst.NOTES_DATABASE_FILE_NAME)
+        val backup = DatabaseRestore.backupFile(liveDb)
+        val contents = (SnapshotSidecar.read(backup) as? SnapshotSidecar.ReadResult.Found)
+            ?.contents
+        return contents?.attachmentSnapshot == attachmentSnapshot
     }
 
     private fun read(journal: File): Pending? = runCatching {
