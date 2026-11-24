@@ -48,7 +48,7 @@ import com.ezpnix.writeon.R
 import com.ezpnix.writeon.presentation.screens.edit.model.EditViewModel
 import com.ezpnix.writeon.presentation.screens.edit.segments.AttachmentSegment
 import com.ezpnix.writeon.presentation.screens.edit.segments.TextSegment
-import com.ezpnix.writeon.presentation.screens.edit.segments.segmentize
+import com.ezpnix.writeon.presentation.screens.edit.segments.segmentsFor
 import kotlin.math.roundToInt
 
 /**
@@ -70,7 +70,10 @@ fun SegmentedEditor(
     modifier: Modifier = Modifier
 ) {
     val body = viewModel.noteDescription.value.text
-    val segments = remember(body) { segmentize(body) }
+    // PERF-01: `segmentsFor` answers "is there even attachment syntax here?" first. An ordinary
+    // note becomes one text field without splitting every line and running the attachment regexes
+    // on it for every keystroke.
+    val segments = remember(body) { segmentsFor(body) }
     val listState = rememberLazyListState()
     var viewportHeight by remember { mutableIntStateOf(0) }
     val focusedSegments = remember { mutableStateMapOf<String, Boolean>() }

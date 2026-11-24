@@ -5,7 +5,6 @@ import android.annotation.SuppressLint
 import android.content.pm.PackageManager
 import android.content.Intent
 import android.icu.text.SimpleDateFormat
-import android.os.Build
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -47,6 +46,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.outlined.PushPin
 import androidx.compose.material.icons.rounded.Description
 import androidx.compose.material.icons.rounded.Edit
@@ -66,6 +66,7 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
@@ -102,6 +103,7 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -113,6 +115,7 @@ import com.ezpnix.writeon.R
 import com.ezpnix.writeon.presentation.components.CalButton
 import com.ezpnix.writeon.presentation.components.CalculatorButton
 import com.ezpnix.writeon.presentation.components.CopyButton
+import com.ezpnix.writeon.presentation.components.AppSnackbarKind
 import com.ezpnix.writeon.presentation.components.LocalAppSnackbar
 import com.ezpnix.writeon.presentation.components.MoreButton
 import com.ezpnix.writeon.presentation.components.NavigationIcon
@@ -123,6 +126,7 @@ import com.ezpnix.writeon.presentation.components.SaveButton
 import com.ezpnix.writeon.presentation.components.TxtButton
 import com.ezpnix.writeon.presentation.components.UndoButton
 import com.ezpnix.writeon.presentation.components.markdown.MarkdownText
+import com.ezpnix.writeon.presentation.lock.rememberLockManager
 import com.ezpnix.writeon.presentation.navigation.BackGestureRouter
 import com.ezpnix.writeon.presentation.screens.edit.components.CustomIconButton
 import com.ezpnix.writeon.presentation.screens.edit.components.CustomTextField
@@ -158,6 +162,13 @@ fun EditNoteView(
 ) {
     val viewModel: EditViewModel = hiltViewModel()
     val context = LocalContext.current
+    // REG-06: the editor observes the process-wide Vault session so an eviction clears what it is
+    // showing. Bound here rather than through a constructor dependency so the ViewModel's unit
+    // tests stay independent of the whole lock/note stack.
+    val lockManager = rememberLockManager()
+    LaunchedEffect(lockManager) {
+        viewModel.attachLockManager(lockManager)
+    }
 
     // Both of these used to run on every recomposition, and setupNoteData launches a collector in
     // viewModelScope, so each keystroke that changed composition state started another collector on
@@ -209,11 +220,20 @@ fun EditNoteView(
                     // disposed with this destination, so a token change observed only after
                     // navigation would race the pop and usually lose the snackbar entirely.
                     if (viewModel.undoToken != tokenBefore && viewModel.canUndoSave) {
+                        val undoGeneration = viewModel.pendingSaveUndoGeneration
                         snackbar?.show(
                             message = if (viewModel.lastSaveMovedToTrash) trashMessage else undoMessage,
                             actionLabel = undoLabel,
                             duration = SnackbarDuration.Long,
+                            kind = if (viewModel.lastSaveMovedToTrash) {
+                                AppSnackbarKind.DELETE
+                            } else {
+                                AppSnackbarKind.SAVED
+                            },
                             onAction = { PendingSaveUndo.undo() },
+                            // R4-06: the bar leaving without an action makes the undo unreachable;
+                            // drop the closure (and its Vault plaintext) with it.
+                            onDismissed = { PendingSaveUndo.clearIf(undoGeneration) },
                         )
                     }
                     onClickBack()
@@ -258,26 +278,50 @@ fun EditNoteView(
         // `isLeaving` skips the exit save, which shows its own snackbar in exitEditor; without it
         // the same save could pop the snackbar twice (dismiss + re-show).
         if (!isLeaving && undoToken > 0 && viewModel.canUndoSave) {
+            val undoGeneration = viewModel.pendingSaveUndoGeneration
             snackbar?.show(
                 // UX-2: clearing the body moves the note to the recycle bin. Reusing "Note Saved!"
                 // there made a deliberate move look like a silent delete.
                 message = if (movedToTrash) trashMessage else undoMessage,
                 actionLabel = undoLabel,
                 duration = SnackbarDuration.Long,
+                kind = if (movedToTrash) AppSnackbarKind.DELETE else AppSnackbarKind.SAVED,
                 onAction = { PendingSaveUndo.undo() },
+                // R4-06: drop the undo closure when the bar expires or is replaced.
+                onDismissed = { PendingSaveUndo.clearIf(undoGeneration) },
             )
         }
     }
 
-    CompositionLocalProvider(
-        LocalSplitPreview provides (
-            shouldSplitPreview() && settingsViewModel.settings.value.isMarkdownEnabled
+    // REG-06: no app lock is required for a Vault session to end (the background grace timer
+    // evicts it), so FLAG_SECURE has to follow the content on screen, not just the credential
+    // configuration. This publishes "a Vault note's plaintext is visible" to LockManager, which
+    // LeafNotesTheme includes in its window-flag decision. Plain notes never set it.
+    val vaultLocked = viewModel.vaultLocked.value
+    val vaultPlaintextVisible = viewModel.isEncrypted.value && !vaultLocked
+    DisposableEffect(lockManager, vaultPlaintextVisible) {
+        if (vaultPlaintextVisible) lockManager.acquireVaultContentVisibility()
+        onDispose {
+            if (vaultPlaintextVisible) lockManager.releaseVaultContentVisibility()
+        }
+    }
+
+    if (vaultLocked) {
+        // The editable surface is deliberately not composed: the fields are empty and every write
+        // is refused, so showing the editor would only invite typing into text that cannot be
+        // saved. Back still runs the normal exit path, which has nothing to commit.
+        VaultLockedSurface(onBack = exitEditor)
+    } else {
+        CompositionLocalProvider(
+            LocalSplitPreview provides (
+                shouldSplitPreview() && settingsViewModel.settings.value.isMarkdownEnabled
+                )
+        ) {
+            NotesScaffold(
+                topBar = { if (!settingsViewModel.settings.value.minimalisticMode) TopBar(pagerState, exitEditor, viewModel, settingsViewModel) },
+                content = { PagerContent(pagerState, coroutineScope, viewModel, settingsViewModel, exitEditor) }
             )
-    ) {
-        NotesScaffold(
-            topBar = { if (!settingsViewModel.settings.value.minimalisticMode) TopBar(pagerState, exitEditor, viewModel, settingsViewModel) },
-            content = { PagerContent(pagerState, coroutineScope, viewModel, settingsViewModel, exitEditor) }
-        )
+        }
     }
 
     // V-3: shown over the pager, not inside the editor page, so a lock that happens while the
@@ -305,6 +349,52 @@ fun EditNoteView(
     )
 }
 
+/**
+ * REG-06: what the editor shows after a Vault eviction cleared the note's plaintext.
+ *
+ * There is no in-editor unlock: the passphrase is re-entered from Home's Vault banner (the same
+ * place that loaded it originally). The only action here is leaving, which is safe because the
+ * stored row is intact and nothing was saved from the cleared fields.
+ */
+@Composable
+private fun VaultLockedSurface(onBack: () -> Unit) {
+    Surface(
+        modifier = Modifier.fillMaxSize(),
+        color = MaterialTheme.colorScheme.surfaceContainerLow,
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(32.dp),
+            verticalArrangement = Arrangement.Center,
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            Icon(
+                imageVector = Icons.Filled.Lock,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+            )
+            Spacer(Modifier.height(16.dp))
+            Text(
+                text = stringResource(R.string.lock2_vault_locked_title),
+                style = MaterialTheme.typography.titleLarge,
+                textAlign = TextAlign.Center,
+            )
+            Spacer(Modifier.height(8.dp))
+            Text(
+                text = stringResource(R.string.lock2_vault_locked_message),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center,
+            )
+            Spacer(Modifier.height(24.dp))
+            TextButton(onClick = onBack) {
+                Text(text = stringResource(R.string.lock2_back_to_notes))
+            }
+        }
+    }
+}
+
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun TopBarActions(pagerState: PagerState, onClickBack: () -> Unit, viewModel: EditViewModel, cornerRadius: Int = 32) {
@@ -312,10 +402,26 @@ fun TopBarActions(pagerState: PagerState, onClickBack: () -> Unit, viewModel: Ed
     val isPinned = viewModel.isPinned.value
 
     fun triggerPinNotification() {
+        // R2-12: an unsaved note has id 0. Its notification would carry no usable target, and the
+        // cold-start path (0 -> blank editor) disagreed with the warm path (> 0 only), so a pinned
+        // new note could never be found again. Save first; then the real id exists.
+        val noteId = viewModel.noteId.value
+        if (noteId <= 0) {
+            Toast.makeText(
+                context,
+                context.getString(R.string.notif_pin_save_first),
+                Toast.LENGTH_SHORT
+            ).show()
+            return
+        }
         NoteNotificationManager.showPinnedNotification(
             context,
             viewModel.noteName.value.text.ifBlank { context.getString(R.string.notif_untitled_note) },
-            viewModel.noteDescription.value.text.ifBlank { context.getString(R.string.notif_no_content) }
+            viewModel.noteDescription.value.text.ifBlank { context.getString(R.string.notif_no_content) },
+            // SEC-05/UX-13: the notification must know which note it opens, and a Vault note must
+            // never be posted in plain text just because no app lock is configured.
+            noteId = noteId,
+            isVaultNote = viewModel.isEncrypted.value,
         )
         viewModel.toggleNotePin(true)
         Toast.makeText(context, context.getString(R.string.notif_pinned_to), Toast.LENGTH_SHORT).show()
@@ -337,80 +443,118 @@ fun TopBarActions(pagerState: PagerState, onClickBack: () -> Unit, viewModel: Ed
             return
         }
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            val permissionCheck = ContextCompat.checkSelfPermission(
-                context,
-                Manifest.permission.POST_NOTIFICATIONS
-            )
-            if (permissionCheck == PackageManager.PERMISSION_GRANTED) {
-                triggerPinNotification()
-            } else {
-                notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
-            }
-        } else {
+        val permissionCheck = ContextCompat.checkSelfPermission(
+            context,
+            Manifest.permission.POST_NOTIFICATIONS
+        )
+        if (permissionCheck == PackageManager.PERMISSION_GRANTED) {
             triggerPinNotification()
+        } else {
+            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
         }
     }
 
-    when (pagerState.currentPage) {
+    // UX-05: in split mode the pager is never composed and existing notes start on page 1, so
+    // keying the whole action set on `currentPage` left the tablet editor without Done/Save and
+    // without Undo/Redo. The editor pane is always visible there, so it always gets its actions;
+    // the preview's More menu stays reachable from the same row instead of being replaced.
+    //
+    // R4-06/R3-08: the pin toggle is shared by the More menu and the editor page's own button.
+    // A brand-new note starts on page 0, and the More menu only lives on the preview page, so the
+    // pin action was unreachable until the user swiped away.
+    fun onPinClick() {
+        if (viewModel.noteId.value == 0) {
+            triggerPinNotification()
+        } else if (viewModel.isPinned.value) {
+            NoteNotificationManager.cancelPinnedNotification(context)
+            viewModel.toggleNotePin(false)
+            Toast.makeText(context, context.getString(R.string.notif_unpinned), Toast.LENGTH_SHORT).show()
+        } else {
+            requestPinWithPermissionCheck()
+        }
+    }
 
-        0 -> {
-            Row {
-                if (viewModel.isDescriptionInFocus.value) {
-                    RedoButton { viewModel.redo() }
+    @Composable
+    fun MoreActions() {
+        Row {
+            MoreButton {
+                viewModel.toggleEditMenuVisibility(true)
+            }
+            DropdownMenu(
+                expanded = viewModel.isEditMenuVisible.value,
+                onDismissRequest = { viewModel.toggleEditMenuVisibility(false) },
+                shape = RoundedCornerShape((cornerRadius / 2).dp)
+            ) {
+                // R3-08/R2-12: visible for a brand-new note too. The tap explains that the note
+                // must be saved first; hiding it made the guard's message unreachable.
+                DropdownMenuItem(
+                    text = { Text(stringResource(R.string.pin_to_notification)) },
+                    leadingIcon = {
+                        Icon(
+                            if (viewModel.isPinned.value) Icons.Rounded.PushPin else Icons.Outlined.PushPin,
+                            contentDescription = stringResource(R.string.pin_to_notification)
+                        )
+                    },
+                    onClick = {
+                        onPinClick()
+                        viewModel.toggleEditMenuVisibility(false)
+                    }
+                )
+                if (viewModel.noteId.value != 0) {
+                    DropdownMenuItem(
+                        text = { Text(stringResource(R.string.note_details)) },
+                        leadingIcon = { Icon(Icons.Rounded.Info, contentDescription = stringResource(R.string.cd_details)) },
+                        onClick = {
+                            viewModel.toggleEditMenuVisibility(false)
+                            viewModel.toggleNoteInfoVisibility(true)
+                        }
+                    )
+                    DropdownMenuItem(
+                        text = { Text(stringResource(id = R.string.save_as_image)) },
+                        leadingIcon = { Icon(Icons.Rounded.Image, contentDescription = stringResource(R.string.save_as_image)) },
+                        onClick = {
+                            viewModel.requestImageSave()
+                            viewModel.toggleEditMenuVisibility(false)
+                        }
+                    )
                 }
-                SaveButton { onClickBack() }
             }
         }
-        1 -> {
-            Row {
-                MoreButton {
-                    viewModel.toggleEditMenuVisibility(true)
-                }
-                DropdownMenu(
-                    expanded = viewModel.isEditMenuVisible.value,
-                    onDismissRequest = { viewModel.toggleEditMenuVisibility(false) },
-                    shape = RoundedCornerShape((cornerRadius / 2).dp)
-                ) {
-                    if (viewModel.noteId.value != 0) {
-                        DropdownMenuItem(
-                            text = { Text(stringResource(R.string.pin_to_notification)) },
-                            leadingIcon = {
-                                Icon(
-                                    if (viewModel.isPinned.value) Icons.Rounded.PushPin else Icons.Outlined.PushPin,
-                                    contentDescription = stringResource(R.string.pin_to_notification)
-                                )
+    }
+
+    if (isSplitPreviewActive()) {
+        Row {
+            if (viewModel.isDescriptionInFocus.value) {
+                RedoButton(enabled = viewModel.canRedoText) { viewModel.redo() }
+            }
+            SaveButton { onClickBack() }
+            MoreActions()
+        }
+    } else {
+        when (pagerState.currentPage) {
+
+            0 -> {
+                Row {
+                    if (viewModel.isDescriptionInFocus.value) {
+                        RedoButton(enabled = viewModel.canRedoText) { viewModel.redo() }
+                    }
+                    // R3-08: the preview page's More menu was the only pin entry; a new note opens
+                    // on this page, so the action is repeated here (same handler, same state).
+                    IconButton(onClick = { onPinClick() }) {
+                        Icon(
+                            imageVector = if (viewModel.isPinned.value) {
+                                Icons.Rounded.PushPin
+                            } else {
+                                Icons.Outlined.PushPin
                             },
-                            onClick = {
-                                if (viewModel.isPinned.value) {
-                                    NoteNotificationManager.cancelPinnedNotification(context)
-                                    viewModel.toggleNotePin(false)
-                                    Toast.makeText(context, context.getString(R.string.notif_unpinned), Toast.LENGTH_SHORT).show()
-                                } else {
-                                    requestPinWithPermissionCheck()
-                                }
-                                viewModel.toggleEditMenuVisibility(false)
-                            }
-                        )
-                        DropdownMenuItem(
-                            text = { Text(stringResource(R.string.note_details)) },
-                            leadingIcon = { Icon(Icons.Rounded.Info, contentDescription = stringResource(R.string.cd_details)) },
-                            onClick = {
-                                viewModel.toggleEditMenuVisibility(false)
-                                viewModel.toggleNoteInfoVisibility(true)
-                            }
-                        )
-                        DropdownMenuItem(
-                            text = { Text(stringResource(id = R.string.save_as_image)) },
-                            leadingIcon = { Icon(Icons.Rounded.Image, contentDescription = stringResource(R.string.save_as_image)) },
-                            onClick = {
-                                viewModel.requestImageSave()
-                                viewModel.toggleEditMenuVisibility(false)
-                            }
+                            contentDescription = stringResource(R.string.pin_to_notification),
+                            tint = MaterialTheme.colorScheme.primary
                         )
                     }
+                    SaveButton { onClickBack() }
                 }
             }
+            1 -> MoreActions()
         }
     }
 }
@@ -424,15 +568,14 @@ fun PagerContent(
     settingsViewModel: SettingsViewModel,
     onClickBack: () -> Unit
 ) {
+    val settings = settingsViewModel.settings.value
     if (viewModel.isImageSaveRequested.value) {
-        val settings = settingsViewModel.settings.value
         NoteImageSaveHost(
             noteTitle = viewModel.noteName.value.text.ifBlank { stringResource(R.string.notif_untitled_note) },
             noteBody = viewModel.noteDescription.value.text,
             createdAt = viewModel.noteCreatedTime.value,
             isMarkdownEnabled = settings.isMarkdownEnabled,
             fontSize = settings.fontSize,
-            containerColor = if (settings.extremeAmoledMode) Color.Black else MaterialTheme.colorScheme.surface,
             cornerRadius = settings.cornerRadius.dp,
             onFinished = { viewModel.clearImageSaveRequest() }
         )
@@ -487,8 +630,12 @@ fun TopBar(pagerState: PagerState, onClickBack: () -> Unit, viewModel: EditViewM
         navigationIcon = {
             Row {
                 NavigationIcon(onClickBack)
-                if (pagerState.currentPage == 0 && viewModel.isDescriptionInFocus.value) {
-                    UndoButton { viewModel.undo() }
+                // UX-05: split mode always shows the editor pane, so its Undo must not depend on
+                // a pager page that is not even composed.
+                if ((pagerState.currentPage == 0 || isSplitPreviewActive()) &&
+                    viewModel.isDescriptionInFocus.value
+                ) {
+                    UndoButton(enabled = viewModel.canUndoText) { viewModel.undo() }
                 }
             }
         },
@@ -590,7 +737,9 @@ fun MinimalisticMode(
     ) {
         if (!showOnlyDescription) {
             if (isEnabled) NavigationIcon(onClickBack)
-            if (isEnabled && viewModel.isDescriptionInFocus.value) UndoButton { viewModel.undo() }
+            if (isEnabled && viewModel.isDescriptionInFocus.value) {
+                UndoButton(enabled = viewModel.canUndoText) { viewModel.undo() }
+            }
             content()
             if (isEnabled) TopBarActions(pagerState, onClickBack, viewModel)
             if (isEnabled) ModeButton(pagerState, coroutineScope, isMinimalistic = true, isExtremeAmoled = isExtremeAmoled)
@@ -828,6 +977,21 @@ private fun VaultUnlockDialog(
     val cannotVerify = viewModel.vaultUnlockUnverifiable
     var password by remember { mutableStateOf("") }
     var submitting by remember { mutableStateOf(false) }
+    // SEC-13: the ViewModel publishes the wait once per rejected attempt. Ticking it down here
+    // keeps the dialog usable when the wait ends instead of leaving the button disabled forever.
+    val throttledSeconds = viewModel.vaultUnlockThrottledSeconds.value
+    var throttleCountdown by remember(throttledSeconds) { mutableStateOf(throttledSeconds) }
+    LaunchedEffect(throttledSeconds) {
+        throttleCountdown = throttledSeconds
+        while (throttleCountdown > 0) {
+            delay(1_000L)
+            throttleCountdown--
+        }
+        // Re-arm the published value: a later lockout that also lasts 10 s needs a new key, or
+        // `remember(throttledSeconds)` would keep the already-finished countdown and re-enable
+        // the button under a fresh wait.
+        if (throttledSeconds > 0) viewModel.clearVaultUnlockThrottle()
+    }
 
     AlertDialog(
         // No dismiss path: see the KDoc. Android back and a scrim tap both land here.
@@ -865,12 +1029,23 @@ private fun VaultUnlockDialog(
                         modifier = Modifier.padding(top = 8.dp)
                     )
                 }
+                // SEC-13: the persisted Vault throttle applies here and on Home's banner. Showing
+                // the wait in place is more honest than another "wrong password" for a correct
+                // passphrase that simply arrived too early.
+                if (throttleCountdown > 0) {
+                    Text(
+                        text = stringResource(R.string.lock2_vault_throttled, throttleCountdown),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.padding(top = 8.dp)
+                    )
+                }
             }
         },
         confirmButton = {
             if (!cannotVerify) {
                 TextButton(
-                    enabled = password.isNotEmpty() && !submitting,
+                    enabled = password.isNotEmpty() && !submitting && throttleCountdown == 0,
                     onClick = {
                         submitting = true
                         // The destination's scope, not one created here: the dialog leaves
@@ -935,12 +1110,12 @@ private fun QuickActionRow(
  */
 internal val LocalSplitPreview = compositionLocalOf { false }
 
-/** Geometry only: a tablet held in landscape, where a permanent second column fits. */
+/** Geometry only: a tablet wide enough for two readable columns, in either orientation. */
 @Composable
 internal fun shouldSplitPreview(): Boolean {
     val configuration = LocalConfiguration.current
     return configuration.smallestScreenWidthDp >= 600 &&
-        configuration.screenWidthDp > configuration.screenHeightDp
+        configuration.screenWidthDp >= 720
 }
 
 @Composable
@@ -994,6 +1169,9 @@ private fun LivePreviewPane(viewModel: EditViewModel, settingsViewModel: Setting
                         radius = settings.cornerRadius,
                         markdown = rendered,
                         isEnabled = settings.isMarkdownEnabled,
+                        // PERF-02: a long body is parsed on Dispatchers.Default; the pane keeps
+                        // the previous parse visible while the debounced one runs.
+                        parseAsync = true,
                         // A selection handle that was dragged across a lazy item whose composable
                         // has since been disposed can crash in SelectionManager. The preview is
                         // one note, not a feed, so keeping every element composed and scrolling a
@@ -1071,6 +1249,9 @@ fun PreviewScreen(
                         radius = settingsViewModel.settings.value.cornerRadius,
                         markdown = viewModel.noteDescription.value.text,
                         isEnabled = settingsViewModel.settings.value.isMarkdownEnabled,
+                        // PERF-02: the whole body is parsed off the main thread; this page is the
+                        // other full-note surface that used to stall on composition.
+                        parseAsync = true,
                         // See LivePreviewPane: no lazy list under SelectionContainer, so dragging
                         // a handle after scrolling never targets a disposed text anchor.
                         modifier = Modifier

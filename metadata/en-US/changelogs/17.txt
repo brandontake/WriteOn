@@ -1,0 +1,109 @@
+v2.1.0 - Android 13 minimum and compatibility cleanup:
+- WriteOn now requires Android 13 (API 33) or newer; Android 8-12 devices are no longer supported.
+- Save-as-image is now a single WebP card that follows the app's Material 3 surfaces and uses the
+  font size from Settings. Long notes are no longer split into numbered pages.
+- The drawer's Tags section has an Untagged filter when tags exist. Long-press a tag to delete one
+  or more tags at once; only the tags are removed from notes, and the notes themselves are kept.
+- Settings use a centred tablet layout with a two-column card grid on wide screens, and the editor's
+  split preview now opens on portrait tablets as well.
+- Recordings in the editor now have a single menu: save to folder, rename, edit Markdown and delete.
+- The editor behaviour switches now live in Tools as one grouped card block; the separate Behavior
+  page and the version catalogue in the Support sheet were removed.
+- Dropped the pre-33 compatibility paths for dynamic colour, the biometric/device-credential prompt,
+  sensitive clipboard flags, notification permission checks, audio recording and image export.
+- Save-as-image always uses MediaStore, and automatic-backup verification uses the platform's
+  null output stream instead of a hand-written sink.
+
+Audit remediation (2026-11-20):
+- Lock privacy now reaches outside the app: enabling or engaging the lock refreshes widgets and
+  drops pinned notifications, Vault notes are redacted even without an app lock, and an unlocked
+  Vault re-locks after the background grace period.
+- Saving no longer permanently deletes attachments that the save-undo cannot restore; undoing a
+  save puts the pruned attachment rows back, and a Vault note with an empty title no longer loads
+  blank or gets moved to the trash.
+- WebDAV refuses to overwrite a remote archive whose state cannot be verified, never publishes
+  without a precondition, verifies direct PUTs with Content-MD5 and length, encodes non-ASCII
+  paths, and runs restore on its own work chain.
+- Large-note and large-library paths were reworked: the segmented editor skips work for notes with
+  no attachments, preview parsing leaves the main thread, unchanged ciphertext rows and Vault rows
+  are cached, search is debounced off the main thread, drafts moved out of the saved-instance
+  Bundle, card summaries are bounded, and editor undo has a byte budget.
+- Backups are encrypted by default and forced when Vault content exists; all three backup producers
+  share one archive writer; a release build without a real keystore fails instead of shipping a
+  debug-signed APK.
+- Accessibility and interaction: pattern lock has per-dot screen-reader actions and PIN progress,
+  the quick-action button works with TalkBack/keyboard, undo/redo has readable contrast and a
+  disabled state, trash/library attachment actions are discoverable, failed image insertion says
+  why, and the Home greeting dialog can be dismissed and actually applies.
+- Added the first instrumentation tests (real Keystore and media encryption) and migration tests
+  that execute the 1→11 chain; the release-signing guard is verified both ways.
+
+Second-round verification remediation (2026-11-21):
+- Fixed the recovery flag ordering, notification cold-start routing, Vault cache invalidation,
+  per-column Vault decryption, attachment path containment, Vault editor clearing/FLAG_SECURE,
+  biometric credential invariants, stale segment keys, widget checkbox markers, post-MOVE
+  verification, and TalkBack pattern confirmation.
+- Hardened the rest: per-operation restore staging with ownership tokens, strict missing-attachment
+  backup failure, deck-required restore journals, startup plaintext/temp cleanup, manifest size
+  caps, one-time legacy media encryption, Vault attempt throttling, sealed audio labels, caption
+  CAS, atomic image insertion, conflict-copy dedupe before archive build, folder/href validation,
+  orphan-free saves, first-frame search, draft cleanup, code-point-safe summaries, byte-budgeted
+  undo, widget preview truncation, latest-body card title edits, and off-main flashcard saves.
+
+Toolchain and UI refresh (2026-11-22):
+- Gradle 9.9.2, AGP 9.5.2 with built-in Kotlin 2.3.21, KSP 2.3.14, Compose BOM 2026.11.01
+  (Compose 1.13 / Material 3 1.5), Room 2.7.2 and Hilt 2.60.1; compileSdk 37.2 (target 36).
+- The Terms of Service screen only appears on first install: acceptance is now a separately managed
+  key and is awaited before leaving the screen, so an unrelated settings save cannot re-show it.
+- The "Note Saved - Undo" bar now uses the Material 3 system snackbar with the large system shape,
+  inverse-surface colours, a status icon and the standard action button.
+
+Third-round verification remediation (2026-11-22):
+- WebDAV: a failed post-write verification now leaves a repair lease on the exact remote file, so
+  the next run repairs the canonical archive instead of parking conflict copies forever; direct
+  PUTs and conflict copies get the same ETag/length proof; state transitions are atomic.
+- Attachments: in-place legacy encryption invalidates the renderer's plaintext/ciphertext cache;
+  restore staging is recorded in the restore journal and finished or reconciled on startup; an
+  incomplete rollback keeps a marked tree, and a rolled-back database restores the old files
+  instead of replaying the failed archive.
+- Editor: a Vault eviction clears the undo/redo stacks, the save point and the last-saved snapshot;
+  FLAG_SECURE follows an unlocked Vault on every screen. Selection-only changes no longer clear
+  redo, and redo is inside the 4 MB history budget.
+- UI: the widget toggles checkboxes on the live body (no stale whole-note write-back, CRLF
+  preserved, tags/pin/trash kept); snackbar action/icon contrast is fixed; a failed Terms write
+  stays on the screen; an unsaved note cannot be pinned to the notification shade.
+- Conflict notices, text segment keys, draft temp files and the Vault attempt throttle received
+  their remaining fixes.
+
+Fourth-round verification remediation (2026-11-23):
+- Restore: the attachment install journal now records the post-prepare live database hash, so a
+  normal restore cannot be mistaken for a rollback; a partial rollback keeps its journal, and
+  startup recovery copies staged files so a failed install remains retryable.
+- WebDAV: repair leases require a shorter remote and a strong upload ETag, are scoped to the server
+  URL, and stop after three attempts; saving a different WebDAV address clears them.
+- Settings: the scratchpad keeps its draft when a save fails and waits for an open SAF picker
+  before a session-close; Flashcard exit is single-flight.
+- Cards and widgets: Home and the launcher share one note-body edit lock, and duplicate checkbox
+  labels no longer toggle the wrong line.
+- Vault: Home card writes and widget write-backs take the Vault unlock lock; the attempt throttle
+  commits one batch per transition off the main thread.
+- A new note's "pin to notification" item is visible and explains that it must be saved first.
+
+
+
+
+Fourth-round verification remediation (2026-11-23):
+- WebDAV: a repair lease is only created when the HEAD ETag is one this publication produced (staging PUT or MOVE), and the 3-attempt budget is per URL, so a server that mints a new ETag on every write cannot make it loop forever.
+- Attachments: the keep-marker no longer counts as an unrestored file (a fully restored tree is reclaimed; a partial restore marks itself), and startup recovery runs under the shared restore lock with a database generation token, so a note saved after a restore is not mistaken for a rollback.
+- Cards: a Vault eviction during a card write is reported instead of crashing, and pin/tag/trash writes share the card read-modify-write lock.
+- Widget: multi-line titles now map checkbox taps to the right body line.
+- Settings: scratchpad export flags survive rotation and picker failures; Flashcard exit keeps the screen when the deck cannot be sealed.
+- The save-undo bar drops its closure when it times out or is dismissed; the editor page gets its own pin action.
+
+Fifth-round verification remediation (2026-11-23):
+- Restore: the staged database is stamped before the restore journal hashes it, and the attachment install reuses that generation token. A completed restore interrupted before the journal clear is now finished (deck and Vault salt applied) instead of being discarded as if the database had never moved.
+- WebDAV: a HEAD that exposes neither an ETag nor a length no longer records ownership, and a different ETag is only accepted when the MOVE response itself named it; otherwise the copy stays a conflict copy instead of silently replacing another device's same-size archive.
+- Vault: attachment trash/restore takes the Vault unlock lock and reports failures instead of crashing when the session is evicted.
+- Editor: saving takes the same note-body lock as the Home cards and the widget, so a quick checkbox tap can no longer overwrite text saved from the editor.
+- Settings: the scratchpad's deferred close survives rotation, Flashcard saving reports every storage failure, and rollback trees are protected before files are moved.
+- Widget: titles containing a lone carriage return map checkbox taps to the right body line.

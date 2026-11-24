@@ -49,14 +49,50 @@ class NoteCrypto @Inject constructor() {
 
     /** Reads a value produced by [seal]; plain text values pass through unchanged. */
     fun open(stored: String): String {
-        if (!isSealed(stored)) return stored
-
+        // PERF-03: the cache is checked first. `isSealed` decodes the entire base64 payload just
+        // to answer "does this look like ciphertext", and the list flows ask that question for
+        // every row on every Room emission. A hit here never allocates the decoded bytes.
         cacheGet(stored)?.let { return it }
+
+        if (!isSealed(stored)) return stored
 
         val plaintext = openOrNull(stored)
             ?: throw IllegalStateException("Could not decrypt stored note text; refusing to replace it")
         cachePut(stored, plaintext)
         return plaintext
+    }
+
+    /**
+     * PERF-03: opens both columns of one row through the row cache.
+     *
+     * The string cache above is keyed by the full ciphertext, so a hit still hashes and compares a
+     * whole body. The row cache is keyed by `(id, updatedAt)` and validated against the stored
+     * lengths, which is what lets an unchanged row skip decryption entirely when Room re-emits the
+     * whole table after an unrelated write. [EncryptedNoteDao] invalidates the id on every text
+     * write; [clearCache] drops the whole map on lock.
+     *
+     * Mixed rows work too: a legacy row can still have one plaintext column next to a sealed one.
+     * Values are reported for the row as stored, so a caller cannot mistake a plain number for a
+     * decrypted body.
+     */
+    fun openRow(id: Int, updatedAt: Long, name: String, description: String): Pair<String, String> {
+        rowCache.get(id, updatedAt, name, description)?.let { return it }
+        val decryptedName = open(name)
+        val decryptedDescription = open(description)
+        rowCache.put(
+            id = id,
+            updatedAt = updatedAt,
+            name = name,
+            description = description,
+            plaintextName = decryptedName,
+            plaintextDescription = decryptedDescription
+        )
+        return decryptedName to decryptedDescription
+    }
+
+    /** PERF-03: forget one row's decrypted text; called by [EncryptedNoteDao] on every write. */
+    fun invalidateRow(id: Int) {
+        rowCache.invalidate(id)
     }
 
     /**
@@ -98,9 +134,10 @@ class NoteCrypto @Inject constructor() {
     fun openOrNull(stored: String): String? {
         // Same structural test as isSealed: a malformed `w1:` value is plain text, and the caller
         // gets it back unchanged so no write path can "repair" it into something else.
-        if (!isSealed(stored)) return stored
-
+        // PERF-03: cache first, exactly like [open] - a hit skips the base64 decode.
         cacheGet(stored)?.let { return it }
+
+        if (!isSealed(stored)) return stored
 
         return try {
             withSecretKey { key -> decryptPayload(stored, key) }
@@ -223,6 +260,9 @@ class NoteCrypto @Inject constructor() {
             cache.clear()
             cachedPlaintextBytes = 0L
         }
+        // PERF-03: the row cache holds the same plaintext under a different key; a lock that
+        // cleared one map and left the other would keep every body in memory.
+        rowCache.clear()
     }
 
     private fun cacheGet(key: String): String? = synchronized(cacheLock) { cache[key] }
@@ -284,6 +324,13 @@ class NoteCrypto @Inject constructor() {
         val cacheLock = Any()
 
         /**
+         * PERF-03: decrypted text per row, so an unchanged row skips decryption on a whole-table
+         * emission. Process-wide for the same reason [cache] is: the DAO wrapper that reads is
+         * constructed per call, and one map per wrapper would never hit.
+         */
+        val rowCache = NoteRowTextCache()
+
+        /**
          * A hard cap for tiny notes that never reach the byte budget; large bodies are bounded by
          * [MAX_CACHE_BYTES] long before this.
          */
@@ -295,6 +342,118 @@ class NoteCrypto @Inject constructor() {
          * and the editor; the previous 512-entry cache could hold far more when bodies were long.
          */
         const val MAX_CACHE_BYTES = 28L * 1024 * 1024
+    }
+}
+
+/**
+ * PERF-03: decrypted text for one note row, keyed by id and validated against the stored bytes.
+ *
+ * The list flows re-decrypt every row Room emits, and Room emits the whole table after any write.
+ * An entry is reused only while the row's `updatedAt` and both stored lengths match, so a version
+ * that cannot prove it describes the current bytes always decrypts. [EncryptedNoteDao] also drops
+ * the entry on every write it performs, which covers edits that keep both lengths and the
+ * timestamp (a checkbox toggle on a home card does exactly that).
+ *
+ * Access-ordered and bounded, so a huge library cannot retain every body forever. The lock is its
+ * own: reads happen on IO while a save can invalidate from another thread, and it must never be
+ * held while a cipher runs.
+ */
+internal class NoteRowTextCache(private val maxEntries: Int = MAX_ENTRIES) {
+
+    private data class Entry(
+        val updatedAt: Long,
+        val nameLength: Int,
+        val descriptionLength: Int,
+        val name: String,
+        val description: String,
+        /** UTF-16 bytes this entry pins, so the row cache has a memory bound and not just a count. */
+        val bytes: Long = (name.length.toLong() + description.length.toLong()) * 2L,
+    )
+
+    private val map = object : LinkedHashMap<Int, Entry>(
+        INITIAL_CAPACITY,
+        0.75f,
+        true
+    ) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<Int, Entry>?): Boolean {
+            if (size <= maxEntries) return false
+            eldest?.value?.let { totalBytes -= it.bytes }
+            return true
+        }
+    }
+    private val lock = Any()
+
+    /** Plaintext bytes currently pinned; guarded by [lock]. */
+    private var totalBytes = 0L
+
+    fun get(id: Int, updatedAt: Long, name: String, description: String): Pair<String, String>? =
+        synchronized(lock) {
+            val entry = map[id] ?: return null
+            if (entry.updatedAt != updatedAt ||
+                entry.nameLength != name.length ||
+                entry.descriptionLength != description.length
+            ) {
+                // Same id, different bytes: the stored row moved on and this entry would hide it.
+                map.remove(id)?.let { totalBytes -= it.bytes }
+                return null
+            }
+            entry.name to entry.description
+        }
+
+    fun put(
+        id: Int,
+        updatedAt: Long,
+        name: String,
+        description: String,
+        plaintextName: String,
+        plaintextDescription: String,
+    ) {
+        synchronized(lock) {
+            val entry = Entry(
+                updatedAt = updatedAt,
+                nameLength = name.length,
+                descriptionLength = description.length,
+                name = plaintextName,
+                description = plaintextDescription,
+            )
+            map.put(id, entry)?.let { totalBytes -= it.bytes }
+            totalBytes += entry.bytes
+            evictOverBudget()
+        }
+    }
+
+    private fun evictOverBudget() {
+        val eldest = map.entries.iterator()
+        while (totalBytes > MAX_BYTES && map.size > 1 && eldest.hasNext()) {
+            val entry = eldest.next()
+            totalBytes -= entry.value.bytes
+            eldest.remove()
+        }
+    }
+
+    fun invalidate(id: Int) {
+        synchronized(lock) {
+            map.remove(id)?.let { totalBytes -= it.bytes }
+        }
+    }
+
+    fun clear() {
+        synchronized(lock) {
+            map.clear()
+            totalBytes = 0L
+        }
+    }
+
+    private companion object {
+        const val INITIAL_CAPACITY = 64
+        const val MAX_ENTRIES = 1_024
+
+        /**
+         * PERF-03: the row cache holds the same strings the string cache does, so its budget is
+         * deliberately below that cache's 28 MB - it may not become the reason a large library
+         * stays resident after the string cache has evicted the bodies.
+         */
+        const val MAX_BYTES = 8L * 1024 * 1024
     }
 }
 

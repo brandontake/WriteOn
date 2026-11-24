@@ -2,7 +2,6 @@ package com.ezpnix.writeon.presentation.screens.edit.components
 
 import android.content.Context
 import android.media.MediaRecorder
-import android.os.Build
 import android.util.Log
 import com.ezpnix.writeon.core.attachment.MediaVault
 import java.io.File
@@ -27,12 +26,7 @@ class AudioRecorderManager(private val context: Context) {
             val file = File(audioDir, "REC_$timeStamp.m4a")
             currentOutputFile = file
 
-            val mr = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                MediaRecorder(context)
-            } else {
-                @Suppress("DEPRECATION")
-                MediaRecorder()
-            }
+            val mr = MediaRecorder(context)
 
             mr.apply {
                 setAudioSource(MediaRecorder.AudioSource.MIC)

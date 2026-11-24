@@ -3,6 +3,8 @@ package com.ezpnix.writeon.presentation.screens.settings.model
 import android.content.Context
 import android.content.SharedPreferences
 import android.net.Uri
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
 import android.widget.Toast
 import androidx.compose.runtime.State
@@ -27,6 +29,7 @@ import com.ezpnix.writeon.domain.usecase.ImportResult
 import com.ezpnix.writeon.domain.usecase.NoteUseCase
 import com.ezpnix.writeon.domain.usecase.SettingsUseCase
 import com.ezpnix.writeon.data.backup.BackupWorker
+import com.ezpnix.writeon.presentation.lock.LockManager
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -34,8 +37,14 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import java.util.concurrent.atomic.AtomicLong
 import org.xmlpull.v1.XmlPullParser
 import org.xmlpull.v1.XmlPullParserException
 import java.io.File
@@ -43,6 +52,39 @@ import java.io.IOException
 import java.util.concurrent.TimeUnit
 import javax.inject.Inject
 import androidx.compose.ui.res.stringResource
+
+/**
+ * SEC-09: the settings screen's in-memory secrets, and when they must go.
+ *
+ * This ViewModel holds the password typed for a local backup export/import (and, through the
+ * methods below, hands out the decrypted scratchpad and flashcard decks). None of those may outlive
+ * the session that was allowed to see them: an app lock or a Vault eviction - the latter also
+ * happens on installs without an app lock - has to drop them. The persisted settings and the
+ * stored ciphertext are deliberately untouched; only the process-lifetime copies are cleared.
+ *
+ * The rule is a tiny class rather than an inline `if` so it is testable without constructing the
+ * Hilt ViewModel, which needs a Context, WorkManager and the whole note stack.
+ */
+internal class SettingsPlaintextState {
+
+    /** The backup password; non-null only while a prompt's answer is still usable. */
+    var backupPassword: String? = null
+
+    /**
+     * True when the plaintext copies must be dropped: the gate is up, or the Vault passphrase
+     * that authorized decryption is gone. A fresh ViewModel on an install without a Vault sees
+     * `false` here, so initialization alone never discards anything.
+     */
+    fun shouldClear(isLocked: Boolean, vaultSessionActive: Boolean): Boolean =
+        isLocked || !vaultSessionActive
+
+    /** Drops the password; returns true when there was one. */
+    fun clear(): Boolean {
+        val hadPassword = backupPassword != null
+        backupPassword = null
+        return hadPassword
+    }
+}
 
 @HiltViewModel
 class SettingsViewModel @Inject constructor(
@@ -54,6 +96,7 @@ class SettingsViewModel @Inject constructor(
     @ApplicationContext private val context: Context,
     private val settingsPreferences: SettingsPreferences,
     private val noteCrypto: NoteCrypto,
+    private val lockManager: LockManager,
 ) : ViewModel() {
 
     private companion object {
@@ -72,11 +115,53 @@ class SettingsViewModel @Inject constructor(
     val savedNote: String get() = _savedNote.value
 
     val databaseUpdate = mutableStateOf(false)
-    var password: String? = null
+
+    /** SEC-09: plaintext the settings screen may be holding; cleared when its session ends. */
+    private val plaintext = SettingsPlaintextState()
+
+    /**
+     * The backup password typed for a local export/import.
+     *
+     * SEC-09: stored in [plaintext] rather than as a bare field so the lock/Vault-eviction observer
+     * below clears it in one place. The persisted settings are never touched - a locked app simply
+     * has no in-memory password until the user types one again.
+     */
+    var password: String?
+        get() = plaintext.backupPassword
+        set(value) {
+            plaintext.backupPassword = value
+        }
+
+    /**
+     * R2-05: lets the settings screens close what they show when the session that authorized it
+     * ends. The ViewModel's own fields are cleared by the observer in `init`; a composable's local
+     * state (the password field, the scratchpad text, the loaded deck) has to observe the same two
+     * flows, otherwise only the dead fields were ever cleared (SEC-09).
+     */
+    val vaultSessionActive: StateFlow<Boolean> = lockManager.vaultSessionActive
+
+    /** R2-05: the app-lock half of the same rule; a credential gate also ends a settings session. */
+    val appLocked: StateFlow<Boolean> = lockManager.isLocked
 
     /** U10: local zip export/import is long enough to need a visible in-progress state. */
     var localBackupRunning by mutableStateOf(false)
         private set
+
+    /**
+     * SEC-03: the destination whose export was refused because a password was required.
+     *
+     * The repository returns a typed [BackupResult.Error.passwordRequired] instead of blaming the
+     * file. The screen observes this event and re-opens the password dialog for exactly that URI,
+     * so the export completes on the second attempt instead of failing silently behind a toast.
+     * Null means no export is waiting for a password.
+     */
+    private val _passwordRequiredExportUri = MutableStateFlow<Uri?>(null)
+    val passwordRequiredExportUri: StateFlow<Uri?> = _passwordRequiredExportUri.asStateFlow()
+
+    /** Clears the SEC-03 event once the screen has opened the password dialog for it. */
+    fun consumePasswordRequiredExport() {
+        _passwordRequiredExportUri.value = null
+    }
 
     /** T4: Tools only needs the note side-effects of opening settings, not the use case itself. */
     fun refreshNotes() {
@@ -145,14 +230,33 @@ class SettingsViewModel @Inject constructor(
 
 
     fun updateTermsOfService(accepted: Boolean) {
-        _settings.value = _settings.value.copy(termsOfService = accepted)
-        viewModelScope.launch {
-            settingsRepository.saveTermsOfService(accepted)
+        viewModelScope.launch { acceptTermsOfService(accepted) }
+    }
+
+    /**
+     * Persists the first-run acceptance and suspends until the dedicated DataStore write lands.
+     *
+     * TermsScreen awaits this before navigating to Home, so a process death immediately after the
+     * tap cannot lose the acceptance. The bulk settings writer no longer touches this key.
+     *
+     * R2-11: a failed write is reported instead of being swallowed. Claiming success and navigating
+     * would show the Terms again on the next cold start, which looks like the old "it pops up
+     * randomly" bug.
+     *
+     * @return true only when the acceptance is on disk.
+     */
+    suspend fun acceptTermsOfService(accepted: Boolean = true): Boolean {
+        val persisted = settingsRepository.saveTermsOfService(accepted)
+        if (persisted) {
+            _settings.value = _settings.value.copy(termsOfService = accepted)
         }
+        return persisted
     }
 
     fun update(newSettings: Settings) {
-        _settings.value = newSettings.copy()
+        // The bulk writer deliberately does not persist termsOfService; keep the live accepted
+        // flag from being visually reset by an unrelated settings change.
+        _settings.value = newSettings.copy(termsOfService = _settings.value.termsOfService)
         viewModelScope.launch {
             settingsUseCase.saveSettingsToRepository(newSettings)
             if (newSettings.autoBackupEnabled) {
@@ -300,8 +404,17 @@ class SettingsViewModel @Inject constructor(
             localBackupRunning = true
             try {
                 val result = backup.exportBackup(uri, password)
-                handleBackupResult(result, context)
-                databaseUpdate.value = true
+                if (result is BackupResult.Error && result.passwordRequired) {
+                    // SEC-03: the policy refused before touching the destination. Publish the URI
+                    // so Cloud.kt and Privacy.kt can ask for the password and retry the same file.
+                    // The toast stays as the fallback for any entry point that does not observe
+                    // the event (and for a screen that is not composed when it fires).
+                    _passwordRequiredExportUri.value = uri
+                    showToast(result.message.ifBlank { context.getString(R.string.error) }, context)
+                } else {
+                    handleBackupResult(result, context)
+                    databaseUpdate.value = true
+                }
             } finally {
                 localBackupRunning = false
             }
@@ -420,7 +533,11 @@ class SettingsViewModel @Inject constructor(
     }
 
     private fun showToast(message: String, context: Context) {
-        Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
+        // Callers include the flashcard save, which now runs on Dispatchers.IO; Toast must be
+        // created on a looper thread.
+        Handler(Looper.getMainLooper()).post {
+            Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
+        }
     }
 
     private var flashcardStorage = mutableListOf<Flashcard>()
@@ -476,29 +593,113 @@ class SettingsViewModel @Inject constructor(
         }
     }
 
+    /**
+     * PERF-14: serialise/seal/write the deck off the main thread.
+     *
+     * A save snapshots the whole deck; on a large deck Gson + Keystore + Base64 used to run inside
+     * the click handler. Requests are serialised by [flashcardSaveMutex] and the generation check
+     * lets an older queued snapshot be skipped - every snapshot is the complete deck, so writing
+     * only the newest one loses nothing.
+     */
     fun saveFlashcards(newList: List<Flashcard>) {
+        val generation = flashcardSaveGeneration.incrementAndGet()
+        viewModelScope.launch(Dispatchers.IO) {
+            flashcardSaveMutex.withLock {
+                if (generation == flashcardSaveGeneration.get()) persistFlashcards(newList)
+            }
+        }
+    }
+
+    /**
+     * Awaitable variant for a screen that is about to navigate away (back press).
+     *
+     * R4-06: it reports whether the deck really reached storage. The Flashcard screen used to
+     * navigate regardless, so a Keystore/seal failure silently threw away the last deck edit.
+     * A skipped snapshot (a newer complete one is queued) counts as success: that snapshot holds
+     * everything this one did and more.
+     */
+    suspend fun saveFlashcardsAndWait(newList: List<Flashcard>): Boolean {
+        val generation = flashcardSaveGeneration.incrementAndGet()
+        return withContext(Dispatchers.IO) {
+            flashcardSaveMutex.withLock {
+                if (generation == flashcardSaveGeneration.get()) persistFlashcards(newList) else true
+            }
+        }
+    }
+
+    private fun persistFlashcards(newList: List<Flashcard>): Boolean {
         // The stored deck could not be parsed, and this write is the empty list the failed load
         // produced: saving it would turn "unreadable" into "gone". A non-empty list means the user
         // is deliberately building a new deck, which is allowed (the old payload stays under
         // flashcards_key_corrupt either way).
         if (flashcardsUnreadable && newList.isEmpty()) {
             Log.w(TAG, "Refusing to overwrite unreadable flashcards with an empty list")
-            return
+            return true
         }
-        val json = gson.toJson(newList, listType)
-        val sealed = try {
-            noteCrypto.seal(json)
-        } catch (e: Exception) {
-            // SEC-4: never fall back to plaintext. Failing the save leaves the stored deck as it
+        // R5-06: every step can fail - Gson serialisation, the Keystore seal, the prefs write.
+        // Any of them must reach the caller as "not saved" so the Flashcard screen stays put
+        // instead of navigating away from the only copy of the last edit.
+        return try {
+            val json = gson.toJson(newList, listType)
+            // SEC-4: never fall back to plaintext. A failed seal leaves the stored deck as it
             // was, which is recoverable; writing readable JSON to disk is not.
-            Log.e(TAG, "Could not seal the flashcards; keeping the stored deck untouched", e)
+            val sealed = noteCrypto.seal(json)
+            // R6-05: apply() cannot report a disk-full/commit failure. Commit and treat false as
+            // "not saved" so the Flashcard screen stays on the only copy of the last edit.
+            val written = flashPrefs.edit()
+                .putString("flashcards_key", sealed)
+                .commit()
+            if (!written) {
+                Log.e(TAG, "Could not write the flashcards deck; keeping the stored deck untouched")
+                showToast(context.getString(R.string.restore_fix_flashcards_save_failed), context)
+                return false
+            }
+            flashcardsUnreadable = false
+            true
+        } catch (e: Exception) {
+            Log.e(TAG, "Could not seal or store the flashcards; keeping the stored deck untouched", e)
             showToast(context.getString(R.string.restore_fix_flashcards_save_failed), context)
-            return
+            false
         }
-        flashPrefs.edit()
-            .putString("flashcards_key", sealed)
-            .apply()
-        flashcardsUnreadable = false
+    }
+
+    private val flashcardSaveMutex = Mutex()
+    private val flashcardSaveGeneration = AtomicLong()
+
+    /**
+     * SEC-09: drops the in-memory plaintext when the app locks or the Vault session ends.
+     *
+     * Both observations are needed. `isLocked` covers an app credential; `vaultSessionActive`
+     * covers the no-app-lock install whose Vault passphrase is evicted on background. An eviction
+     * while a settings screen is open used to leave the typed backup password and any decrypted
+     * text alive in this ViewModel - a heap dump could still read it after the gate went up.
+     *
+     * Clearing `password` also makes the next export re-prompt: the repository reports
+     * `passwordRequired` again, and both Cloud.kt and Privacy.kt re-open the dialog for that URI.
+     * Nothing persisted is cleared; only these process-lifetime copies. The block sits at the end
+     * of the class so every field it clears is already initialized when the first emission lands.
+     */
+    init {
+        viewModelScope.launch {
+            lockManager.isLocked.collect { locked ->
+                clearPlaintextAfterSessionEnd(locked, lockManager.vaultSessionActive.value)
+            }
+        }
+        viewModelScope.launch {
+            lockManager.vaultSessionActive.collect { active ->
+                clearPlaintextAfterSessionEnd(lockManager.isLocked.value, active)
+            }
+        }
+    }
+
+    private fun clearPlaintextAfterSessionEnd(isLocked: Boolean, vaultSessionActive: Boolean) {
+        if (!plaintext.shouldClear(isLocked, vaultSessionActive)) return
+        plaintext.clear()
+        // The scratchpad and the deck are read through loadNote()/loadFlashcards() rather than
+        // cached here, but these two fields are the places any future caching would land; clearing
+        // them keeps the "no decrypted copy survives the session" rule true if they are used.
+        flashcardStorage = mutableListOf()
+        _savedNote.value = ""
     }
 
     val version: String = BuildConfig.VERSION_NAME

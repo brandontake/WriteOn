@@ -12,7 +12,6 @@ import com.ezpnix.writeon.presentation.screens.settings.model.SettingsViewModel
 import com.ezpnix.writeon.presentation.screens.settings.settings.AboutScreen
 import com.ezpnix.writeon.presentation.screens.settings.settings.ColorStylesScreen
 import com.ezpnix.writeon.presentation.screens.settings.settings.LanguageScreen
-import com.ezpnix.writeon.presentation.screens.settings.settings.MarkdownScreen
 import com.ezpnix.writeon.presentation.screens.settings.settings.PrivacyScreen
 import com.ezpnix.writeon.presentation.screens.settings.settings.IssueScreen
 import com.ezpnix.writeon.presentation.screens.settings.settings.ToolsScreen
@@ -28,6 +27,8 @@ sealed class NavRoutes(val route: String) {
     data object ColorStyles : NavRoutes("settings/color_styles")
     data object Language : NavRoutes("settings/language")
     data object Privacy : NavRoutes("settings/privacy")
+    // Compatibility destination: a back stack saved by an older build can still contain
+    // "settings/markdown". The page was merged into Tools, so restoring it opens Tools.
     data object Markdown : NavRoutes("settings/markdown")
     data object Tools : NavRoutes("settings/tools")
     data object About : NavRoutes("settings/about")
@@ -49,7 +50,7 @@ val settingScreens = mapOf<String, @Composable (settingsViewModel: SettingsViewM
     NavRoutes.ColorStyles.route to { settings, navController -> ColorStylesScreen(navController,settings) },
     NavRoutes.Language.route to { settings, navController -> LanguageScreen(navController,settings) },
     NavRoutes.Privacy.route to { settings, navController -> PrivacyScreen(navController, settings) },
-    NavRoutes.Markdown.route to { settings, navController -> MarkdownScreen(navController,settings) },
+    NavRoutes.Markdown.route to { settings, navController -> ToolsScreen(navController, settings) },
     NavRoutes.Tools.route to { settings, navController -> ToolsScreen(navController,settings) },
     NavRoutes.About.route to { settings, navController -> AboutScreen(navController,settings) },
     NavRoutes.Scratchpad.route to { settings, navController -> ScratchpadScreen(navController,settings) },

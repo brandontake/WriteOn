@@ -61,23 +61,42 @@ fun SaveButton(onSaveClicked: () -> Unit) {
 }
 
 @Composable
-fun UndoButton(onUndoClicked: () -> Unit) {
-    IconButton(onClick = onUndoClicked) {
+fun UndoButton(
+    enabled: Boolean = true,
+    onUndoClicked: () -> Unit
+) {
+    // UX-07: outlineVariant is a border role and measured ~1.2:1 on the toolbar surface. The icon
+    // uses onSurfaceVariant and is dimmed by hand when there is nothing to undo, because an
+    // explicit tint would otherwise stay opaque even with IconButton(enabled = false).
+    val tint = if (enabled) {
+        MaterialTheme.colorScheme.onSurfaceVariant
+    } else {
+        MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f)
+    }
+    IconButton(onClick = onUndoClicked, enabled = enabled) {
         Icon(
             imageVector = Icons.AutoMirrored.Rounded.Undo,
             contentDescription = stringResource(R.string.cd_undo),
-            tint = MaterialTheme.colorScheme.outlineVariant
+            tint = tint
         )
     }
 }
 
 @Composable
-fun RedoButton(onRedoClicked: () -> Unit) {
-    IconButton(onClick = onRedoClicked) {
+fun RedoButton(
+    enabled: Boolean = true,
+    onRedoClicked: () -> Unit
+) {
+    val tint = if (enabled) {
+        MaterialTheme.colorScheme.onSurfaceVariant
+    } else {
+        MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f)
+    }
+    IconButton(onClick = onRedoClicked, enabled = enabled) {
         Icon(
             imageVector = Icons.AutoMirrored.Rounded.Redo,
             contentDescription = stringResource(R.string.cd_redo),
-            tint = MaterialTheme.colorScheme.outlineVariant
+            tint = tint
         )
     }
 }

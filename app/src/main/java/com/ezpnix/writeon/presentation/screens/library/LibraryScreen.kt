@@ -4,6 +4,7 @@ import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -13,14 +14,17 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -186,6 +190,7 @@ fun LibraryScreen(
                         attachment = attachment,
                         cornerRadius = cornerRadius,
                         onOpen = { fullScreenAttachment = attachment },
+                        onActions = { sheetAttachment = attachment },
                         onLongPress = { sheetAttachment = attachment }
                     )
                 }
@@ -315,25 +320,50 @@ private fun LibraryImageCell(
     attachment: Attachment,
     cornerRadius: Int,
     onOpen: () -> Unit,
+    onActions: () -> Unit,
     onLongPress: () -> Unit
 ) {
     // SEC-4: an encrypted picture resolves to a decrypted cache copy; null means "not ready yet".
     val path = AttachmentRegistry.playablePath(attachment.id)
     val shape = RoundedCornerShape((cornerRadius / 2).coerceAtLeast(8).dp)
+    val actionsLabel = stringResource(R.string.cd_attachment_actions)
     Box(
         modifier = Modifier
             .aspectRatio(1f)
             .clip(shape)
-            .combinedClickable(onClick = onOpen, onLongClick = onLongPress)
+            // UX-10: a tap still opens the viewer, but save/delete no longer live only behind a
+            // guessed long press: the overflow button in the corner opens the same sheet, and both
+            // gestures are labelled for TalkBack.
+            .combinedClickable(
+                onClick = onOpen,
+                onLongClick = onLongPress,
+                onClickLabel = stringResource(R.string.attachment_open_image),
+                onLongClickLabel = actionsLabel
+            )
     ) {
         if (path == null) {
             MissingAttachment(radius = cornerRadius / 2, modifier = Modifier.fillMaxSize())
         } else {
             AsyncImage(
                 model = path,
-                contentDescription = null,
+                contentDescription = stringResource(R.string.cd_attachment_image),
                 contentScale = ContentScale.Crop,
                 modifier = Modifier.fillMaxSize()
+            )
+        }
+        IconButton(
+            onClick = onActions,
+            modifier = Modifier
+                .align(Alignment.TopEnd)
+                .padding(6.dp)
+                .size(32.dp)
+                .clip(CircleShape)
+                .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.85f))
+        ) {
+            Icon(
+                imageVector = Icons.Rounded.MoreVert,
+                contentDescription = actionsLabel,
+                modifier = Modifier.size(18.dp)
             )
         }
     }

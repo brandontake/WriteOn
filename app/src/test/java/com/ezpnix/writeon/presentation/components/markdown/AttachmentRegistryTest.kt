@@ -2,6 +2,7 @@ package com.ezpnix.writeon.presentation.components.markdown
 
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
+import com.ezpnix.writeon.core.attachment.AttachmentArchive
 import com.ezpnix.writeon.core.attachment.MediaFileCipher
 import com.ezpnix.writeon.domain.model.Attachment
 import java.io.File
@@ -44,15 +45,31 @@ class AttachmentRegistryTest {
 
     @Test
     fun `a plaintext attachment resolves to its stored path`() {
-        val file = File(context.filesDir, "legacy.jpg").apply {
-            parentFile?.mkdirs()
-            writeBytes(byteArrayOf(1, 2, 3, 4))
-        }
+        // REG-05: the row path must live under one of the app's media roots like every other
+        // renderable path; a legitimate attachment does.
+        val file = File(context.filesDir, AttachmentArchive.DIRECTORY).apply { mkdirs() }
+            .resolve("legacy.jpg")
+            .apply { writeBytes(byteArrayOf(1, 2, 3, 4)) }
         AttachmentRegistry.put(attachment(PLAINTEXT_ID, file.absolutePath))
 
-        assertEquals(file.absolutePath, AttachmentRegistry.resolve("attachment://$PLAINTEXT_ID"))
-        assertEquals(file.absolutePath, AttachmentRegistry.playablePath(PLAINTEXT_ID))
+        assertEquals(file.canonicalPath, AttachmentRegistry.resolve("attachment://$PLAINTEXT_ID"))
+        assertEquals(file.canonicalPath, AttachmentRegistry.playablePath(PLAINTEXT_ID))
         assertEquals("the stored path is still the one a delete or a backup must use", file.absolutePath, AttachmentRegistry.path(PLAINTEXT_ID))
+    }
+
+    @Test
+    fun `a row path outside the media roots is refused`() {
+        // An `attachments` row that was constructed or restored is untrusted input too.
+        val outside = File(context.filesDir, "outside-root.jpg").apply {
+            writeBytes(byteArrayOf(1))
+        }
+        AttachmentRegistry.put(attachment(PLAINTEXT_ID, outside.absolutePath))
+        try {
+            assertNull(AttachmentRegistry.resolve("attachment://$PLAINTEXT_ID"))
+            assertNull(AttachmentRegistry.playablePath(PLAINTEXT_ID))
+        } finally {
+            AttachmentRegistry.remove(listOf(PLAINTEXT_ID))
+        }
     }
 
     @Test
@@ -63,10 +80,9 @@ class AttachmentRegistryTest {
 
     @Test
     fun `an encrypted attachment is never returned as ciphertext`() {
-        val file = File(context.filesDir, "secret.jpg").apply {
-            parentFile?.mkdirs()
-            writeBytes(wmvHeader())
-        }
+        val file = File(context.filesDir, AttachmentArchive.DIRECTORY).apply { mkdirs() }
+            .resolve("secret.jpg")
+            .apply { writeBytes(wmvHeader()) }
         AttachmentRegistry.put(attachment(ENCRYPTED_ID, file.absolutePath))
 
         // Not ready on the frame that asked: the caller draws its placeholder.
@@ -79,9 +95,33 @@ class AttachmentRegistryTest {
     }
 
     @Test
-    fun `a target that is not an attachment id passes through untouched`() {
-        // 1.x notes stored absolute paths in their bodies; those files are plaintext by definition.
-        assertEquals("/legacy/path/IMG_0001.jpg", AttachmentRegistry.resolve("/legacy/path/IMG_0001.jpg"))
+    fun `a legacy path outside the app media roots is refused`() {
+        // 1.x notes stored absolute paths in their bodies. A path is only renderable when it is a
+        // canonical file under one of the app's own media roots; anything else could be an
+        // attacker-controlled scheme or a private file, so rendering must fall back to the
+        // placeholder instead of handing the string to Coil/MediaPlayer (SEC-06).
+        assertNull(AttachmentRegistry.resolve("/legacy/path/IMG_0001.jpg"))
+    }
+
+    @Test
+    fun `a file encrypted in place is never served as plaintext from the old classification`() {
+        val file = File(context.filesDir, AttachmentArchive.DIRECTORY).apply { mkdirs() }
+            .resolve("migrated.jpg")
+            .apply { writeBytes(byteArrayOf(1, 2, 3, 4)) }
+        AttachmentRegistry.put(attachment(PLAINTEXT_ID, file.absolutePath))
+        assertEquals("plaintext first", file.canonicalPath, AttachmentRegistry.playablePath(PLAINTEXT_ID))
+
+        // R2-02: the startup LegacyMediaMigration rewrites the file in place while this process is
+        // alive. The registry had cached "plaintext" for the path, so it kept returning the raw
+        // path - now a WMV1 container - to the image renderer and the save-to-gallery export.
+        file.writeBytes(wmvHeader())
+        AttachmentRegistry.clearEncryptionClassification()
+
+        assertNull(
+            "an encrypted file must not be handed out as if it were plaintext",
+            AttachmentRegistry.playablePath(PLAINTEXT_ID)
+        )
+        AttachmentRegistry.remove(listOf(PLAINTEXT_ID))
     }
 
     private fun attachment(id: String, path: String): Attachment =

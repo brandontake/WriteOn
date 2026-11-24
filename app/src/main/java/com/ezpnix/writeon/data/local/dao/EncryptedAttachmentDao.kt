@@ -70,6 +70,13 @@ class EncryptedAttachmentDao(
         delegate.upsert(items.map(::sealCaption))
     }
 
+    /** DAT-07: the caption-only compare-and-swap is a raw write; no seal may be re-applied. */
+    override suspend fun updateCaptionIfMatches(
+        id: String,
+        previousCaption: String,
+        newCaption: String,
+    ): Int = delegate.updateCaptionIfMatches(id, previousCaption, newCaption)
+
     /**
      * Passed straight through: assigning a note or moving a row to/from the recycle bin does not
      * change the caption, and a seal here would rewrite the same text as fresh ciphertext for no
@@ -120,6 +127,10 @@ class EncryptedAttachmentDao(
      * row is written back **through the delegate** too, so a successful seal is not re-sealed and a
      * failure leaves the original plaintext (the only readable copy) exactly where it was.
      *
+     * DAT-07: the write is a single-column compare-and-swap, not a full-row `REPLACE`. A row the
+     * user trashes or deletes while this sweep runs no longer matches, so the sweep can never
+     * resurrect it with a stale `trashed_at`; zero rows changed is a skip, not a failure.
+     *
      * @return how many rows are still plain because their seal or write failed; 0 means the sweep
      *   finished and the caller may record it as done. Failed rows are retried on the next launch.
      */
@@ -129,7 +140,10 @@ class EncryptedAttachmentDao(
             val caption = row.caption
             if (caption.isEmpty() || NoteSealFormat.isSealedValue(caption)) return@forEach
             try {
-                delegate.upsert(row.copy(caption = seal(caption)))
+                val sealed = seal(caption)
+                // 0 = the row was deleted or its caption changed under the sweep. Both mean there
+                // is nothing left to seal; counting it as a failure would retry forever.
+                delegate.updateCaptionIfMatches(row.id, caption, sealed)
             } catch (e: kotlinx.coroutines.CancellationException) {
                 // Cancelling the sweep is not a seal failure: rethrow so the caller leaves its
                 // "done" flag unwritten and the next launch retries the whole batch.

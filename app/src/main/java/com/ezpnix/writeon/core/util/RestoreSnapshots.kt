@@ -3,6 +3,7 @@ package com.ezpnix.writeon.core.util
 import android.content.Context
 import android.util.Log
 import com.ezpnix.writeon.core.attachment.AttachmentSnapshots
+import com.ezpnix.writeon.core.attachment.LegacyMediaMigration
 import com.ezpnix.writeon.core.constant.DatabaseConst
 import com.ezpnix.writeon.data.backup.FlashcardArchive
 import com.ezpnix.writeon.data.backup.RestoreJournal
@@ -85,9 +86,14 @@ object RestoreSnapshots {
      *
      * The third argument is where the *replaced* (current) database is parked. It is a parameter
      * rather than `.bak` on purpose - see [swapInPrevious].
+     *
+     * TST-06: [onBeforeLock] runs on the IO dispatcher immediately before [BackupRestoreLock] is
+     * taken. It exists for the N-7 test, which has to know that this call has reached the lock
+     * before it replaces `.bak`; a fixed sleep only guessed. Production passes `null`.
      */
     internal suspend fun restorePrevious(
         context: Context,
+        onBeforeLock: (() -> Unit)? = null,
         install: (target: File, staged: File, replaced: File) -> Unit,
     ): Result<Unit> {
         val target = liveDatabaseFile(context)
@@ -99,6 +105,10 @@ object RestoreSnapshots {
         }
 
         return withContext(Dispatchers.IO) {
+            // Reached the lock boundary: the callback fires before any suspension on the mutex, so
+            // a test holding the lock can replace `.bak` while this call is guaranteed not to have
+            // read it yet (the lock is still held by the test).
+            onBeforeLock?.invoke()
             // Waiting for the lock is still cancellable: nothing has been closed or written yet,
             // so a cancelled caller simply sees CancellationException and the files are untouched.
             BackupRestoreLock.mutex.withLock {
@@ -196,15 +206,32 @@ object RestoreSnapshots {
             // database move lands but the process dies before prefs/attachments follow, startup
             // finishes the snapshot's state; if it does not land, the live values stay untouched.
             val found = sidecar as? SnapshotSidecar.ReadResult.Found
-            val journalDeck = found?.contents?.flashcards?.let(FlashcardArchive::resealRawForRecovery)
+            val rawDeck = found?.contents?.flashcards
+            val journalDeck = rawDeck?.let(FlashcardArchive::resealRawForRecovery)
+            // DAT-04: a deck that exists must be in the crash-recovery journal. Re-sealing can fail
+            // when the Keystore is read-only/unavailable; a legacy plaintext deck can still be
+            // written verbatim (restoreRaw/openForRecovery pass plaintext through), and a sealed
+            // deck this process can open can be journaled in its raw form. Only a deck this install
+            // cannot read at all aborts the undo - skipping it would silently lose the deck after a
+            // crash, and writing it would make recovery retry forever.
+            val deckForJournal = journalDeck ?: rawDeck?.takeIf {
+                FlashcardArchive.openForRecovery(it) != null
+            }
+            if (rawDeck != null && deckForJournal == null) {
+                throw IOException("Could not read the flashcard deck before undoing")
+            }
             if (!RestoreJournal.write(
                     context = context,
                     restoredDb = snapshot,
                     newSalt = found?.contents?.vaultSalt,
-                    newDeckSealed = journalDeck,
+                    newDeckSealed = deckForJournal,
                     setSalt = found != null,
-                    setDeck = found != null &&
-                        (found.contents.flashcards == null || journalDeck != null),
+                    // DAT-04/R2-04: the sidecar is also authoritative when it has no deck. The
+                    // non-crash path runs `restoreRaw(null)` and clears the deck, so the crash
+                    // path must do the same; `setDeck = rawDeck != null` left the current deck in
+                    // place, making a kill change what the undo produces.
+                    setDeck = found != null,
+                    deckRequired = rawDeck != null,
                     attachmentTarget = found?.contents?.attachmentSnapshot,
                     attachmentDiscard = redoSnapshot,
                 )
@@ -313,6 +340,11 @@ object RestoreSnapshots {
         // backfill of exactly the rows this restore brought back.
         LegacyPlaintextBackfillFlag.reset(context)
         LegacyCaptionBackfillFlag.reset(context)
+        // SEC-08: the undo may have put back an attachment tree captured by a build before the
+        // legacy-media migration ran. AttachmentSnapshots.install moves bytes unchanged (unlike
+        // AttachmentArchive.install, which re-encrypts), so the next launch must rescan instead of
+        // trusting a marker written for the tree this undo just replaced.
+        LegacyMediaMigration.reset(context)
         return Result.success(Unit)
     }
 

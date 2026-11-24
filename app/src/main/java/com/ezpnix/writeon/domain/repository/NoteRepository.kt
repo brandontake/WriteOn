@@ -2,6 +2,7 @@ package com.ezpnix.writeon.domain.repository
 import com.ezpnix.writeon.domain.model.Attachment
 import com.ezpnix.writeon.domain.model.Note
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.map
 interface NoteRepository {
     fun getAllNotes(): Flow<List<Note>>
     suspend fun getAllNotesSync(): List<Note>
@@ -16,12 +17,17 @@ interface NoteRepository {
      * rows delete), so a failure in the middle left "new body, old attachment rows" or the reverse.
      * The transaction covers the database only - file deletion happens after it commits, because
      * an orphan file is recoverable while a row pointing at a deleted file is not.
+     *
+     * DAT-02: rows the new body stopped referencing are **trashed**, not deleted. A save can be
+     * undone from its snackbar, and that undo only restores the note row; permanently deleting the
+     * attachment row and file here left the restored body with dead links and destroyed the only
+     * copy of a recording. The recycle-bin row and its file are what make that undo complete.
      */
     suspend fun saveNoteWithAttachments(
         note: Note,
         upsertAttachments: List<Attachment>,
         reviveAttachmentIds: List<String>,
-        deleteAttachmentIds: List<String>,
+        trashAttachmentIds: List<String>,
     ): Int
 
     /**
@@ -43,17 +49,37 @@ interface NoteRepository {
     suspend fun updatePlainDescription(id: Int, description: String)
 
     /**
-     * A4: replaces both already-sealed columns of a vault row.
+     * A4/DAT-01: replaces both already-sealed columns of a vault row, but only while it still
+     * holds the bytes the sweep read.
      *
      * Only the vault upgrade path uses this; the values are sealed with the user's password
-     * before they arrive, so no Keystore wrapping may be applied on top.
+     * before they arrive, so no Keystore wrapping may be applied on top. The `previous*` values
+     * make the write a compare-and-swap: the sweep may run for tens of seconds on the first unlock
+     * of an old library, and a note saved from the editor in that window must keep the ciphertext
+     * that save wrote instead of receiving the sweep's older snapshot back.
      *
-     * @return the number of rows changed (0 when the row is gone or is not a vault row).
+     * @return the number of rows changed (0 when the row is gone, is not a vault row, or no
+     *   longer holds [previousName]/[previousDescription]).
      */
-    suspend fun updateVaultFields(id: Int, name: String, description: String): Int
+    suspend fun updateVaultFields(
+        id: Int,
+        previousName: String,
+        previousDescription: String,
+        name: String,
+        description: String,
+    ): Int
 
     fun getNoteById(id: Int): Flow<Note>
     fun getTrashedNotes(): Flow<List<Note>>
+
+    /**
+     * PERF-07: row count for the drawer badge.
+     *
+     * The default keeps every test fake and alternate implementation working; the production
+     * repository overrides it with a `SELECT COUNT(*)` so the badge never decrypts the bin.
+     */
+    fun getTrashedNoteCount(): Flow<Int> = getTrashedNotes().map { it.size }
+
     fun getNotesByTag(tag: String): Flow<List<Note>>
     suspend fun getAllTags(): List<String>
     suspend fun batchUpdateNotes(notes: List<Note>)
@@ -96,4 +122,31 @@ interface NoteRepository {
     fun observeAttachmentsByType(type: String): Flow<List<Attachment>>
     fun observeTrashedAttachments(): Flow<List<Attachment>>
     suspend fun setAttachmentTrashed(ids: List<String>, trashedAt: Long?)
+
+    /**
+     * R6-04: moves the attachment row and writes the owning note in one transaction.
+     *
+     * The vault trash/restore paths rewrite the note body, so a failure between the row update and
+     * the body write used to leave the recycle bin and the note disagreeing. The default keeps
+     * test fakes working; production overrides it with a Room transaction.
+     */
+    suspend fun setAttachmentTrashedAndUpdateNote(
+        attachmentId: String,
+        trashedAt: Long?,
+        note: Note,
+    ) {
+        setAttachmentTrashed(listOf(attachmentId), trashedAt)
+        updateNote(note)
+    }
+
+    /** R6-04: plain-note variant of [setAttachmentTrashedAndUpdateNote]. */
+    suspend fun setAttachmentTrashedAndUpdatePlainDescription(
+        attachmentId: String,
+        trashedAt: Long?,
+        noteId: Int,
+        description: String,
+    ) {
+        setAttachmentTrashed(listOf(attachmentId), trashedAt)
+        updatePlainDescription(noteId, description)
+    }
 }

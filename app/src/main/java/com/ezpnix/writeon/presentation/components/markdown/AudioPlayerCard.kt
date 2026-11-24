@@ -98,7 +98,18 @@ fun AudioPlayerCard(
      * Called when the user confirms the delete entry in the card menu. The editor and the home feed
      * move the attachment to the recycle bin; the recycle bin passes null and no entry is offered.
      */
-    onDelete: (() -> Unit)? = null
+    onDelete: (() -> Unit)? = null,
+    /**
+     * Called when the segmented editor's "Edit Markdown" entry is chosen. Readers and the library do
+     * not pass it, so the entry only exists where rewriting the attachment line makes sense.
+     */
+    onEditSource: (() -> Unit)? = null,
+    /**
+     * Whether the card asks for confirmation before calling [onDelete]. The segmented editor passes
+     * false because its own dialog is the single confirmation there; the library and trash keep the
+     * card-owned confirmation.
+     */
+    confirmDelete: Boolean = true
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -335,17 +346,30 @@ fun AudioPlayerCard(
                                     showRename = true
                                 }
                             )
+                            if (onEditSource != null) {
+                                DropdownMenuItem(
+                                    text = { Text(stringResource(R.string.attachment_edit_source)) },
+                                    onClick = {
+                                        showMenu = false
+                                        onEditSource()
+                                    }
+                                )
+                            }
                             if (onDelete != null) {
                                 DropdownMenuItem(
                                     text = {
                                         Text(
-                                            stringResource(R.string.delete),
+                                            stringResource(R.string.attachment_delete),
                                             color = MaterialTheme.colorScheme.error
                                         )
                                     },
                                     onClick = {
                                         showMenu = false
-                                        showDeleteConfirm = true
+                                        if (confirmDelete) {
+                                            showDeleteConfirm = true
+                                        } else {
+                                            onDelete()
+                                        }
                                     }
                                 )
                             }

@@ -23,6 +23,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.unit.dp
 import com.ezpnix.writeon.R
 
@@ -97,7 +100,18 @@ private fun RowScope.PinKey(digit: String, onClick: () -> Unit) {
 
 @Composable
 private fun PinDots(count: Int) {
-    Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+    // UX-03: the dots are the only progress indicator the PIN pad has, and as plain Boxes they
+    // were invisible to a screen reader. One merged node reports how many digits are entered, so
+    // TalkBack says "2 of 6 digits entered" instead of reading nothing at all.
+    val dotsDescription = stringResource(R.string.lock_a11y_pin_dots)
+    val progressDescription = stringResource(R.string.lock_a11y_pin_progress, count, LockManager.MAX_PIN_LENGTH)
+    Row(
+        horizontalArrangement = Arrangement.spacedBy(14.dp),
+        modifier = Modifier.semantics(mergeDescendants = true) {
+            contentDescription = dotsDescription
+            stateDescription = progressDescription
+        },
+    ) {
         repeat(LockManager.MAX_PIN_LENGTH) { index ->
             Box(
                 modifier = Modifier

@@ -120,22 +120,33 @@ class EncryptedNoteDao(
 
     override suspend fun addNote(note: Note) {
         delegate.addNote(encryptNote(note))
+        // PERF-03: a text write invalidates the row cache even when the id already existed
+        // (`addNote` is also the update path for a caller that already has an id).
+        crypto.invalidateRow(note.id)
     }
 
     override suspend fun addNoteReturningId(note: Note): Long {
-        return delegate.addNoteReturningId(encryptNote(note))
+        val id = delegate.addNoteReturningId(encryptNote(note))
+        crypto.invalidateRow(id.toInt())
+        return id
     }
 
-    override suspend fun updateNote(note: Note) {
-        delegate.updateNote(encryptNote(note))
+    override suspend fun updateNote(note: Note): Int {
+        // CQ-08: the affected row count is what lets the save transaction refuse to attach rows to
+        // a note that was deleted after its body was read.
+        val changed = delegate.updateNote(encryptNote(note))
+        crypto.invalidateRow(note.id)
+        return changed
     }
 
     override suspend fun batchUpdateNotes(notes: List<Note>) {
         delegate.batchUpdateNotes(notes.map(::encryptNote))
+        notes.forEach { crypto.invalidateRow(it.id) }
     }
 
     override suspend fun deleteNote(note: Note) {
         delegate.deleteNote(note)
+        crypto.invalidateRow(note.id)
     }
 
     override suspend fun updatePinned(id: Int, pinned: Boolean) {
@@ -149,7 +160,11 @@ class EncryptedNoteDao(
      * through the Keystore path would double-seal them and the note would become unreadable.
      */
     override suspend fun updateVaultFields(id: Int, name: String, description: String): Int =
-        delegate.updateVaultFields(id, name, description)
+        delegate.updateVaultFields(id, name, description).also {
+            // Vault text is passed through verbatim, but it is still this row's text: a cached
+            // plaintext from the previous ciphertext must not survive the write.
+            crypto.invalidateRow(id)
+        }
 
     override suspend fun updateTags(id: Int, tags: List<String>) {
         delegate.updateTags(id, tags)
@@ -161,6 +176,7 @@ class EncryptedNoteDao(
 
     override suspend fun updatePlainDescription(id: Int, description: String) {
         delegate.updatePlainDescription(id, crypto.seal(description))
+        crypto.invalidateRow(id)
     }
 
     /**
@@ -195,7 +211,7 @@ class EncryptedNoteDao(
         previousDescription = previousDescription,
         name = name,
         description = description,
-    )
+    ).also { crypto.invalidateRow(id) }
 
     /**
      * SEC-5: seals every non-vault row still stored as plain text, once and proactively.
@@ -246,7 +262,14 @@ class EncryptedNoteDao(
                     // 0 means the row was deleted, became a vault row, or was saved by the editor
                     // while the sweep was running. None of those leaves it plain, so nothing was
                     // lost: the caller counts it as "nothing to do".
-                    if (changed > 0) sealedRows++ else alreadySealedRows++
+                    if (changed > 0) {
+                        // PERF-03: this write went straight to the delegate, so it is the sweep's
+                        // job to drop the row cache entry (a new ciphertext for the same text).
+                        crypto.invalidateRow(row.id)
+                        sealedRows++
+                    } else {
+                        alreadySealedRows++
+                    }
                 }
             }
         }
@@ -268,8 +291,18 @@ class EncryptedNoteDao(
 
     override fun getTrashedNotes(): Flow<List<Note>> =
         delegate.getTrashedNotes()
+            // PERF-03/PERF-07: same rule as getAllNotes - Room re-emits on any table write, and
+            // decrypting an unchanged recycle bin again is pure waste. The row cache makes each
+            // unchanged row cheap; this keeps the whole map from running at all.
+            .distinctUntilChanged()
             .map { notes -> decryptList(notes, DecryptFailureRegistry.SCOPE_TRASHED) }
             .flowOn(Dispatchers.IO)
+
+    /**
+     * PERF-07: the badge count is a raw SQL aggregate, so it must not go through [decryptList].
+     * Vault rows a locked process cannot read are still in the bin and still count.
+     */
+    override fun getTrashedNoteCount(): Flow<Int> = delegate.getTrashedNoteCount()
 
     /**
      * Decrypts a whole refresh result and reports the outcome to [DecryptFailureRegistry].
@@ -311,7 +344,15 @@ class EncryptedNoteDao(
         // stored verbatim and can never fail the Keystore path.
         if (note.encrypted) return note
         return try {
-            note.copy(name = crypto.open(note.name), description = crypto.open(note.description))
+            // PERF-03: both columns go through the row cache, so an unchanged row that Room
+            // re-emits costs a map lookup instead of a base64 decode plus AES-GCM.
+            val (name, description) = crypto.openRow(
+                id = note.id,
+                updatedAt = note.updatedAt,
+                name = note.name,
+                description = note.description
+            )
+            note.copy(name = name, description = description)
         } catch (e: Exception) {
             Log.w(TAG, "Could not decrypt note ${note.id}; degrading this row", e)
             null

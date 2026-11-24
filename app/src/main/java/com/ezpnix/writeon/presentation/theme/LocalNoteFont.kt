@@ -113,7 +113,7 @@ object NoteFontManager {
             // corrupt/unsupported file, so it must NOT be used as validation.
             // Typeface.Builder.build() returns null (instead of throwing) when the
             // file is not a loadable font, which is exactly what we need here.
-            // (Typeface.Builder is API 26+, matching this app's minSdk.)
+            // (Typeface.Builder needs API 26, well below this app's minSdk of 33.)
             Typeface.Builder(tempFile).build()
                 ?: throw IllegalStateException("The selected file is not a valid font")
 

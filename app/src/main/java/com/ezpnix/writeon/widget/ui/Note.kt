@@ -21,12 +21,15 @@ import androidx.glance.layout.fillMaxWidth
 import androidx.glance.layout.padding
 import androidx.glance.text.FontWeight
 import com.ezpnix.writeon.R
+import com.ezpnix.writeon.core.util.NoteBodyEditLock
 import com.ezpnix.writeon.domain.model.Note
 import com.ezpnix.writeon.domain.usecase.NoteUseCase
 import com.ezpnix.writeon.presentation.MainActivity
 import com.ezpnix.writeon.presentation.components.markdown.WidgetText
+import com.ezpnix.writeon.presentation.components.markdown.widgetBodyLine
 import com.ezpnix.writeon.presentation.lock.LockEntryPoint
 import com.ezpnix.writeon.presentation.lock.LockManager
+import com.ezpnix.writeon.presentation.screens.home.viewmodel.toggleCheckboxInLatestBody
 import com.ezpnix.writeon.widget.NotesWidget
 import dagger.hilt.android.EntryPointAccessors
 import kotlinx.coroutines.CoroutineScope
@@ -101,34 +104,55 @@ fun SelectedNote(note: Note, noteUseCase: NoteUseCase, widgetId: Int) {
                     weight = FontWeight.Normal,
                     fontSize = 13.sp,
                     color = GlanceTheme.colors.onSurface,
-                    onContentChange = { updated ->
-                        CoroutineScope(Dispatchers.IO).launch {
-                            val lines = updated.lines()
-                            val hasHeading = lines.firstOrNull()?.startsWith("# ") == true
-                            val newName = if (hasHeading) lines.first().removePrefix("# ").trim() else note.name
-                            val newDesc = if (hasHeading) {
-                                lines.drop(1).joinToString("\n").trimStart('\n')
-                            } else {
-                                updated
-                            }
-                            // Saving a vault note without a loaded passphrase must fail loudly (see
-                            // NoteUseCase.encryptNote). In a widget coroutine an uncaught throw would
-                            // take the process down, so it is reported here instead of crashing.
-                            val saved = runCatching {
-                                noteUseCase.addNote(note.copy(name = newName, description = newDesc))
-                            }
-                            saved.onFailure { error ->
-                                android.util.Log.e("WidgetNote", "Could not save the widget edit", error)
-                            }
-                            if (saved.isSuccess) {
-                                // PERF-3: no observe() here. The old call started (another) full
-                                // library collector from a widget, and every one of those lived for
-                                // the process. A redraw is enough: each placed widget re-enters
-                                // provideGlance and reads only its own note (PERF-6).
-                                runCatching { NotesWidget().updateAll(context) }
-                                    .onFailure { error ->
-                                        android.util.Log.e("WidgetNote", "Could not refresh the widget", error)
+                    onCheckboxChange = { lineNumber, text, checked ->
+                        // R4-05: the offset is derived from the actual title, not a fixed two
+                        // lines. A tap on a title continuation line maps to null and is ignored.
+                        val bodyLine = widgetBodyLine(lineNumber, note.name)
+                        if (bodyLine != null) {
+                            CoroutineScope(Dispatchers.IO).launch {
+                                // R3-04/R2-03: the shared read-modify-write serialises a widget tap with
+                                // another widget tap and with Home card edits. It re-reads the live row
+                                // itself, so the snapshot captured at composition time is never written
+                                // back, and a line whose text changed since the preview is a no-op.
+                                val toggled = runCatching {
+                                    // R3-06: the same Vault-unlock lock the editor and Home cards use;
+                                    // a widget tap must not seal a vault row with a candidate passphrase.
+                                    lockManager.withVaultUnlock {
+                                        toggleCheckboxInLatestBody(
+                                            noteId = note.id,
+                                            lineNumber = bodyLine,
+                                            text = text,
+                                            checked = checked,
+                                            mutex = NoteBodyEditLock.mutex,
+                                            readLatest = { id -> noteUseCase.getEditableNote(id) },
+                                            write = { updated ->
+                                                noteUseCase.addNote(
+                                                    updated.copy(updatedAt = System.currentTimeMillis())
+                                                )
+                                            },
+                                        )
                                     }
+                                }.onFailure { error ->
+                                    android.util.Log.e(
+                                        "WidgetNote",
+                                        "Could not save the widget edit",
+                                        error
+                                    )
+                                }.getOrDefault(false)
+                                if (toggled) {
+                                    // PERF-3: no observe() here. The old call started (another) full
+                                    // library collector from a widget, and every one of those lived for
+                                    // the process. A redraw is enough: each placed widget re-enters
+                                    // provideGlance and reads only its own note (PERF-6).
+                                    runCatching { NotesWidget().updateAll(context) }
+                                        .onFailure { error ->
+                                            android.util.Log.e(
+                                                "WidgetNote",
+                                                "Could not refresh the widget",
+                                                error
+                                            )
+                                        }
+                                }
                             }
                         }
                     }

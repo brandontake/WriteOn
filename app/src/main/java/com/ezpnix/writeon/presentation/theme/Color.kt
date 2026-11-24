@@ -69,7 +69,10 @@ val outlineVariantDark = Color(0xFF2C2C2C) // Dark gray
 val scrimDark = Color(0xFF000000) // Black for overlays
 val inverseSurfaceDark = Color(0xFFE0E0E0) // Light gray
 val inverseOnSurfaceDark = Color(0xFF121212) // Very dark gray
-val inversePrimaryDark = Color(0xFFB9F6CA) // Match primaryDark
+// R2-07: this is the accent *on* inverseSurfaceDark (#E0E0E0). The old mint value measured about
+// 1.07:1 there, so the snackbar's action label and status icon were invisible in the manual dark
+// theme. Dark green keeps the primary family and measures ~9:1 on that surface.
+val inversePrimaryDark = Color(0xFF1B5E20)
 val surfaceDimDark = Color(0xFF121212) // Very dark gray
 val surfaceBrightDark = Color(0xFF1E1E1E) // Dark gray
 val surfaceContainerLowestDark = Color(0xFF0A0A0A) // Nearly black

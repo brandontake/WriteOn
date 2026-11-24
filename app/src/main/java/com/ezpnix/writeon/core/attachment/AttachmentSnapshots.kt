@@ -227,12 +227,7 @@ object AttachmentSnapshots {
         target.deleteRecursively()
         target.parentFile?.mkdirs()
         return try {
-            Files.move(
-                source.toPath(),
-                target.toPath(),
-                StandardCopyOption.ATOMIC_MOVE,
-                StandardCopyOption.REPLACE_EXISTING
-            )
+            moveWithRetry(source, target)
             true
         } catch (e: Exception) {
             runCatching {
@@ -244,6 +239,31 @@ object AttachmentSnapshots {
                 target.isDirectory
             }.getOrDefault(false)
         }
+    }
+
+    /**
+     * TST-06: Windows often keeps a just-closed test file locked for a few milliseconds, which made
+     * the snapshot tests intermittently fail with "another program is using this file". A tiny
+     * retry is enough for a transient antivirus/indexer handle and still surfaces a real failure
+     * after the third attempt; on Android the first move normally succeeds.
+     */
+    private fun moveWithRetry(source: File, target: File) {
+        var last: Exception? = null
+        repeat(3) { attempt ->
+            try {
+                Files.move(
+                    source.toPath(),
+                    target.toPath(),
+                    StandardCopyOption.ATOMIC_MOVE,
+                    StandardCopyOption.REPLACE_EXISTING
+                )
+                return
+            } catch (e: Exception) {
+                last = e
+                if (attempt < 2) Thread.sleep(10)
+            }
+        }
+        throw last ?: IOException("Could not move $source")
     }
 
     private fun log(message: String, error: Exception?) {

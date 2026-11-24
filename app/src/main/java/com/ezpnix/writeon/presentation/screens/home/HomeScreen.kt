@@ -3,7 +3,6 @@ package com.ezpnix.writeon.presentation.screens.home
 import android.annotation.SuppressLint
 import android.content.Intent
 import android.net.Uri
-import android.view.MotionEvent
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -26,9 +25,12 @@ import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -38,10 +40,10 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.sizeIn
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
@@ -100,6 +102,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -116,7 +119,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.input.pointer.pointerInteropFilter
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.res.stringResource
@@ -135,6 +137,7 @@ import com.ezpnix.writeon.domain.model.Note
 import com.ezpnix.writeon.presentation.components.CalculatorUI
 import com.ezpnix.writeon.presentation.components.CloseButton
 import com.ezpnix.writeon.presentation.components.DeleteButton
+import com.ezpnix.writeon.presentation.components.AppSnackbarKind
 import com.ezpnix.writeon.presentation.components.LocalAppSnackbar
 import com.ezpnix.writeon.presentation.components.MainButton
 import com.ezpnix.writeon.presentation.components.NotesScaffold
@@ -146,7 +149,9 @@ import com.ezpnix.writeon.presentation.components.defaultScreenExitAnimation
 import com.ezpnix.writeon.presentation.navigation.HomeOverlayState
 import com.ezpnix.writeon.presentation.navigation.NavRoutes
 import com.ezpnix.writeon.presentation.navigation.overlayBackHandler
+import com.ezpnix.writeon.presentation.screens.home.viewmodel.FILTER_UNTAGGED
 import com.ezpnix.writeon.presentation.screens.home.viewmodel.HomeViewModel
+import com.ezpnix.writeon.presentation.screens.home.viewmodel.noteMatchesFilter
 import com.ezpnix.writeon.presentation.screens.home.widgets.DecryptFailureBanner
 import com.ezpnix.writeon.presentation.screens.home.widgets.NoteFilter
 import com.ezpnix.writeon.presentation.screens.home.widgets.VaultLockBanner
@@ -175,11 +180,14 @@ fun HomeView(
     val snackbar = LocalAppSnackbar.current
     val trashedMessage = stringResource(R.string.msg_note_moved_to_trash)
     val undoLabel = stringResource(R.string.cd_undo)
+    // UX-12: the greeting configured from Settings > Tools is shown under the app title. It was a
+    // stored setting that nothing read, so the tool never changed anything on this screen.
+    val greeting by settingsModel.dynamicPlaceholder.collectAsStateWithLifecycle()
     var showDimBackground by rememberSaveable { mutableStateOf(false) }
     var fabExpanded by rememberSaveable { mutableStateOf(false) }
-    // Tag deletion from the drawer asks for confirmation first: the dialog outlives recomposition
-    // (and a rotation) so a configuration change cannot drop the user's pending choice.
-    var tagPendingDelete by rememberSaveable { mutableStateOf<String?>(null) }
+    // Long-pressing a tag opens a multi-select delete dialog. The value is the tag that was
+    // pressed, which starts checked; null means the dialog is closed.
+    var tagDeleteInitial by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     // While notes are selected, the system back gesture should only exit the
@@ -233,16 +241,26 @@ fun HomeView(
     val displayedNotes by remember {
         derivedStateOf {
             viewModel.notes
-                .filter {
-                    // The old `it.encrypted == isVaultMode.value` clause depended on a vault mode
-                    // that nothing could ever turn on (always false), so a successfully unlocked
-                    // vault row - which keeps encrypted = true - would have been filtered straight
-                    // back out. NoteUseCase already decides what is decryptable; trust that list.
-                    (if (viewModel.currentFilter.value == "all") true
-                            else if (viewModel.currentFilter.value == "pinned") it.pinned
-                            else viewModel.currentFilter.value in it.tags)
-                }
+                .filter { note -> noteMatchesFilter(note, viewModel.currentFilter.value) }
                 .sortedWith(sorter(settingsModel.settings.value.sortDescending, settingsModel.settings.value.sortBy))
+        }
+    }
+    // PERF-04: the query scan happens in HomeViewModel (debounced, on Dispatchers.Default). The
+    // grid gets that narrowed list with the same tag filter and sort applied, so tag semantics do
+    // not change - only where and when the body scan runs.
+    val searchResults by remember {
+        derivedStateOf {
+            viewModel.filteredNotes.value
+                .filter { note -> noteMatchesFilter(note, viewModel.currentFilter.value) }
+                .sortedWith(sorter(settingsModel.settings.value.sortDescending, settingsModel.settings.value.sortBy))
+        }
+    }
+    // The untagged row only exists while at least one tag does. If the last tag is deleted while
+    // that filter is active, fall back to All notes instead of leaving an invisible filter in
+    // charge of the list.
+    LaunchedEffect(viewModel.tags.isEmpty()) {
+        if (viewModel.tags.isEmpty() && viewModel.currentFilter.value == FILTER_UNTAGGED) {
+            viewModel.setFilter("all")
         }
     }
     ModalNavigationDrawer(
@@ -262,12 +280,19 @@ fun HomeView(
             val tagCounts = remember(activeNotes) {
                 val counts = HashMap<String, Int>()
                 activeNotes.forEach { note ->
-                    note.tags.forEach { tag -> counts[tag] = (counts[tag] ?: 0) + 1 }
+                    note.tags.forEach { tag ->
+                        val key = tag.trim().lowercase()
+                        if (key.isNotEmpty()) counts[key] = (counts[key] ?: 0) + 1
+                    }
                 }
                 counts
             }
-            val trashedNotes by viewModel.trashedNotesFlow
-                .collectAsStateWithLifecycle(initialValue = emptyList())
+            // PERF-07: the drawer only needs a number. The full trashed flow stays in
+            // TrashScreen; here a count flow suffices, and the DAO now deduplicates the raw rows
+            // and caches unchanged decryptions, so an unrelated table write does not decrypt the
+            // whole recycle bin again.
+            val trashedNoteCount by viewModel.trashedNoteCountFlow
+                .collectAsStateWithLifecycle(initialValue = 0)
             ModalDrawerSheet(
                 modifier = Modifier.width(320.dp),
                 drawerShape = RoundedCornerShape(
@@ -334,7 +359,7 @@ fun HomeView(
                         icon = Icons.Default.Delete,
                         selected = false,
                         cornerRadius = drawerCornerRadius,
-                        count = trashedNotes.size
+                        count = trashedNoteCount
                     ) {
                         navController.navigate(NavRoutes.Trash.route)
                         scope.launch { drawerState.close() }
@@ -355,8 +380,21 @@ fun HomeView(
                             modifier = Modifier.padding(start = 16.dp, top = 4.dp, bottom = 8.dp)
                         )
                     } else {
+                        // The untagged bucket only makes sense once at least one tag exists; it is
+                        // listed first so it reads as part of the tag section rather than an
+                        // afterthought.
+                        DrawerItem(
+                            text = context.getString(R.string.nav_untagged),
+                            icon = Icons.AutoMirrored.Filled.LabelOff,
+                            selected = viewModel.currentFilter.value == FILTER_UNTAGGED,
+                            cornerRadius = drawerCornerRadius,
+                            count = activeNotes.count { it.tags.isEmpty() }
+                        ) {
+                            viewModel.currentFilter.value = FILTER_UNTAGGED
+                            scope.launch { drawerState.close() }
+                        }
                         viewModel.tags.forEach { tag ->
-                            DeletableDrawerItem(
+                            TagDrawerItem(
                                 text = tag,
                                 selected = viewModel.currentFilter.value == tag,
                                 cornerRadius = drawerCornerRadius,
@@ -365,9 +403,7 @@ fun HomeView(
                                     viewModel.currentFilter.value = tag
                                     scope.launch { drawerState.close() }
                                 },
-                                onDeleteClick = {
-                                    tagPendingDelete = tag
-                                }
+                                onLongClick = { tagDeleteInitial = tag }
                             )
                         }
                     }
@@ -423,6 +459,7 @@ fun HomeView(
                                             message = trashedMessage,
                                             actionLabel = undoLabel,
                                             duration = SnackbarDuration.Long,
+                                            kind = AppSnackbarKind.DELETE,
                                             onAction = { viewModel.restoreTrashedNotes(trashed) },
                                         )
                                     }
@@ -440,6 +477,7 @@ fun HomeView(
                         ) {
                             HomeViewTopBarWithSearch(
                                 query = viewModel.searchQuery.value,
+                                subtitle = greeting,
                                 onQueryChange = { viewModel.changeSearchQuery(it) },
                                 onClearClick = { viewModel.changeSearchQuery("") },
                                 onSettingsClick = onSettingsClicked,
@@ -501,12 +539,15 @@ fun HomeView(
                                     // password protection.
                                     onNoteClicked(id, displayedNotes.any { n -> n.id == id && n.encrypted })
                                 },
-                                notes = displayedNotes,
+                                notes = searchResults,
                                 selectedNotes = viewModel.selectedNotes,
                                 viewMode = settingsModel.settings.value.viewMode,
                                 searchText = viewModel.searchQuery.value.ifBlank { null },
                                 isDeleteMode = viewModel.isDeleteMode.value,
                                 onNoteUpdate = { note -> viewModel.saveNote(note) },
+                                onNoteTitleUpdate = { noteId, name ->
+                                    viewModel.updateNoteTitle(noteId, name)
+                                },
                                 onDeleteNote = {
                                     val note = displayedNotes.find { note -> note.id == it }
                                     note?.let { n ->
@@ -515,6 +556,7 @@ fun HomeView(
                                                 message = trashedMessage,
                                                 actionLabel = undoLabel,
                                                 duration = SnackbarDuration.Long,
+                                                kind = AppSnackbarKind.DELETE,
                                                 onAction = { viewModel.restoreTrashedNotes(listOf(trashed)) },
                                             )
                                         }
@@ -553,38 +595,17 @@ fun HomeView(
                     settingsModel = settingsModel
                 )
             }
-            // Material 3 confirmation for the drawer's tag delete button. The action strips the tag
-            // from every note, so the dialog names the tag, keeps the destructive choice in the
-            // error colour, and uses the standard MD3 dialog motion and container styling.
-            tagPendingDelete?.let { tag ->
-                AlertDialog(
-                    onDismissRequest = { tagPendingDelete = null },
-                    icon = {
-                        Icon(
-                            imageVector = Icons.Default.Delete,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.error
-                        )
-                    },
-                    title = { Text(stringResource(R.string.tag_delete_confirm_title)) },
-                    text = { Text(stringResource(R.string.tag_delete_confirm_message, tag)) },
-                    confirmButton = {
-                        TextButton(
-                            onClick = {
-                                viewModel.deleteTag(tag)
-                                tagPendingDelete = null
-                            }
-                        ) {
-                            Text(
-                                text = stringResource(R.string.delete),
-                                color = MaterialTheme.colorScheme.error
-                            )
-                        }
-                    },
-                    dismissButton = {
-                        TextButton(onClick = { tagPendingDelete = null }) {
-                            Text(stringResource(R.string.action_cancel))
-                        }
+            // Long-press on a tag opens this multi-select dialog. The pressed tag starts checked;
+            // the user can add or remove tags before the single confirmation. Deleting a tag only
+            // strips that tag from every note - the notes and their other tags stay untouched.
+            tagDeleteInitial?.let { initial ->
+                TagDeleteDialog(
+                    tags = viewModel.tags,
+                    initiallySelected = initial,
+                    onDismiss = { tagDeleteInitial = null },
+                    onConfirm = { selected ->
+                        viewModel.deleteTags(selected)
+                        tagDeleteInitial = null
                     }
                 )
             }
@@ -708,60 +729,172 @@ fun HomeView(
 /**
  * Trailing note count for a drawer row.
  *
- * It is spelled out in parentheses instead of using the drawer's badge slot, because that slot is
- * already taken by the delete button on tag rows and a badge there would push the row's label out
- * of view on a narrow drawer.
+ * Spelled out in parentheses rather than using the drawer's badge slot: a badge pushes the label
+ * out of view on a narrow drawer, and the tag rows no longer carry a trailing delete button.
  */
 private fun drawerLabelWithCount(text: String, count: Int?): String =
     if (count == null) text else "$text ($count)"
 
+/**
+ * A tag row that filters on tap and opens the multi-select delete dialog on long press.
+ *
+ * `NavigationDrawerItem` does not expose a long-click callback, so this mirrors its standard MD3
+ * colours, shape, height and padding around a `combinedClickable` row. The delete action is only
+ * announced through the long-click label; there is no per-row × button any more.
+ */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-fun DeletableDrawerItem(
+fun TagDrawerItem(
     text: String,
     selected: Boolean,
     cornerRadius: Int,
     count: Int? = null,
     onClick: () -> Unit,
-    onDeleteClick: () -> Unit
+    onLongClick: () -> Unit
 ) {
-    NavigationDrawerItem(
-        label = {
-            Text(
-                text = drawerLabelWithCount(text.replaceFirstChar { it.uppercase() }, count),
-                style = MaterialTheme.typography.labelLarge,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
+    val containerColor = if (selected) {
+        MaterialTheme.colorScheme.secondaryContainer
+    } else {
+        Color.Transparent
+    }
+    val contentColor = if (selected) {
+        MaterialTheme.colorScheme.onSecondaryContainer
+    } else {
+        MaterialTheme.colorScheme.onSurfaceVariant
+    }
+    Row(
+        modifier = Modifier
+            .padding(NavigationDrawerItemDefaults.ItemPadding)
+            .fillMaxWidth()
+            .heightIn(min = 56.dp)
+            .clip(RoundedCornerShape(cornerRadius.dp))
+            .background(containerColor)
+            .combinedClickable(
+                role = Role.Button,
+                onLongClickLabel = stringResource(R.string.tag_delete),
+                onLongClick = onLongClick,
+                onClick = onClick
+            )
+            .padding(horizontal = 16.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(
+            imageVector = Icons.AutoMirrored.Filled.Label,
+            contentDescription = null,
+            tint = contentColor
+        )
+        Spacer(Modifier.width(12.dp))
+        Text(
+            text = drawerLabelWithCount(text.replaceFirstChar { it.uppercase() }, count),
+            style = MaterialTheme.typography.labelLarge,
+            color = contentColor,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f)
+        )
+    }
+}
+
+/**
+ * Multi-select tag deletion. The long-pressed tag starts checked; the user can check more tags
+ * before confirming. Only the checked tags are removed from the notes, which themselves (and their
+ * other tags) are left untouched.
+ */
+@Composable
+private fun TagDeleteDialog(
+    tags: List<String>,
+    initiallySelected: String,
+    onDismiss: () -> Unit,
+    onConfirm: (List<String>) -> Unit
+) {
+    val selected = remember(tags, initiallySelected) {
+        mutableStateListOf<String>().apply {
+            if (initiallySelected in tags) add(initiallySelected)
+        }
+    }
+    val title = if (selected.size == 1) {
+        stringResource(R.string.tag_delete_confirm_title)
+    } else {
+        stringResource(R.string.tag_delete_confirm_title_many)
+    }
+    val message = if (selected.size == 1) {
+        stringResource(R.string.tag_delete_confirm_message, selected.first())
+    } else {
+        stringResource(R.string.tag_delete_confirm_message_many)
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        icon = {
+            Icon(
+                imageVector = Icons.Default.Delete,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.error
             )
         },
-        selected = selected,
-        onClick = onClick,
-        icon = { Icon(Icons.AutoMirrored.Filled.Label, contentDescription = null) },
-        badge = {
-            IconButton(
-                onClick = { onDeleteClick() },
-                // U6: a 32 dp square was below the 48 dp minimum touch target. The drawer row is
-                // 56 dp tall, so reserving the full 48 dp here costs no layout height; the icon
-                // itself stays 18 dp.
-                modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp)
+        title = { Text(title) },
+        text = {
+            Column(
+                modifier = Modifier
+                    .heightIn(max = 320.dp)
+                    .verticalScroll(rememberScrollState())
             ) {
-                Icon(
-                    imageVector = Icons.Default.Close,
-                    contentDescription = stringResource(R.string.tag_delete),
-                    modifier = Modifier.size(18.dp),
-                    tint = if (selected) MaterialTheme.colorScheme.onSecondaryContainer else MaterialTheme.colorScheme.outline
+                tags.forEach { tag ->
+                    val checked = tag in selected
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .toggleable(
+                                value = checked,
+                                role = Role.Checkbox,
+                                onValueChange = { isChecked ->
+                                    if (isChecked) {
+                                        if (tag !in selected) selected.add(tag)
+                                    } else {
+                                        selected.remove(tag)
+                                    }
+                                }
+                            )
+                            .padding(vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        // The row owns the toggle semantics; the box only mirrors the state.
+                        Checkbox(checked = checked, onCheckedChange = null)
+                        Text(
+                            text = tag,
+                            style = MaterialTheme.typography.bodyMedium,
+                            modifier = Modifier.padding(start = 8.dp)
+                        )
+                    }
+                }
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    text = message,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
         },
-        colors = NavigationDrawerItemDefaults.colors(
-            selectedContainerColor = MaterialTheme.colorScheme.secondaryContainer,
-            unselectedContainerColor = Color.Transparent,
-            selectedIconColor = MaterialTheme.colorScheme.onSecondaryContainer,
-            unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
-            selectedTextColor = MaterialTheme.colorScheme.onSecondaryContainer,
-            unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant
-        ),
-        shape = RoundedCornerShape(cornerRadius.dp),
-        modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding)
+        confirmButton = {
+            TextButton(
+                onClick = { if (selected.isNotEmpty()) onConfirm(selected.toList()) },
+                enabled = selected.isNotEmpty()
+            ) {
+                Text(
+                    text = stringResource(R.string.delete),
+                    color = if (selected.isNotEmpty()) {
+                        MaterialTheme.colorScheme.error
+                    } else {
+                        MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+                    }
+                )
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text(stringResource(R.string.action_cancel))
+            }
+        }
     )
 }
 
@@ -806,6 +939,7 @@ fun DrawerItem(
 @Composable
 fun HomeViewTopBarWithSearch(
     query: String,
+    subtitle: String = "",
     onQueryChange: (String) -> Unit,
     onClearClick: () -> Unit,
     onSettingsClick: () -> Unit,
@@ -868,11 +1002,27 @@ fun HomeViewTopBarWithSearch(
                         contentDescription = stringResource(R.string.open_drawer)
                     )
                 }
-                Text(
-                    text = stringResource(R.string.app_name),
-                    style = MaterialTheme.typography.headlineLarge.copy(fontWeight = FontWeight.Bold),
-                    color = MaterialTheme.colorScheme.onBackground
-                )
+                // The title + optional greeting stay in one weighted column so the settings and menu
+                // buttons remain pinned to the edges; a blank greeting costs no height at all.
+                Column(
+                    modifier = Modifier.weight(1f),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Text(
+                        text = stringResource(R.string.app_name),
+                        style = MaterialTheme.typography.headlineLarge.copy(fontWeight = FontWeight.Bold),
+                        color = MaterialTheme.colorScheme.onBackground
+                    )
+                    if (subtitle.isNotBlank()) {
+                        Text(
+                            text = subtitle,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                }
                 IconButton(onClick = { onSettingsClick() }) {
                     Icon(
                         imageVector = Icons.Default.Settings,
@@ -1000,11 +1150,16 @@ fun FloatingBottomButtons(
 ) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
+    val defaultFileName = stringResource(R.string.default_txt_file_name)
     var showCalculator by rememberSaveable { mutableStateOf(false) }
     var showDialog by rememberSaveable { mutableStateOf(false) }
     var showEditDialog by rememberSaveable { mutableStateOf(false) }
     var textState by rememberSaveable { mutableStateOf("") }
-    var isPressed by remember { mutableStateOf(false) }
+    // UX-02: the press animation now comes from the FAB's own interaction stream. The old
+    // pointerInteropFilter consumed every touch before the FAB's semantics could fire, so TalkBack
+    // and keyboard activation never expanded the bar.
+    val expandInteractionSource = remember { MutableInteractionSource() }
+    val isPressed by expandInteractionSource.collectIsPressedAsState()
     val scale by animateFloatAsState(
         targetValue = if (isPressed) 0.85f else 1f,
         animationSpec = tween(durationMillis = 120),
@@ -1087,7 +1242,7 @@ fun FloatingBottomButtons(
             },
             confirmButton = {
                 TextButton(onClick = {
-                    openFileLauncher.launch("rename.txt")
+                    openFileLauncher.launch(defaultFileName)
                     showDialog = false
                 }) {
                     Text(stringResource(R.string.save_as_txt))
@@ -1202,23 +1357,17 @@ fun FloatingBottomButtons(
                         )
                     }
                     FloatingActionButton(
-                        onClick = {},
+                        // The click handler carries the expansion, so a semantic click (TalkBack,
+                        // keyboard Enter, switch access) toggles the panel just like a touch does.
+                        onClick = {
+                            onExpandedChange(!expanded)
+                            onDimToggle(!expanded)
+                        },
                         containerColor = MaterialTheme.colorScheme.primary,
+                        interactionSource = expandInteractionSource,
                         modifier = Modifier
                             .size(fabSize)
                             .graphicsLayer { scaleX = scale; scaleY = scale }
-                            .pointerInteropFilter {
-                                when (it.action) {
-                                    MotionEvent.ACTION_DOWN -> isPressed = true
-                                    MotionEvent.ACTION_UP -> {
-                                        isPressed = false
-                                        onExpandedChange(!expanded)
-                                        onDimToggle(!expanded)
-                                    }
-                                    MotionEvent.ACTION_CANCEL -> isPressed = false
-                                }
-                                true
-                            }
                     ) {
                         Icon(
                             imageVector = if (expanded) Icons.Default.Close else Icons.Default.Add,

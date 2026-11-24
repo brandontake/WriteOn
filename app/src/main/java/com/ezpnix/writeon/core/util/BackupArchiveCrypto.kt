@@ -3,6 +3,7 @@ package com.ezpnix.writeon.core.util
 import java.nio.charset.StandardCharsets
 import java.security.SecureRandom
 import java.security.spec.KeySpec
+import java.io.ByteArrayOutputStream
 import java.io.InputStream
 import java.io.OutputStream
 import java.util.zip.ZipEntry
@@ -61,6 +62,17 @@ object BackupArchiveCrypto {
     const val MANIFEST_FORMAT = 1
 
     private const val MANIFEST_HEADER = "writeon-backup-manifest"
+
+    /**
+     * SEC-12: hard cap on the manifest probe.
+     *
+     * The real manifest is a handful of lines (well under 1 KB). The probe used to
+     * `zip.readBytes()` whatever the first entry declared, so a crafted archive could make a
+     * preview or a restore log allocate hundreds of megabytes - before any content was restored -
+     * from an entry the app then discarded. 64 KiB leaves ample room for future fields while
+     * keeping the read bounded and cheap to reject.
+     */
+    internal const val MAX_MANIFEST_BYTES = 64 * 1024
 
     /**
      * What an archive says about itself: when it was written and what it holds. Shown before a
@@ -132,11 +144,28 @@ object BackupArchiveCrypto {
      *  - first entry is not the manifest (a legacy archive - legal, age unknown) -> null, and
      *    the first entry has been *opened but not consumed*: read it directly, or close the
      *    stream. Calling `nextEntry` again would skip it.
+     *  - the manifest entry is larger than [MAX_MANIFEST_BYTES] -> null, rejected before the
+     *    whole entry is allocated (SEC-12). A real manifest is a few lines; an oversized one is
+     *    not metadata this build understands.
      */
     fun readManifest(zip: ZipInputStream): ArchiveManifest? {
         val entry = zip.nextEntry ?: return null
         if (entry.name != MANIFEST_ENTRY_NAME) return null
-        return parseManifest(zip.readBytes().toString(StandardCharsets.UTF_8))
+        // Streamed `ZipEntry.size` is often -1 (unknown), so the declared value is only a fast
+        // path; the read below enforces the same cap for the actual bytes.
+        if (entry.size > MAX_MANIFEST_BYTES) return null
+
+        val buffer = ByteArrayOutputStream()
+        val chunk = ByteArray(4096)
+        var total = 0
+        while (true) {
+            val read = zip.read(chunk)
+            if (read < 0) break
+            total += read
+            if (total > MAX_MANIFEST_BYTES) return null
+            buffer.write(chunk, 0, read)
+        }
+        return parseManifest(String(buffer.toByteArray(), StandardCharsets.UTF_8))
     }
 
     fun encrypt(data: ByteArray, password: String): ByteArray {

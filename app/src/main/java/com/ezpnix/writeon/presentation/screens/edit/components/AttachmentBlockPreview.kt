@@ -41,10 +41,11 @@ import com.ezpnix.writeon.presentation.screens.edit.segments.AttachmentSegment
 /**
  * One attachment as it appears inside the segmented editor.
  *
- * Tapping a picture opens it full-screen; long-pressing either kind opens the two operations that
- * do not belong in the reader: edit the Markdown line (for repairing a pasted id or changing a
- * caption) and delete the attachment. The overflow button is the discoverable version of the same
- * long press, because a long press on a slider or a play button is easy to miss.
+ * Tapping a picture opens it full-screen; long-pressing a picture (or its overflow button) opens the
+ * two operations that do not belong in the reader: edit the Markdown line (for repairing a pasted id
+ * or changing a caption) and delete the attachment. Recordings expose the same two operations inside
+ * their own player menu, next to save-to-folder and rename, so an audio block has exactly one
+ * overflow entry instead of two competing ones.
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -61,64 +62,69 @@ fun AttachmentBlockPreview(
     val target = AttachmentSyntax.SCHEME + segment.attachmentId
     val isImage = segment.type == Attachment.TYPE_IMAGE
 
-    Box(
-        modifier = modifier
-            .fillMaxWidth()
-            .combinedClickable(
-                onClick = {
-                    if (isImage && AttachmentRegistry.resolve(target) != null) {
-                        showFullScreen = true
-                    }
-                },
-                onLongClick = { menuExpanded = true }
-            )
-    ) {
+    Box(modifier = modifier.fillMaxWidth()) {
         if (isImage) {
-            ImageAttachmentBlock(
-                target = target,
-                radius = radius,
-                modifier = Modifier.padding(vertical = 2.dp)
-            )
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .combinedClickable(
+                        onClick = {
+                            if (AttachmentRegistry.resolve(target) != null) {
+                                showFullScreen = true
+                            }
+                        },
+                        onLongClick = { menuExpanded = true }
+                    )
+            ) {
+                ImageAttachmentBlock(
+                    target = target,
+                    radius = radius,
+                    modifier = Modifier.padding(vertical = 2.dp)
+                )
+            }
+            Box(modifier = Modifier.align(Alignment.TopEnd)) {
+                IconButton(
+                    onClick = { menuExpanded = true },
+                    modifier = Modifier.padding(4.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.MoreVert,
+                        contentDescription = stringResource(R.string.attachment_actions),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                DropdownMenu(
+                    expanded = menuExpanded,
+                    onDismissRequest = { menuExpanded = false }
+                ) {
+                    DropdownMenuItem(
+                        text = { Text(stringResource(R.string.attachment_edit_source)) },
+                        onClick = {
+                            menuExpanded = false
+                            onEditSource()
+                        }
+                    )
+                    DropdownMenuItem(
+                        text = { Text(stringResource(R.string.attachment_delete)) },
+                        onClick = {
+                            menuExpanded = false
+                            onDelete()
+                        }
+                    )
+                }
+            }
         } else {
             AudioAttachmentBlock(
                 target = target,
                 radius = radius,
                 modifier = Modifier.padding(vertical = 2.dp),
                 caption = segment.caption.takeIf { it.isNotBlank() },
-                onRename = onRename
+                onRename = onRename,
+                onDelete = onDelete,
+                onEditSource = onEditSource,
+                // The segmented editor owns the only delete confirmation for recordings.
+                confirmDelete = false
             )
-        }
-
-        Box(modifier = Modifier.align(Alignment.TopEnd)) {
-            IconButton(
-                onClick = { menuExpanded = true },
-                modifier = Modifier.padding(4.dp)
-            ) {
-                Icon(
-                    imageVector = Icons.Rounded.MoreVert,
-                    contentDescription = stringResource(R.string.attachment_actions),
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-            DropdownMenu(
-                expanded = menuExpanded,
-                onDismissRequest = { menuExpanded = false }
-            ) {
-                DropdownMenuItem(
-                    text = { Text(stringResource(R.string.attachment_edit_source)) },
-                    onClick = {
-                        menuExpanded = false
-                        onEditSource()
-                    }
-                )
-                DropdownMenuItem(
-                    text = { Text(stringResource(R.string.attachment_delete)) },
-                    onClick = {
-                        menuExpanded = false
-                        onDelete()
-                    }
-                )
-            }
         }
     }
 

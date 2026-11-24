@@ -2,6 +2,8 @@ package com.ezpnix.writeon.presentation.components.markdown
 
 import android.content.Context
 import androidx.compose.runtime.mutableStateMapOf
+import com.ezpnix.writeon.core.attachment.AttachmentArchive
+import com.ezpnix.writeon.core.attachment.AttachmentFiles
 import com.ezpnix.writeon.core.attachment.AttachmentIndex
 import com.ezpnix.writeon.core.attachment.AttachmentSyntax
 import com.ezpnix.writeon.core.attachment.MediaVault
@@ -62,6 +64,17 @@ object AttachmentRegistry : AttachmentIndex {
     private val materializing = ConcurrentHashMap.newKeySet<String>()
 
     /**
+     * PERF-12: short-lived answers to "does the decrypted copy still exist?".
+     *
+     * `playable` runs on every composition of every preview, and the split preview recomposes on
+     * each debounce tick. A `File.isFile` per call is a disk stat on the UI thread; the answer only
+     * has to be fresh within a couple of seconds, because a cache copy is either produced by this
+     * class or evicted by the OS. The cache is invalidated explicitly whenever this class writes,
+     * removes or clears a copy, and the decrypt path still checks the source before using one.
+     */
+    private val cacheFileExists = FileExistenceCache()
+
+    /**
      * Bumped by [clearMaterialized]. A decrypt that was already running when the app locked must
      * not publish its plaintext copy back into the cache the lock just emptied.
      */
@@ -87,9 +100,34 @@ object AttachmentRegistry : AttachmentIndex {
         val lastModified: Long,
     )
 
+    /** PERF-12/R2-02: last observed source stat, trusted for the same window as the file cache. */
+    private data class SourceStamp(
+        val size: Long,
+        val lastModified: Long,
+        val checkedAt: Long,
+    )
+
+    private val sourceStamps = ConcurrentHashMap<String, SourceStamp>()
+
     /** Wires the vault's cache directory into [resolve]; call once from `App.onCreate`. */
     fun initialize(context: Context) {
         appContext = context.applicationContext
+        // The allowlist depends on this Context's roots. Tests (and a restore-driven process that
+        // re-initialises) may ask again with a different sandbox, so no answer is carried over.
+        allowedLegacyPaths.clear()
+        rejectedLegacyPaths.clear()
+        allowedRowPaths.clear()
+        rejectedRowPaths.clear()
+        allowedOpenablePaths.clear()
+        rejectedOpenablePaths.clear()
+        // PERF-12/R2-02: every other cache is keyed by a path whose bytes may belong to the
+        // previous Context (or to a file the legacy migration has since encrypted). A fresh
+        // initialisation must not inherit "plaintext" or "unavailable" answers across processes.
+        materialized.clear()
+        unavailable.clear()
+        encrypted.clear()
+        cacheFileExists.clear()
+        sourceStamps.clear()
     }
 
     override fun put(attachments: Collection<Attachment>) {
@@ -101,6 +139,13 @@ object AttachmentRegistry : AttachmentIndex {
         // A row can be published again after a restore repaired its file, so a path that failed
         // earlier gets another attempt instead of keeping a permanent placeholder.
         unavailable.remove(attachment.path)
+        // PERF-12: a re-published row may describe bytes that just changed on disk.
+        cacheFileExists.invalidate(attachment.path)
+        // R2-02: in-place encryption (the startup migration, or a save that seals a legacy file)
+        // changes what the path contains. A cached "this one is plaintext" answer would keep
+        // handing the raw ciphertext to Coil/MediaPlayer.
+        encrypted.remove(attachment.path)
+        sourceStamps.remove(attachment.path)
         dropReplacedMaterialization(attachment.path)
     }
 
@@ -121,11 +166,13 @@ object AttachmentRegistry : AttachmentIndex {
     fun path(id: String): String? = entries[id]?.path
 
     /**
-     * The path a renderer can open right now: the stored path for a plaintext (legacy) file, a
-     * decrypted cache copy for an encrypted one, or null while that copy is still being made.
+     * The path a renderer can open right now: the canonical stored path for a plaintext (legacy)
+     * file, a decrypted cache copy for an encrypted one, or null while that copy is still being
+     * made.
      *
      * Null means "draw a placeholder and ask again", never "the attachment is missing": a known
-     * attachment whose file cannot be decrypted also returns null ([unavailable]).
+     * attachment whose file cannot be decrypted also returns null ([unavailable]), and a row whose
+     * stored path is not inside this app's media roots is refused outright (REG-05).
      */
     fun playablePath(id: String): String? = entries[id]?.path?.let { playable(it) }
 
@@ -133,10 +180,18 @@ object AttachmentRegistry : AttachmentIndex {
      * Turns an element target (`attachment://<id>`, or a 1.x absolute path that has not been
      * migrated yet) into something the image/audio renderers can open. Null means the id is known
      * but its row has not been loaded yet, or its decryption has not finished.
+     *
+     * SEC-06: a legacy path is **not** passed through any more. The old branch returned the string
+     * untouched, and `ImageAttachmentBlock`/`AudioAttachmentBlock` hand it to Coil/MediaPlayer, so
+     * a note that arrived through a share, a TXT import or a restore could make rendering request
+     * `https://attacker/...` (or read a `file:`/`content:` URI) with no user action. Only a
+     * canonical path inside one of this app's media roots is resolved now; everything else returns
+     * null, which both blocks already render as their standard placeholder.
      */
     fun resolve(target: String): String? {
-        val id = AttachmentSyntax.idOf(target) ?: return target
-        return playablePath(id)
+        val id = AttachmentSyntax.idOf(target)
+        if (id != null) return playablePath(id)
+        return resolveLegacyPath(target)
     }
 
     /**
@@ -149,8 +204,12 @@ object AttachmentRegistry : AttachmentIndex {
      * document and look successful.
      */
     fun openablePath(path: String): String? {
-        val context = appContext ?: return File(path).takeIf { it.isFile }?.absolutePath
-        return MediaVault.materialize(context, path)
+        // REG-05: an `attachments.path` row is not more trustworthy than a legacy body path - it
+        // can arrive through a restore or a crafted database. The decrypted cache copy handed back
+        // by a player is the one additional root that is legitimate here.
+        val readable = canonicalRowPath(path, allowMediaCache = true) ?: return null
+        val context = appContext ?: return File(readable).takeIf { it.isFile }?.absolutePath
+        return MediaVault.materialize(context, readable)
     }
 
     /**
@@ -166,7 +225,82 @@ object AttachmentRegistry : AttachmentIndex {
         materialized.clear()
         unavailable.clear()
         encrypted.clear()
+        cacheFileExists.clear()
+        sourceStamps.clear()
         appContext?.let { MediaVault.clearCache(it) }
+    }
+
+    /**
+     * R2-02: drops the plaintext/ciphertext classification after a pass that rewrote files in place.
+     *
+     * The startup [com.ezpnix.writeon.core.attachment.LegacyMediaMigration] seals legacy media on a
+     * background thread, while a screen may already have sniffed the same file as "plaintext" and
+     * cached that answer forever. Without this, `playable` kept returning the raw path, which is now
+     * a `WMV1` container: the image failed to load and "save to gallery" could copy ciphertext out.
+     * Decrypted cache copies are dropped with the answers, and a decrypt that is still running is
+     * told not to publish into the cache this clear just emptied.
+     */
+    fun clearEncryptionClassification() {
+        clearMaterialized()
+    }
+
+    // -----------------------------------------------------------------------------------------
+    // SEC-06: legacy path allowlist
+    // -----------------------------------------------------------------------------------------
+
+    /** Legacy targets already accepted; canonicalisation then runs once per path, not per frame. */
+    private val allowedLegacyPaths = ConcurrentHashMap<String, String>()
+
+    /** Legacy targets already refused (remote scheme, content URI, traversal, outside the roots). */
+    private val rejectedLegacyPaths = ConcurrentHashMap.newKeySet<String>()
+
+    /**
+     * REG-05: the same allowlist for `attachment://<id>` row paths, which the old code returned
+     * untouched. Canonicalisation is one disk stat per unique path, so it runs once here instead of
+     * once per frame; a rejected path is remembered with the same one-time cost. The `openable`
+     * pair is separate because it legitimately accepts one more root (`cacheDir/media`).
+     */
+    private val allowedRowPaths = ConcurrentHashMap<String, String>()
+    private val rejectedRowPaths = ConcurrentHashMap.newKeySet<String>()
+    private val allowedOpenablePaths = ConcurrentHashMap<String, String>()
+    private val rejectedOpenablePaths = ConcurrentHashMap.newKeySet<String>()
+
+    /**
+     * Canonical path for a stored attachment row, or null when it is not one of this app's media
+     * files. [allowMediaCache] is only for [openablePath]: the player receives the decrypted
+     * `cacheDir/media` copy that was itself produced by [playable] and must be able to re-open it.
+     */
+    private fun canonicalRowPath(path: String, allowMediaCache: Boolean = false): String? {
+        if (path.isBlank()) return null
+        val allowed = if (allowMediaCache) allowedOpenablePaths else allowedRowPaths
+        val rejected = if (allowMediaCache) rejectedOpenablePaths else rejectedRowPaths
+        allowed[path]?.let { return it }
+        if (path in rejected) return null
+        val context = appContext
+        val extraRoots = if (allowMediaCache && context != null) {
+            listOf(File(context.cacheDir, MediaVault.CACHE_DIRECTORY))
+        } else {
+            emptyList()
+        }
+        val resolved = canonicalMediaPath(context, path, extraRoots)
+        if (resolved == null) {
+            rejected += path
+        } else {
+            allowed[path] = resolved
+        }
+        return resolved
+    }
+
+    private fun resolveLegacyPath(target: String): String? {
+        allowedLegacyPaths[target]?.let { return it }
+        if (target in rejectedLegacyPaths) return null
+        val resolved = canonicalMediaPath(appContext, target)
+        if (resolved == null) {
+            rejectedLegacyPaths += target
+        } else {
+            allowedLegacyPaths[target] = resolved
+        }
+        return resolved
     }
 
     // -----------------------------------------------------------------------------------------
@@ -175,23 +309,56 @@ object AttachmentRegistry : AttachmentIndex {
 
     private fun playable(path: String): String? {
         if (path.isBlank()) return null
+        // REG-05: the stored `attachments.path` is validated exactly like a legacy body target.
+        // Without this, a constructed or restored row could hand `https:`, `content:`, a `..`
+        // traversal or a path outside the media roots to Coil/MediaPlayer. Null renders the
+        // standard placeholder.
+        val readable = canonicalRowPath(path) ?: return null
 
-        materialized[path]?.let { ready ->
-            // The OS may evict cacheDir at any time: a missing copy is re-made below.
-            if (File(ready.cachePath).isFile) return ready.cachePath
-            materialized.remove(path)
+        materialized[readable]?.let { ready ->
+            // PERF-12: the OS may evict cacheDir at any time, so the copy is re-checked; the
+            // short-lived cache makes that check a field read instead of one stat per composition.
+            // R2-02: the source is re-checked on the same TTL, because an in-place encryption (the
+            // legacy migration) can change the bytes under a cache copy that still exists.
+            if (cacheFileExists.isFile(ready.cachePath) && sourceUnchanged(readable, ready)) {
+                return ready.cachePath
+            }
+            forget(readable)
         }
 
-        val context = appContext ?: return path
-        // Plaintext, legacy, missing or unreadable: the stored path is what the callers always got.
-        if (!isEncrypted(context, path)) return path
-        if (path in unavailable) return null
+        val context = appContext ?: return readable
+        // Plaintext, legacy, missing or unreadable: the canonical stored path is handed back.
+        // R2-02: the canonical path is what gets sniffed and decrypted, not the raw row spelling.
+        if (!isEncrypted(context, readable)) return readable
+        if (readable in unavailable) return null
 
-        if (materializing.add(path)) {
-            scope.launch { materialize(context, path) }
+        if (materializing.add(readable)) {
+            scope.launch { materialize(context, readable) }
         }
         // Not ready yet: the caller's placeholder is correct for this frame.
         return null
+    }
+
+    /**
+     * PERF-12/R2-02: whether [readable] still has the size/mtime the cached copy was built from.
+     *
+     * A stat per composition would be its own cost, so the answer is trusted for the same short
+     * window as [cacheFileExists]; a replace or in-place encryption is therefore visible within a
+     * couple of seconds even when the caller never re-published the row.
+     */
+    private fun sourceUnchanged(readable: String, ready: Materialized): Boolean {
+        val now = System.currentTimeMillis()
+        val cached = sourceStamps[readable]
+        if (cached != null && now >= cached.checkedAt &&
+            now - cached.checkedAt < FILE_EXISTENCE_TTL_MS
+        ) {
+            return cached.size == ready.size && cached.lastModified == ready.lastModified
+        }
+        val source = File(readable)
+        val size = source.length()
+        val lastModified = source.lastModified()
+        sourceStamps[readable] = SourceStamp(size, lastModified, now)
+        return size == ready.size && lastModified == ready.lastModified
     }
 
     private fun materialize(context: Context, path: String) {
@@ -213,6 +380,9 @@ object AttachmentRegistry : AttachmentIndex {
                 unavailable += path
             } else {
                 materialized[path] = Materialized(ready, size, lastModified)
+                // PERF-12: the file this entry describes was just written; drop any stale answer
+                // so the next caller observes the new copy.
+                cacheFileExists.invalidate(ready)
             }
         } finally {
             materializing.remove(path)
@@ -236,8 +406,113 @@ object AttachmentRegistry : AttachmentIndex {
     }
 
     private fun forget(path: String) {
-        materialized.remove(path)
+        // PERF-12: the decrypted copy is what the existence cache is keyed on, so forget it with
+        // the entry that named it.
+        materialized.remove(path)?.let { cacheFileExists.invalidate(it.cachePath) }
         unavailable.remove(path)
         encrypted.remove(path)
+        sourceStamps.remove(path)
     }
 }
+
+/**
+ * PERF-12: a tiny time-to-live cache for `File(path).isFile`.
+ *
+ * [AttachmentRegistry.playable] asked the filesystem on every composition. Attachment previews
+ * recompose on each debounce tick and on scroll, so the same answer was re-read dozens of times a
+ * second while it can only change when this process (or the OS cache eviction) touches the file.
+ * A 1.5 s window keeps a display correct for any user-visible delay while turning the repeated
+ * calls into a map lookup; explicit invalidation covers the writes this process performs.
+ *
+ * [now] and [exists] are injectable so the policy - including a clock that steps backwards - is
+ * pinned by a plain JVM test without Robolectric or a real file.
+ */
+internal class FileExistenceCache(
+    private val ttlMillis: Long = FILE_EXISTENCE_TTL_MS,
+    private val now: () -> Long = { System.currentTimeMillis() },
+    private val exists: (String) -> Boolean = { File(it).isFile },
+) {
+    private data class Entry(val exists: Boolean, val checkedAt: Long)
+
+    private val entries = ConcurrentHashMap<String, Entry>()
+
+    fun isFile(path: String): Boolean {
+        val checkedAt = now()
+        val cached = entries[path]
+        // A negative age means the clock moved backwards; treat it as expired rather than trust
+        // an answer of unknowable age.
+        if (cached != null && checkedAt >= cached.checkedAt &&
+            checkedAt - cached.checkedAt < ttlMillis
+        ) {
+            return cached.exists
+        }
+        return exists(path).also { entries[path] = Entry(it, checkedAt) }
+    }
+
+    fun invalidate(path: String) {
+        entries.remove(path)
+    }
+
+    fun clear() {
+        entries.clear()
+    }
+}
+
+/** How long one existence answer is trusted. Well below any UI-visible eviction delay. */
+internal const val FILE_EXISTENCE_TTL_MS = 1_500L
+
+/**
+ * SEC-06: the canonical path [target] may name, or null when it is not a local file this app owns.
+ *
+ * - Any URI scheme (`http:`, `https:`, `file:`, `content:`, ...) is refused outright: legacy note
+ *   bodies only ever contained plain absolute paths, and a scheme is what turns rendering into a
+ *   network request or a read outside the app sandbox.
+ * - A path outside `filesDir/attachments`, `filesDir/audios` and the app-specific external files
+ *   roots is refused. The check uses `canonicalPath` plus a prefix ending in a separator, so
+ *   `attachments/../../shared_prefs/x.xml`, a sibling whose name merely starts with the root name,
+ *   and symlinks that resolve elsewhere all fall outside.
+ * - [extraRoots] are added for the one caller that may legitimately receive a decrypted cache copy
+ *   (see `AttachmentRegistry.openablePath`); the legacy/row policies pass none.
+ * - A null [context] is the documented "registry was never initialised" mode (previews, plain JVM
+ *   tests). The scheme check still applies; the root check cannot run without a Context.
+ */
+internal fun canonicalMediaPath(
+    context: Context?,
+    target: String,
+    extraRoots: List<File> = emptyList(),
+): String? {
+    val trimmed = target.trim()
+    if (trimmed.isEmpty()) return null
+    if (hasUriScheme(trimmed)) return null
+    val file = File(trimmed)
+    if (!file.isAbsolute) return null
+    val canonical = runCatching { file.canonicalFile }.getOrNull() ?: return null
+    val roots = if (context != null) mediaRoots(context) + extraRoots else extraRoots
+    if (roots.isEmpty()) return canonical.path
+    return canonical.path.takeIf { path ->
+        roots.any { root -> path.startsWith(root.path + File.separator) }
+    }
+}
+
+/** True for `scheme:...`; a POSIX path starts with `/`, so its leading separator wins. */
+private fun hasUriScheme(target: String): Boolean {
+    val colon = target.indexOf(':')
+    if (colon <= 0) return false
+    val separator = target.indexOfAny(charArrayOf('/', '\\'))
+    if (separator != -1 && colon > separator) return false
+    // A single letter before the colon is a Windows drive in the JVM test environment, not a URI
+    // scheme (no real scheme is one character, and device paths are POSIX).
+    return colon > 1 || !target[0].isLetter()
+}
+
+/** The roots [canonicalMediaPath] may return a file from: today's storage and the 2.0.x one. */
+private fun mediaRoots(context: Context): List<File> = buildList {
+    add(File(context.filesDir, AttachmentArchive.DIRECTORY))
+    add(File(context.filesDir, AttachmentFiles.AUDIO_DIRECTORY))
+    // 2.0.x put picked and shared pictures in the app-specific external directory (and recordings
+    // in an `audios` folder below it). Those files were never migrated, so they stay renderable.
+    runCatching { context.getExternalFilesDir(null) }.getOrNull()?.let { external ->
+        add(external)
+        add(File(external, AttachmentFiles.AUDIO_DIRECTORY))
+    }
+}.mapNotNull { runCatching { it.canonicalFile }.getOrNull() }

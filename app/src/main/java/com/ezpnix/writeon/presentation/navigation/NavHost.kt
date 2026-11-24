@@ -26,7 +26,6 @@ import com.ezpnix.writeon.presentation.screens.terms.TermsScreen
 fun AppNavHost(
     settingsViewModel: SettingsViewModel,
     navController: NavHostController = rememberNavController(),
-    noteId: Int,
     startDestination: String
 ) {
     val snackbarHostState = remember { SnackbarHostState() }
@@ -55,24 +54,22 @@ fun AppNavHost(
                 }
 
                 animatedComposable(NavRoutes.Edit.route) { backStackEntry ->
-                    val id = backStackEntry.arguments?.getString("id")?.toIntOrNull() ?: 0
+                    // REG-02: every Edit destination resolves its own route argument. The launch
+                    // intent's noteId is only used for the start destination (which encodes it in
+                    // this same route), so opening another note later cannot keep loading the
+                    // notification's note.
+                    val id = editRouteNoteId(backStackEntry.arguments?.getString("id"))
                     val encrypted = backStackEntry.arguments?.getString("encrypted").toBoolean()
                     EditNoteView(
                         settingsViewModel = settingsViewModel,
-                        id = if (noteId == -1) id else noteId,
+                        id = id,
                         encrypted = encrypted
                     ) {
-                        if (noteId == -1) {
-                            // A share or a notification can launch straight into the editor, leaving no
-                            // entry underneath: popBackStack() then returns false. Finishing the activity
-                            // there made back exit the app instead of returning to the note list, so the
-                            // editor - the one screen that can be the root - now falls back to Home.
-                            if (!navController.popBackStack()) {
-                                navController.navigate(NavRoutes.Home.route) {
-                                    popUpTo(NavRoutes.Edit.route) { inclusive = true }
-                                }
-                            }
-                        } else if (!navController.popBackStack()) {
+                        // A share or a notification can launch straight into the editor, leaving no
+                        // entry underneath: popBackStack() then returns false. Finishing the activity
+                        // there made back exit the app instead of returning to the note list, so the
+                        // editor - the one screen that can be the root - now falls back to Home.
+                        if (!navController.popBackStack()) {
                             navController.navigate(NavRoutes.Home.route) {
                                 popUpTo(NavRoutes.Edit.route) { inclusive = true }
                                 launchSingleTop = true
@@ -109,3 +106,12 @@ fun AppNavHost(
         }
     }
 }
+
+/**
+ * REG-02: the note id a filled Edit route carries.
+ *
+ * The route is the only source of the destination's id. Keeping the parse here makes the
+ * "notification cold start must not leak into later editors" rule testable without a
+ * NavController: `edit/7/false` always resolves 7, regardless of which note launched the app.
+ */
+internal fun editRouteNoteId(idArgument: String?): Int = idArgument?.toIntOrNull() ?: 0

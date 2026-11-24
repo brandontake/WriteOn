@@ -233,7 +233,7 @@ class EncryptedAttachmentDaoTest {
 
         assertEquals(0, failures)
         assertEquals(1, sealCalls)
-        // Assert by id: the fake re-appends an upserted row, and only the plain one is written.
+        // Assert by id: the CAS replaces the caption in place, and only the plain one is written.
         val stored = raw.rows.associate { it.id to it.caption }
         assertEquals(sealCaption("new"), stored["plain"])
         assertEquals(alreadySealed, stored["sealed"])
@@ -276,6 +276,42 @@ class EncryptedAttachmentDaoTest {
 
         assertEquals(1, failures)
         assertEquals("one", raw.rows.single().caption)
+    }
+
+    @Test
+    fun `DAT-07 a row trashed during the sweep keeps its trashed stamp and updated caption`() = runBlocking {
+        val raw = FakeAttachmentDao()
+        raw.rows += attachment(id = "a", caption = "one")
+        // The sweep has already read the row; trash "a" just before the write. The old full-row
+        // REPLACE would have written the stale entity back with trashed_at = null.
+        raw.beforeCaptionUpdate = {
+            raw.beforeCaptionUpdate = null
+            raw.rows[0] = raw.rows[0].copy(trashedAt = 777L)
+        }
+        val dao = EncryptedAttachmentDao(raw, ::sealCaption, ::openCaption)
+
+        val failures = dao.sealLegacyCaptions()
+
+        assertEquals(0, failures)
+        val stored = raw.rows.single()
+        assertEquals("the trash stamp must survive the sweep", 777L, stored.trashedAt)
+        assertEquals("the caption is still sealed in place", sealCaption("one"), stored.caption)
+    }
+
+    @Test
+    fun `DAT-07 a row deleted during the sweep is not resurrected`() = runBlocking {
+        val raw = FakeAttachmentDao()
+        raw.rows += attachment(id = "a", caption = "one")
+        raw.beforeCaptionUpdate = {
+            raw.beforeCaptionUpdate = null
+            raw.rows.clear()
+        }
+        val dao = EncryptedAttachmentDao(raw, ::sealCaption, ::openCaption)
+
+        val failures = dao.sealLegacyCaptions()
+
+        assertEquals("a zero-row CAS is a skip, not a seal failure", 0, failures)
+        assertTrue("the deleted row must stay deleted", raw.rows.isEmpty())
     }
 
     private fun attachment(
@@ -336,6 +372,9 @@ class EncryptedAttachmentDaoTest {
         /** Row id whose write should fail, to exercise the sweep's write-failure branch. */
         var failUpsertFor: String? = null
 
+        /** Runs once just before the first CAS write, so a test can mutate the table mid-sweep. */
+        var beforeCaptionUpdate: (() -> Unit)? = null
+
         override suspend fun getAll(): List<Attachment> = rows.toList()
 
         override suspend fun getById(id: String): Attachment? = rows.firstOrNull { it.id == id }
@@ -352,6 +391,19 @@ class EncryptedAttachmentDaoTest {
             if (item.id == failUpsertFor) throw IllegalStateException("write failed")
             rows.removeAll { it.id == item.id }
             rows += item
+        }
+
+        override suspend fun updateCaptionIfMatches(
+            id: String,
+            previousCaption: String,
+            newCaption: String,
+        ): Int {
+            beforeCaptionUpdate?.invoke()
+            if (id == failUpsertFor) throw IllegalStateException("write failed")
+            val index = rows.indexOfFirst { it.id == id && it.caption == previousCaption }
+            if (index < 0) return 0
+            rows[index] = rows[index].copy(caption = newCaption)
+            return 1
         }
 
         override suspend fun assignNote(noteId: Int, ids: List<String>) {

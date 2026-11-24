@@ -1,54 +1,59 @@
 package com.ezpnix.writeon.presentation.screens.edit.components
 
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class NoteImageExporterTest {
 
     @Test
-    fun `content that fits one page is one page`() {
-        assertEquals(1, exportPageCount(contentHeightPx = 900, pageHeightPx = 1000, bottomPaddingPx = 120))
+    fun `a picture inside the budget keeps the normal density`() {
+        assertEquals(1f, exportCaptureScale(widthPx = 1080, heightPx = 2000)!!, 0.0001f)
+        assertEquals(1f, exportCaptureScale(widthPx = 1000, heightPx = 12_000)!!, 0.0001f)
     }
 
     @Test
-    fun `content bottom ignores the bottom padding`() {
-        // The column is 1100 px tall, but the last 100 px are the footer's bottom padding. Counting
-        // that padding used to add a page that only contained background.
-        assertEquals(2, exportPageCount(contentHeightPx = 1100, pageHeightPx = 500, bottomPaddingPx = 100))
-        assertEquals(1000, exportContentBottomPx(contentHeightPx = 1100, bottomPaddingPx = 100))
+    fun `a long note is scaled down to the pixel budget`() {
+        val scale = exportCaptureScale(
+            widthPx = 1080,
+            heightPx = 50_000,
+            maxPixels = 20_000_000
+        )!!
+        assertEquals(0.6086f, scale, 0.001f)
+        assertTrue("the width must stay readable", 1080 * scale >= MIN_EXPORT_WIDTH_PX)
+        val scaledPixels = (1080 * scale).toLong() * (50_000 * scale).toLong()
+        assertTrue("scaled picture must fit the budget", scaledPixels <= 20_000_000)
     }
 
     @Test
-    fun `content just past a page boundary starts another page`() {
-        assertEquals(2, exportPageCount(contentHeightPx = 1100, pageHeightPx = 500, bottomPaddingPx = 100))
-        assertEquals(3, exportPageCount(contentHeightPx = 1101, pageHeightPx = 500, bottomPaddingPx = 100))
+    fun `the device budget is a third of the heap and stops at the ceiling`() {
+        assertEquals(5_592_405L, exportPixelBudgetForHeap(64))
+        assertEquals(22_369_621L, exportPixelBudgetForHeap(256))
+        assertEquals(MAX_EXPORT_PIXELS, exportPixelBudgetForHeap(512))
     }
 
     @Test
-    fun `page count is at least one for empty or invalid measurements`() {
-        assertEquals(1, exportPageCount(contentHeightPx = 0, pageHeightPx = 500, bottomPaddingPx = 100))
-        assertEquals(1, exportPageCount(contentHeightPx = 100, pageHeightPx = 0, bottomPaddingPx = 0))
-        assertEquals(1, exportPageCount(contentHeightPx = 50, pageHeightPx = 500, bottomPaddingPx = 100))
+    fun `a note that would become unreadably narrow is rejected`() {
+        // 1080 x 200 000 needs a scale of ~0.304 to fit 20 MP, leaving a 328 px wide picture.
+        assertNull(exportCaptureScale(widthPx = 1080, heightPx = 200_000))
     }
 
     @Test
-    fun `bottom padding cannot make the content bottom negative`() {
-        assertEquals(0, exportContentBottomPx(contentHeightPx = 20, bottomPaddingPx = 100))
+    fun `the dimension ceiling also limits the scale`() {
+        val scale = exportCaptureScale(
+            widthPx = 1000,
+            heightPx = 40_000,
+            maxPixels = Long.MAX_VALUE,
+            maxDimensionPx = 30_000,
+            minWidthPx = 100
+        )!!
+        assertEquals(0.75f, scale, 0.0001f)
     }
 
     @Test
-    fun `a page starting after the content bottom has no content`() {
-        assertTrue(exportPageHasContent(pageIndex = 0, pageHeightPx = 500, contentBottomPx = 1100))
-        assertTrue(exportPageHasContent(pageIndex = 1, pageHeightPx = 500, contentBottomPx = 1100))
-        assertTrue(exportPageHasContent(pageIndex = 2, pageHeightPx = 500, contentBottomPx = 1100))
-        assertFalse(exportPageHasContent(pageIndex = 3, pageHeightPx = 500, contentBottomPx = 1100))
-    }
-
-    @Test
-    fun `a single page always counts as content when the note is not empty`() {
-        assertTrue(exportPageHasContent(pageIndex = 0, pageHeightPx = 0, contentBottomPx = 10))
-        assertFalse(exportPageHasContent(pageIndex = 0, pageHeightPx = 0, contentBottomPx = 0))
+    fun `invalid measurements keep the normal density`() {
+        assertEquals(1f, exportCaptureScale(widthPx = 0, heightPx = 100)!!, 0.0001f)
+        assertEquals(1f, exportCaptureScale(widthPx = 100, heightPx = 0)!!, 0.0001f)
     }
 }

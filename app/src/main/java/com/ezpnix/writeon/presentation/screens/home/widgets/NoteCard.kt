@@ -23,6 +23,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -40,6 +41,27 @@ import com.ezpnix.writeon.presentation.screens.settings.model.SettingsViewModel
 import com.ezpnix.writeon.presentation.theme.appCornerShape
 import com.ezpnix.writeon.presentation.theme.CornerFraction
 import androidx.compose.ui.res.stringResource
+
+/**
+ * UX-09: where Home publishes the card checkbox handler.
+ *
+ * A CompositionLocal instead of another parameter on `NotesGrid`: the recycle bin reuses that grid
+ * with `onNoteUpdate = {}`, and a trashed card must not edit anything. Home provides the handler
+ * (see NoteFilter) and the bin leaves it null, which keeps the old no-op behaviour there.
+ */
+internal val LocalNoteCheckboxToggle =
+    compositionLocalOf<((Int, Int, String, Boolean) -> Unit)?> { null }
+
+/**
+ * UX-09: where Home publishes the card title handler.
+ *
+ * A title edit is also a read-modify-write: the card must not send `note.copy(name = ...)` back,
+ * because [note] is the body the card captured when it was composed. The handler's second argument
+ * is the whole new title text; Home's implementation reads the latest stored row and changes only
+ * its name. Null (the recycle bin, the widget chooser) keeps the old `onNoteUpdate` behaviour.
+ */
+internal val LocalNoteTitleUpdate =
+    compositionLocalOf<((Int, String) -> Unit)?> { null }
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -62,8 +84,20 @@ fun NoteCard(
      * Applied to the card itself. Home uses it to publish pin / tags / delete as custom
      * accessibility actions, because those only exist behind a left swipe (U7).
      */
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    /**
+     * UX-09: the home feed's checkbox handler, which reads the latest stored body and toggles the
+     * requested line there.
+     *
+     * Home provides it through [LocalNoteCheckboxToggle] (see NoteFilter), so the grid keeps its
+     * call shape and the recycle bin - which shares the same grid but must not edit anything -
+     * keeps the old no-op behaviour. Passing a lambda here keeps the widget testable.
+     */
+    onCheckboxToggle: ((Int, Int, String, Boolean) -> Unit)? = null
 ) {
+    val sharedToggle = LocalNoteCheckboxToggle.current
+    val toggleCheckbox: ((Int, Int, String, Boolean) -> Unit)? = onCheckboxToggle ?: sharedToggle
+    val updateTitle = LocalNoteTitleUpdate.current
     // One snapshot read per card instead of one per settings lookup: every `settings.value`
     // read subscribes this card to the settings state, so re-reading it six times made each
     // card recompose on unrelated settings writes.
@@ -119,7 +153,16 @@ fun NoteCard(
                         .heightIn(max = dimensionResource(R.dimen.max_name_height)),
                     weight = FontWeight.Bold,
                     spacing = 0.dp,
-                    onContentChange = { onNoteUpdate(note.copy(name = it)) },
+                    onContentChange = { text ->
+                        // UX-09: a title checkbox tap rewrites the title, not the body this card
+                        // captured. Home reads the latest row and writes only `name`; without a
+                        // handler (the recycle bin) this stays a no-op through `onNoteUpdate`.
+                        if (updateTitle != null) {
+                            updateTitle(note.id, text)
+                        } else {
+                            onNoteUpdate(note.copy(name = text))
+                        }
+                    },
                     fontSize = 20.sp,
                     radius = settings.cornerRadius,
                     maxLines = 1,
@@ -143,11 +186,14 @@ fun NoteCard(
                         .fillMaxWidth()
                         .padding(horizontal = 4.dp)
                         .heightIn(max = dimensionResource(R.dimen.max_description_height)),
-                    // A checkbox toggled on the card edits the note, so the write-back has to
-                    // restore the lines the summary dropped. Without this, ticking a box on a long
-                    // note would save the summary over the full text.
-                    onContentChange = { updated ->
-                        onNoteUpdate(note.copy(description = rebuildFullBody(body, updated)))
+                    // UX-09: the summary is a bounded, possibly truncated view of the body, so a
+                    // checkbox tick must not rebuild the note from it. Home's handler reads the
+                    // latest stored body and toggles that line there; without one (the recycle
+                    // bin) the tap stays a no-op, exactly as before.
+                    onCheckboxToggle = toggleCheckbox?.let { toggle ->
+                        { lineNumber: Int, text: String, checked: Boolean ->
+                            toggle(note.id, lineNumber, text, checked)
+                        }
                     },
                     fontSize = 14.sp,
                     radius = settings.cornerRadius,
@@ -183,53 +229,4 @@ fun NoteCard(
             }
         }
     }
-}
-
-/** Enough of a note to fill the 150dp body area on any density, far less than most notes. */
-private const val CARD_BODY_MAX_LINES = 12
-
-/** A single line longer than this (a pasted paragraph, a one-line log) is cut as well. */
-private const val CARD_BODY_MAX_LINE_CHARS = 400
-
-/**
- * The part of a note body a home card renders, plus whatever was cut off.
- *
- * [tails] holds the remainder of each line that was too long and [hiddenLines] the lines past
- * [CARD_BODY_MAX_LINES]; both exist so [rebuildFullBody] can put the note back together when a
- * checkbox is ticked from the card. Ticking a checkbox in the summary must never write the summary
- * over the note.
- */
-private class CardBody(
-    val text: String,
-    val isTruncated: Boolean,
-    val tails: List<String>,
-    val hiddenLines: List<String>
-)
-
-private fun buildCardBody(description: String): CardBody {
-    val lines = description.lines()
-    val fits = lines.size <= CARD_BODY_MAX_LINES &&
-        lines.none { it.length > CARD_BODY_MAX_LINE_CHARS }
-    if (fits) {
-        return CardBody(description, isTruncated = false, tails = emptyList(), hiddenLines = emptyList())
-    }
-    val head = lines.take(CARD_BODY_MAX_LINES)
-    return CardBody(
-        text = head.joinToString("\n") { it.take(CARD_BODY_MAX_LINE_CHARS) },
-        isTruncated = true,
-        tails = head.map { it.drop(CARD_BODY_MAX_LINE_CHARS) },
-        hiddenLines = lines.drop(CARD_BODY_MAX_LINES)
-    )
-}
-
-/**
- * Re-attaches what [buildCardBody] cut off, so [updated] (the summary after the user ticked a
- * checkbox in it) can be saved as the note body without losing the rest of the text.
- */
-private fun rebuildFullBody(body: CardBody, updated: String): String {
-    if (!body.isTruncated) return updated
-    val head = updated.lines().mapIndexed { index, line ->
-        line + (body.tails.getOrNull(index) ?: "")
-    }
-    return (head + body.hiddenLines).joinToString("\n")
 }

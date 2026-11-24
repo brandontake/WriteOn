@@ -29,6 +29,17 @@ import kotlinx.coroutines.flow.asStateFlow
  */
 object RestoreCoordinator {
 
+    /**
+     * REG-04: proof that a caller is the restore that [begin] published.
+     *
+     * A superseded cloud restore (WorkManager `REPLACE`) can still reach its failure block after
+     * the newer restore has begun. Calling the token-less [end] there would clear the new
+     * restore's overlay while its database swap is still in flight - reopening the DAT-7 crash
+     * window. A token is only equal to the one [begin] issued for the current transition, so
+     * [end] with a stale token is a no-op.
+     */
+    class Token internal constructor(internal val sequence: Long)
+
     private val _restoring = MutableStateFlow(false)
 
     /** True from the moment a restore is about to close Room until it fails or the process dies. */
@@ -46,6 +57,10 @@ object RestoreCoordinator {
     private val transitionLock = Any()
     private var currentlyRestoring = false
 
+    /** REG-04: the owner of the current transition; null while not restoring. */
+    private var currentToken: Token? = null
+    private var nextTokenSequence = 0L
+
     fun onBegin(listener: () -> Unit) {
         beginListeners.add(listener)
     }
@@ -57,30 +72,50 @@ object RestoreCoordinator {
     /**
      * Enters the restoring state and pauses every registered collector.
      *
-     * Idempotent: while [currentlyRestoring] is true this only returns, so a duplicated call (for
-     * example a worker retry while a previous attempt is still rolling back) does not emit a second
-     * transition or a second `clearSensitiveState()`.
+     * Idempotent: while [currentlyRestoring] is true this only returns null, so a duplicated call
+     * (for example a worker retry while a previous attempt is still rolling back) does not emit a
+     * second transition or a second `clearSensitiveState()`. Otherwise it returns the [Token] that
+     * owns the transition; pass it to [end] on the failure path.
      */
-    fun begin() {
-        val listeners = synchronized(transitionLock) {
-            if (currentlyRestoring) return
+    fun begin(): Token? {
+        val (listeners, token) = synchronized(transitionLock) {
+            if (currentlyRestoring) return null
             currentlyRestoring = true
+            val issued = Token(++nextTokenSequence)
+            currentToken = issued
             _restoring.value = true
-            beginListeners.toList()
+            beginListeners.toList() to issued
         }
         notifyListeners(listeners)
+        return token
     }
 
     /**
      * Leaves the restoring state and reopens what [begin] paused.
      *
-     * Used by every failure/rollback path only. Success leaves the flag set because the database
-     * that is now live is not the one Room opened, and only a fresh process may query it.
+     * Legacy entry point for callers that do not hold a token (the snapshot undo predates
+     * [Token]). Restore paths that can be superseded must use [end] with their token instead.
      */
-    fun end() {
+    fun end() = endInternal(expected = null)
+
+    /**
+     * REG-04: leaves the restoring state only when [token] owns the current transition.
+     *
+     * A superseded/cancelled restore whose [begin] returned null (another restore already owned
+     * the overlay) or whose token belongs to an earlier transition must not clear the newer
+     * restore's overlay. That is exactly what the old token-less [end] did.
+     */
+    fun end(token: Token?) {
+        if (token == null) return
+        endInternal(expected = token)
+    }
+
+    private fun endInternal(expected: Token?) {
         val listeners = synchronized(transitionLock) {
             if (!currentlyRestoring) return
+            if (expected != null && currentToken !== expected) return
             currentlyRestoring = false
+            currentToken = null
             _restoring.value = false
             endListeners.toList()
         }
@@ -108,6 +143,7 @@ object RestoreCoordinator {
     internal fun resetForTest() {
         synchronized(transitionLock) {
             currentlyRestoring = false
+            currentToken = null
             _restoring.value = false
             beginListeners.clear()
             endListeners.clear()

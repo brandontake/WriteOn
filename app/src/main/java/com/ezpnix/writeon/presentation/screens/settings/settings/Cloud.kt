@@ -63,6 +63,7 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.navigation.NavController
 import androidx.work.Constraints
@@ -78,6 +79,7 @@ import com.ezpnix.writeon.core.util.RestoreSnapshots
 import com.ezpnix.writeon.presentation.screens.edit.components.CustomTextField
 import com.ezpnix.writeon.presentation.screens.settings.SettingsScaffold
 import com.ezpnix.writeon.data.backup.TxtBackupHelper
+import com.ezpnix.writeon.data.backup.BackupEncryptionPolicy
 import com.ezpnix.writeon.data.backup.WebDavBackupState
 import com.ezpnix.writeon.data.backup.WebDavHttp
 import com.ezpnix.writeon.data.backup.WebDavPrefs
@@ -88,6 +90,7 @@ import com.ezpnix.writeon.presentation.screens.settings.model.SettingsViewModel
 import com.ezpnix.writeon.data.backup.webDavDataStore
 import com.ezpnix.writeon.presentation.theme.appCornerShape
 import com.jakewharton.processphoenix.ProcessPhoenix
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
@@ -100,18 +103,30 @@ import java.util.Locale
 import java.util.UUID
 
 /**
- * Unique work name shared by the WebDAV upload and download workers.
+ * Unique work name shared by the WebDAV uploads.
  *
- * Both used to be enqueued anonymously, so two taps started two workers at once: two uploads racing
- * on the same remote file, or - worse - a restore rewriting the local database while a backup was
- * still reading it. Sharing one name keeps them on one chain.
+ * Uploads used to be enqueued anonymously, so two taps started two uploads racing on the same
+ * remote file. Sharing one name keeps them on one chain.
  *
  * The policy is [ExistingWorkPolicy.APPEND_OR_REPLACE], not KEEP: KEEP *silently drops* the new
- * request whenever the chain is still running, so tapping "restore" during a backup did nothing at
- * all - no error, no queue, no toast. APPEND_OR_REPLACE queues the restore behind the running
- * backup instead, and replaces a chain that already failed or was cancelled.
+ * request whenever the chain is still running, so tapping "back up" during a backup did nothing at
+ * all - no error, no queue, no toast. APPEND_OR_REPLACE queues the upload behind the running one
+ * instead, and replaces a chain that already failed or was cancelled.
  */
 private const val WEBDAV_SYNC_WORK = "WebDAVSync"
+
+/**
+ * SYN-6: restores get their own unique work name, with [ExistingWorkPolicy.REPLACE].
+ *
+ * They used to be appended to [WEBDAV_SYNC_WORK]. `APPEND_OR_REPLACE` only discards a failed
+ * prerequisite that already existed when the work was enqueued; a backup that fails *later*
+ * (conflict, 401, no validator - all ordinary outcomes) marks the appended restore FAILED without
+ * ever running it, while the screen had already toasted "restore started". A separate name means
+ * a best-effort backup can never cancel a restore; REPLACE only supersedes an earlier restore,
+ * and the shared [com.ezpnix.writeon.core.util.BackupRestoreLock] still serializes the actual
+ * database work against backups and local import/export.
+ */
+private const val WEBDAV_RESTORE_WORK = "WebDAVRestore"
 
 private const val TAG = "CloudScreen"
 
@@ -122,8 +137,8 @@ private const val TAG = "CloudScreen"
  * had changed, but the canonical file on the server still belongs to the other device. Without a
  * prompt the very next backup sees the same disagreement and parks yet another conflict copy, so
  * the restored one silently rots. The work id - not just a boolean - identifies the exact restore:
- * this chain also runs ordinary backups and restores, and a later unrelated success must not pop
- * the prompt.
+ * the restore chain also runs ordinary restores of the canonical archive, and a later unrelated
+ * success must not pop the prompt.
  *
  * It is persisted because the restore worker restarts the process about two seconds after success
  * (see [com.ezpnix.writeon.data.backup.WebDAVRestoreWorker]). An in-memory flag would die in the
@@ -281,9 +296,15 @@ fun CloudScreen(navController: NavController, settingsViewModel: SettingsViewMod
     // U10/W3: WorkManager is the only place that knows whether a transfer is still running. This
     // observation is what turns "backup started" into a visible in-progress state and makes the
     // worker's finish/failure toast line up with the screen instead of arriving out of nowhere.
-    val workInfos by remember(workManager) {
+    val syncWorkInfos by remember(workManager) {
         workManager.getWorkInfosForUniqueWorkFlow(WEBDAV_SYNC_WORK)
     }.collectAsStateWithLifecycle(initialValue = emptyList())
+    // SYN-6: restores are enqueued on their own unique name, so the screen has to watch both
+    // chains to keep the progress card and the conflict-restore acknowledgement working.
+    val restoreWorkInfos by remember(workManager) {
+        workManager.getWorkInfosForUniqueWorkFlow(WEBDAV_RESTORE_WORK)
+    }.collectAsStateWithLifecycle(initialValue = emptyList())
+    val workInfos = syncWorkInfos + restoreWorkInfos
     val transferRunning = workInfos.any { info ->
         info.state == WorkInfo.State.ENQUEUED ||
             info.state == WorkInfo.State.RUNNING ||
@@ -505,6 +526,46 @@ fun CloudScreen(navController: NavController, settingsViewModel: SettingsViewMod
     )
 
     var showBackupPasswordPrompt by remember { mutableStateOf(false) }
+    /**
+     * SEC-03: a previously started export that the policy refused for a missing password. The
+     * prompt is re-opened for this exact URI, so confirming it resumes the same export instead of
+     * asking the user to pick a destination again.
+     */
+    var pendingPasswordExportUri by remember { mutableStateOf<Uri?>(null) }
+    /**
+     * SEC-03: true when the prompt was forced by vault content although the user's `encryptBackup`
+     * switch is off. The dialog then explains why encryption is not optional for this library.
+     */
+    var backupEncryptionForcedByVault by remember { mutableStateOf(false) }
+
+    // SEC-03: the repository refuses an export whose policy requires encryption when no password
+    // was supplied. That used to surface as a toast and nothing else, leaving the picked file
+    // empty and the user unsure what happened. Re-open the password dialog here; its confirm
+    // button re-runs the export against the same URI with the typed password.
+    val passwordRequiredExportUri by settingsViewModel.passwordRequiredExportUri
+        .collectAsStateWithLifecycle()
+    LaunchedEffect(passwordRequiredExportUri) {
+        val uri = passwordRequiredExportUri ?: return@LaunchedEffect
+        pendingPasswordExportUri = uri
+        val encryptBackupSetting = settingsViewModel.settings.value.encryptBackup
+        // Explain the prompt only when vault content (not the user's own switch) is the reason.
+        // A probe failure leaves the hint off rather than claiming a cause it cannot prove.
+        backupEncryptionForcedByVault = if (encryptBackupSetting) {
+            false
+        } else {
+            try {
+                withContext(Dispatchers.IO) { BackupEncryptionPolicy.hasVaultContent(context) }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                false
+            }
+        }
+        showBackupPasswordPrompt = true
+        // Consume last: clearing the key this effect observes cancels it, so doing that before
+        // the state above would drop the prompt on the floor.
+        settingsViewModel.consumePasswordRequiredExport()
+    }
     var showWebDavRestoreConfirm by remember { mutableStateOf(false) }
     var showLocalRestoreConfirm by remember { mutableStateOf(false) }
 
@@ -567,6 +628,11 @@ fun CloudScreen(navController: NavController, settingsViewModel: SettingsViewMod
                 prefs.remove(stringPreferencesKey(WebDavPrefs.ETAG))
                 prefs.remove(stringPreferencesKey(WebDavPrefs.LAST_MODIFIED))
                 prefs.remove(booleanPreferencesKey(WebDavPrefs.REMOTE_WRITTEN))
+                // R3-02: the repair lease is scoped to the URL whose validators it recorded.
+                prefs.remove(stringPreferencesKey(WebDavPrefs.REPAIR_ETAG))
+                prefs.remove(stringPreferencesKey(WebDavPrefs.REPAIR_LAST_MODIFIED))
+                prefs.remove(stringPreferencesKey(WebDavPrefs.REPAIR_URL))
+                prefs.remove(intPreferencesKey(WebDavPrefs.REPAIR_ATTEMPTS))
             }
         }
         return true
@@ -662,10 +728,13 @@ fun CloudScreen(navController: NavController, settingsViewModel: SettingsViewMod
         coroutineScope.launch {
             if (!persistWebDavConfig()) return@launch
             workManager.enqueueUniqueWork(
-                WEBDAV_SYNC_WORK,
-                // APPEND_OR_REPLACE, not KEEP: KEEP dropped this restore outright whenever a
-                // backup was still running - the user saw "restore started" and nothing happened.
-                ExistingWorkPolicy.APPEND_OR_REPLACE,
+                WEBDAV_RESTORE_WORK,
+                // SYN-6: REPLACE on the restore-only chain. APPEND_OR_REPLACE on the shared backup
+                // chain marked this restore FAILED - without running it - whenever a backup in
+                // front of it failed later, while the toast below had already claimed it started.
+                // REPLACE does not touch a running backup; the shared restore lock serializes the
+                // actual work.
+                ExistingWorkPolicy.REPLACE,
                 OneTimeWorkRequestBuilder<com.ezpnix.writeon.data.backup.WebDAVRestoreWorker>()
                     .setConstraints(webDavNetworkConstraints)
                     .build()
@@ -689,8 +758,10 @@ fun CloudScreen(navController: NavController, settingsViewModel: SettingsViewMod
                 .setConstraints(webDavNetworkConstraints)
                 .build()
             workManager.enqueueUniqueWork(
-                WEBDAV_SYNC_WORK,
-                ExistingWorkPolicy.APPEND_OR_REPLACE,
+                WEBDAV_RESTORE_WORK,
+                // SYN-6: same restore-only chain as the canonical restore - never appended behind
+                // a best-effort upload.
+                ExistingWorkPolicy.REPLACE,
                 request
             )
             // SYN-3: remember this exact work so its success can offer to make the restored copy
@@ -966,6 +1037,20 @@ fun CloudScreen(navController: NavController, settingsViewModel: SettingsViewMod
                 }
             }
 
+            // SYN-3: the notice list is bounded, but the files on the server are not deleted.
+            // Say so when older notices have fallen off instead of letting them vanish silently.
+            if (conflictBackupUrls.size >= WebDavBackupState.MAX_REMEMBERED_CONFLICTS) {
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    text = stringResource(
+                        R.string.webdav_conflict_limit_note,
+                        WebDavBackupState.MAX_REMEMBERED_CONFLICTS
+                    ),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+
             Spacer(Modifier.height(16.dp))
             Text(stringResource(R.string.cloud_backup_options), style = MaterialTheme.typography.titleMedium)
             Spacer(Modifier.height(16.dp))
@@ -1024,10 +1109,31 @@ fun CloudScreen(navController: NavController, settingsViewModel: SettingsViewMod
                 primaryButtonText = stringResource(R.string.backup),
                 secondaryButtonText = stringResource(R.string.restore),
                 onPrimaryClick = {
-                    if (settingsViewModel.settings.value.encryptBackup) {
-                        showBackupPasswordPrompt = true
-                    } else {
-                        exportBackupLauncher.launch("${DatabaseConst.NOTES_DATABASE_BACKUP_NAME}-${currentDateTime()}.zip")
+                    // SEC-03: prompt when the toggle is on *or* the library holds vault rows. The
+                    // vault check runs against the live database, so a note saved as vault after
+                    // this screen opened still gets an encrypted archive. A user who turned the
+                    // toggle off is told why the prompt appeared.
+                    coroutineScope.launch {
+                        val encryptBackupSetting = settingsViewModel.settings.value.encryptBackup
+                        // If the probe itself fails, treat the library as vault-bearing: asking for
+                        // a password is the safe fallback, and the repository enforces the same
+                        // policy again at export time. Cancellation still propagates.
+                        val hasVaultContent = try {
+                            withContext(Dispatchers.IO) {
+                                BackupEncryptionPolicy.hasVaultContent(context)
+                            }
+                        } catch (e: CancellationException) {
+                            throw e
+                        } catch (e: Exception) {
+                            true
+                        }
+                        if (BackupEncryptionPolicy.required(encryptBackupSetting, hasVaultContent)) {
+                            backupEncryptionForcedByVault = hasVaultContent && !encryptBackupSetting
+                            showBackupPasswordPrompt = true
+                        } else {
+                            backupEncryptionForcedByVault = false
+                            exportBackupLauncher.launch("${DatabaseConst.NOTES_DATABASE_BACKUP_NAME}-${currentDateTime()}.zip")
+                        }
                     }
                 },
                 onSecondaryClick = { showLocalRestoreConfirm = true }
@@ -1183,12 +1289,28 @@ fun CloudScreen(navController: NavController, settingsViewModel: SettingsViewMod
             context = context,
             text = stringResource(id = R.string.database_backup),
             settingsViewModel = settingsViewModel,
+            // SEC-03: when vault content - not the user's switch - is why a password is required,
+            // say so instead of letting the prompt look like a bug in the off position.
+            hint = if (backupEncryptionForcedByVault) {
+                stringResource(R.string.backup_vault_requires_encryption)
+            } else {
+                null
+            },
             onExit = { password ->
                 showBackupPasswordPrompt = false
+                val retryUri = pendingPasswordExportUri
+                pendingPasswordExportUri = null
                 if (password != null) {
                     settingsViewModel.password = password.text
-                    exportBackupLauncher.launch("${DatabaseConst.NOTES_DATABASE_BACKUP_NAME}-${currentDateTime()}.zip")
+                    if (retryUri != null) {
+                        // SEC-03: the refused export already has a destination; run it again with
+                        // the password instead of making the user pick the file a second time.
+                        settingsViewModel.onExportBackup(retryUri, context)
+                    } else {
+                        exportBackupLauncher.launch("${DatabaseConst.NOTES_DATABASE_BACKUP_NAME}-${currentDateTime()}.zip")
+                    }
                 }
+                backupEncryptionForcedByVault = false
             }
         )
     }
@@ -1510,6 +1632,22 @@ fun PasswordPrompt(
     hint: String? = null,
 ) {
     var password by remember { mutableStateOf(TextFieldValue("")) }
+    // R2-05/SEC-09: the typed backup password is local dialog state. The ViewModel clears its own
+    // copy on a lock/Vault eviction, but the visible field (and the `onExit` answer it would hand
+    // back) survived. Close the dialog with a null answer when the authorizing session ends.
+    val vaultActive by settingsViewModel.vaultSessionActive.collectAsStateWithLifecycle()
+    val appLocked by settingsViewModel.appLocked.collectAsStateWithLifecycle()
+    var sessionWasActive by remember { mutableStateOf(false) }
+    LaunchedEffect(vaultActive, appLocked) {
+        if (vaultActive && !appLocked) {
+            sessionWasActive = true
+            return@LaunchedEffect
+        }
+        if (!sessionWasActive && !appLocked) return@LaunchedEffect
+        sessionWasActive = false
+        password = TextFieldValue("")
+        onExit(null)
+    }
     Dialog(
         onDismissRequest = { onExit(null) },
         properties = DialogProperties(usePlatformDefaultWidth = false),

@@ -2,6 +2,7 @@ package com.ezpnix.writeon.data.backup
 
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
+import com.ezpnix.writeon.core.attachment.AttachmentArchive
 import com.ezpnix.writeon.core.attachment.AttachmentSnapshots
 import com.ezpnix.writeon.core.constant.DatabaseConst
 import com.ezpnix.writeon.core.security.SharedPreferencesVaultKeyStore
@@ -68,8 +69,45 @@ class RestoreJournalTest {
     }
 
     @Test
-    fun `a database that never moved keeps the old salt`() {
+    fun `a restore killed before its attachments landed is finished from the recorded staging`() {
         val restored = stagedDb()
+        val staging = AttachmentArchive.newStagingDirectory(context).apply {
+            deleteRecursively()
+            mkdirs()
+        }
+        val stagedAttachment = File(staging, "attachments/a.jpg").apply {
+            parentFile!!.mkdirs()
+            writeText("restored bytes")
+        }
+        val target = File(AttachmentArchive.restoreDirectory(context), "a.jpg").apply { delete() }
+
+        assertTrue(
+            RestoreJournal.write(
+                context,
+                restored,
+                newSalt = null,
+                newDeckSealed = null,
+                attachmentStaging = staging.absolutePath,
+            )
+        )
+        assertEquals(
+            setOf(staging.canonicalPath),
+            RestoreJournal.pendingStagingDirectories(context)
+        )
+        liveDb().writeBytes(restored.readBytes())
+
+        RestoreJournal.recover(context)
+
+        assertTrue("R2-09: the staged attachment must reach filesDir", target.isFile)
+        assertEquals("restored bytes", target.readText())
+        assertFalse("the finished staging tree is not kept", stagedAttachment.exists())
+        assertFalse(RestoreJournal.file(context).exists())
+        target.delete()
+        staging.deleteRecursively()
+    }
+
+    @Test
+    fun `a database that never moved keeps the old salt`() {        val restored = stagedDb()
         val oldSalt = salt(3)
         SharedPreferencesVaultKeyStore(context).setEncodedSalt(oldSalt)
 

@@ -7,6 +7,62 @@ import com.ezpnix.writeon.domain.repository.SettingsRepository
 import javax.inject.Inject
 
 /**
+ * TST-03: the keys [SettingsUseCase] persists, as one explicit set.
+ *
+ * The list exists so a test can reflect over [Settings] and fail when a newly added field was not
+ * wired into the persistence paths. The round-trip test alone could not catch that: a new field
+ * with a default value reads back as the same default whether or not anything was stored.
+ *
+ * [SettingsUseCaseTest] checks both directions: every [Settings] member is in this set (or in
+ * [SETTINGS_EXCLUDED_KEYS]), and the save/load paths use exactly these keys - adding a key here
+ * without writing or reading it fails as well.
+ */
+internal val PERSISTED_SETTING_KEYS: Set<String> = setOf(
+    "viewMode",
+    "automaticTheme",
+    "darkTheme",
+    "dynamicTheme",
+    "amoledTheme",
+    "minimalisticMode",
+    "extremeAmoledMode",
+    "isMarkdownEnabled",
+    "renderLatex",
+    "liveAttachmentPreview",
+    "screenProtection",
+    "encryptBackup",
+    "sortDescending",
+    "sortBy",
+    "vaultSettingEnabled",
+    "vaultEnabled",
+    "showOnlyTitle",
+    "cornerRadius",
+    "predictiveBackEnabled",
+    "isBiometricEnabled",
+    "autoBackupEnabled",
+    "fontSize",
+    "columnsCount",
+)
+
+/**
+ * Settings whose persistence is owned by a dedicated writer rather than the bulk schema.
+ *
+ * `termsOfService` is accepted exactly once (first launch) and is written by
+ * `SettingsRepository.saveTermsOfService`. It used to be part of [PERSISTED_SETTING_KEYS] as well,
+ * so any unrelated settings change wrote the in-memory copy back; when that copy was still the
+ * stale `false` from before the acceptance collector emitted, the next launch showed the Terms
+ * screen again. Keeping it out of the bulk writer makes acceptance write-once.
+ */
+internal val SEPARATELY_MANAGED_SETTING_KEYS: Set<String> = setOf("termsOfService")
+
+/**
+ * TST-03: [Settings] members that are deliberately not persisted by the bulk settings writer.
+ *
+ * Documented rather than silently skipped so the reflection test can still tell "intentionally
+ * separate" apart from "forgot to save it".
+ */
+internal val SETTINGS_EXCLUDED_KEYS: Set<String> = SEPARATELY_MANAGED_SETTING_KEYS
+
+/**
  * Reads and writes every setting by name.
  *
  * This used to walk `Settings::class.java.declaredFields` with `isAccessible = true`, which broke
@@ -63,10 +119,6 @@ class SettingsUseCase @Inject constructor(
             autoBackupEnabled = readBoolean("autoBackupEnabled", defaults.autoBackupEnabled),
             fontSize = readFloat("fontSize", defaults.fontSize),
             columnsCount = readInt("columnsCount", defaults.columnsCount),
-            hideVisibilityButtonWhenKeyboard = readBoolean(
-                "hideVisibilityButtonWhenKeyboard",
-                defaults.hideVisibilityButtonWhenKeyboard
-            ),
         )
         return migrateStoredSettings(settings)
     }
@@ -138,16 +190,14 @@ class SettingsUseCase @Inject constructor(
         settingsRepository.putBoolean("vaultSettingEnabled", settings.vaultSettingEnabled)
         settingsRepository.putBoolean("vaultEnabled", settings.vaultEnabled)
         settingsRepository.putBoolean("showOnlyTitle", settings.showOnlyTitle)
-        settingsRepository.putBoolean("termsOfService", settings.termsOfService)
+        // termsOfService is intentionally absent: SettingsRepository.saveTermsOfService owns it,
+        // and writing it from every unrelated settings change is what re-showed the first-run
+        // screen after acceptance. See SEPARATELY_MANAGED_SETTING_KEYS.
         settingsRepository.putInt("cornerRadius", settings.cornerRadius)
         settingsRepository.putBoolean("predictiveBackEnabled", settings.predictiveBackEnabled)
         settingsRepository.putBoolean("isBiometricEnabled", settings.isBiometricEnabled)
         settingsRepository.putBoolean("autoBackupEnabled", settings.autoBackupEnabled)
         settingsRepository.putFloat("fontSize", settings.fontSize)
         settingsRepository.putInt("columnsCount", settings.columnsCount)
-        settingsRepository.putBoolean(
-            "hideVisibilityButtonWhenKeyboard",
-            settings.hideVisibilityButtonWhenKeyboard
-        )
     }
 }

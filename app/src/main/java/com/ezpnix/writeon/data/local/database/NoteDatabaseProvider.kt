@@ -448,7 +448,7 @@ internal class LegacyBodyRewriteMigration(
         pendingNotes.forEach { (noteId, sealedBody) ->
             db.execSQL(
                 "UPDATE `notes-table` SET `note-description` = ? WHERE `id` = ?",
-                arrayOf(sealedBody, noteId)
+                arrayOf<Any?>(sealedBody, noteId)
             )
         }
 
@@ -457,7 +457,7 @@ internal class LegacyBodyRewriteMigration(
                 "INSERT OR REPLACE INTO `attachments` " +
                     "(`attachment-id`, `note-id`, `type`, `path`, `caption`, `created_at`) " +
                     "VALUES (?, ?, ?, ?, ?, ?)",
-                arrayOf(
+                arrayOf<Any?>(
                     attachment.id,
                     attachment.noteId,
                     attachment.type,

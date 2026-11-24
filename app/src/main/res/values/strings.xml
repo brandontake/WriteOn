@@ -5,7 +5,6 @@
     <string name="build_type">Build Type</string>
     <string name="latest_release">Check Latest Release</string>
     <string name="source_code">Open Source Code</string>
-    <string name="app_list">Version Catalogue</string>
     <string name="android">About Phone</string>
     <string name="android_description">details</string>
     <string name="about">About</string>
@@ -36,6 +35,7 @@
     <string name="share">Share</string>
     <string name="share_text">Share text</string>
     <string name="save_as_image">Save as image</string>
+    <string name="image_export_too_long">This note is too long for a single image. Try exporting a shorter section.</string>
     <string name="msg_image_saved">Image saved to %1$s</string>
     <string name="msg_image_save_failed">Could not save the image</string>
     <string name="msg_image_save_failed_reason">Could not save the image: %1$s</string>
@@ -112,6 +112,9 @@
     <string name="auto_backup_description">Saves an encrypted copy of your notes in the app\'s private storage every day, keeping the newest seven but never more than 200 MB in total (oldest copies are deleted first; at least three are always kept). They can be restored from Settings → Cloud on this device only - the encryption key never leaves the phone</string>
     <string name="backup_dropdown">Backup</string>
     <string name="backup_description">Store or restore all notes to/from a zip file. Note that this replaces your entire existing notes as well as clearing the recycle bin.</string>
+    <!-- SEC-03: vault content makes the local database backup encrypted even when the switch is off. -->
+    <string name="backup_vault_requires_encryption">This library contains vault notes. A database backup that includes them (and their media) must be encrypted, so a password is required.</string>
+    <string name="backup_vault_requires_password">This backup must be encrypted. Choose a password and export again.</string>
     <string name="restore_description">Restore notes from a zip file</string>
 
     <!-- File Import -->
@@ -125,7 +128,6 @@
     <string name="markdown">Markdown formatting</string>
     <string name="markdown_description">Turn off to also hide split preview</string>
     <string name="description_markdown">Support • Images</string>
-    <string name="description_behavior">Markdown • LaTeX • Live preview • List layout</string>
     <string name="images_support">Images Support</string>
     <string name="description_widgets">Widgets • Markdown</string>
 
@@ -173,6 +175,9 @@
     <string name="feature">Hello there</string>
     <string name="support">(✦) WriteOn: Simple Notepad</string>
     <string name="support_description">Show your love</string>
+    <string name="support_youtube">YouTube</string>
+    <string name="support_github">GitHub</string>
+    <string name="support_kofi">KoFi</string>
     <string name="issue">Issue Feedback</string>
     <string name="issue_description">Suggest features to developer</string>
     <string name="guide">Help &amp; Answers</string>
@@ -180,14 +185,13 @@
     <string name="invalid_input">Invalid input</string>
     <string name="save_and_exit">Save and Exit</string>
 
-    <!-- Behavior -->
-    <string name="Behavior">Behavior</string>
     <string name="show_only_title">Show only title in home screen</string>
     <string name="show_only_title_description">Hide content thus giving more space</string>
 
     <!-- Terms of Service -->
     <string name="terms_of_service">Terms of service</string>
     <string name="agree">Agree</string>
+    <string name="terms_accept_failed">Could not save your acceptance. Please try again.</string>
     <string name="terms_acceptance_title">1. Acceptance of Terms</string>
     <string name="terms_acceptance_body">Welcome to WriteOn. By using our application, you agree to these Terms of Service. Please read them carefully.</string>
     <string name="terms_license_title">2. License in General</string>
@@ -247,7 +251,6 @@
     <string name="action_save">Save</string>
     <string name="action_start_test">Start Test</string>
     <string name="activate_search">Activate Search</string>
-    <string name="app_list_latest">Latest Release</string>
     <string name="app_subtitle">Simple Notepad</string>
     <string name="backup_successful">Successful Backup</string>
     <string name="calculator_result">Result</string>
@@ -311,10 +314,16 @@
     <string name="cloud_backup_completed">WebDAV backup completed</string>
     <string name="cloud_backup_failed">WebDAV backup failed</string>
     <string name="cloud_backup_no_validator">The server provides no validation information (ETag or Last-Modified), so the overwrite was refused to avoid data loss.</string>
+    <string name="webdav_remote_unverified">The server could not confirm the remote backup, so it was not overwritten. Check the WebDAV server and retry, or use \"Overwrite remote\" if this device\'s notes must win.</string>
+    <string name="webdav_invalid_url">The WebDAV address is not a valid URL. Enter the full address of the backup file.</string>
+    <string name="webdav_url_points_to_folder">The WebDAV address points to a folder, not a backup file. Add the file name (for example notes.zip) to the address.</string>
+    <string name="webdav_conflict_no_space">The server is out of storage: conflict copies are using the remaining space. Free space or remove old conflict copies on the server, then retry.</string>
+    <string name="webdav_conflict_limit_note">Only the %1$d most recent conflict copies are listed. Older copies are still on your WebDAV server.</string>
     <string name="cloud_restore_manifest_freshness">Backed up on %1$s · %2$d notes</string>
     <string name="cloud_restore_manifest_unknown">Age unknown: this archive does not record when it was backed up.</string>
     <string name="cloud_restore_manifest_loading">Reading backup info…</string>
     <string name="cloud_conflict_kept">The remote backup had changed; this device\'s copy was kept as a conflict copy.</string>
+    <string name="webdav2_publish_unverified">The server accepted the upload, but the published file could not be verified as this device\'s backup. It was not recorded as a completed backup; this device\'s archive was kept as a conflict copy instead.</string>
     <string name="cloud_webdav_restore_failed">WebDAV restore failed</string>
     <string name="cloud_credentials_unreadable">The stored WebDAV credentials could not be read. Re-enter them in Settings.</string>
     <string name="cloud_restore_newer_version">This backup was created by a newer version of WriteOn. Update the app, then restore again.</string>
@@ -385,6 +394,7 @@
     <string name="flashcard_wrong_answer">Wrong! Correct answer: %1$s</string>
     <string name="flashcard_wrong_answers">❌ Wrong answers: %1$d</string>
     <string name="flashcards">Flashcards</string>
+    <string name="msg_flashcard_deleted">Flashcard deleted</string>
     <string name="fmt_heading">Heading</string>
     <string name="fmt_link">Insert Link</string>
     <string name="fmt_divider">Divider Line</string>
@@ -425,10 +435,12 @@
     <string name="issue_item">Item %1$d</string>
     <string name="msg_error_saving_file">Error saving file: %1$s</string>
     <string name="msg_error_with_message">Error: %1$s</string>
+    <string name="msg_copy_too_large">The note is too large to copy; saving it to a file instead.</string>
     <string name="msg_exporting">Exporting…</string>
     <string name="msg_link_copied">Link copied to clipboard!</string>
     <string name="msg_no_browser_found">No browser found!</string>
     <string name="msg_note_saved">Note Saved!</string>
+    <string name="msg_note_save_failed">Could not save the note</string>
     <string name="msg_note_moved_to_trash">Note moved to the recycle bin</string>
     <string name="msg_opening_browser">Opening Default Browser…</string>
     <string name="msg_text_saved">Text saved successfully</string>
@@ -436,12 +448,14 @@
     <string name="nav_homepage">Homepage</string>
     <string name="nav_pinned_notes">Pinned Notes</string>
     <string name="nav_tags">Tags</string>
+    <string name="nav_untagged">Untagged</string>
     <string name="nav_trash">Trash</string>
     <string name="note_filter_support">(^-^) Your support would be appreciated! https://github.com/Brandontake/Writeon</string>
     <string name="notif_channel_pinned_notes">Pinned Notes</string>
     <string name="notif_channel_pinned_notes_description">Show pinned notes persistently</string>
     <string name="notif_no_content">No content</string>
     <string name="notif_pin_denied">Permission denied. Cannot pin to Notification.</string>
+    <string name="notif_pin_save_first">Save the note before pinning it to the notification shade.</string>
     <string name="notif_pinned_to">Pinned to Notification</string>
     <string name="notif_unpinned">Unpinned from Notification</string>
     <string name="notif_untitled_note">Untitled Note</string>
@@ -463,6 +477,8 @@
     <string name="quick_export">Quick Export</string>
     <string name="save_as_txt">Save as TXT</string>
     <string name="scratchpad_about">About: This section is where you can type anything in just one single area. Warning: Data will be deleted if app restarts or is uninstalled.</string>
+    <string name="scratchpad_placeholder">Type here...</string>
+    <string name="default_txt_file_name">note.txt</string>
     <string name="select_an_item">Select an Item</string>
     <string name="settings_locked">Locked</string>
     <string name="settings_locked_message">This section is currently locked by the developer.. apologies!</string>
@@ -472,9 +488,12 @@
     <string name="tag_added_count">Tag \'%1$s\' added to %2$d note(s)</string>
     <string name="tag_already_exists">Tag \'%1$s\' already exists on all selected notes</string>
     <string name="tag_delete_confirm_title">Delete tag?</string>
+    <string name="tag_delete_confirm_title_many">Delete tags?</string>
 <string name="tag_delete_confirm_message">The tag \'%1$s\' will be removed from all notes. The notes themselves are not deleted.</string>
+<string name="tag_delete_confirm_message_many">The selected tags will be removed from all notes. The notes themselves are not deleted.</string>
 <string name="tag_delete">Delete Tag</string>
     <string name="tag_deleted">Tag \'%1$s\' deleted</string>
+    <string name="tags_deleted">Selected tags deleted</string>
     <string name="tag_name_empty">Tag name cannot be empty</string>
     <string name="tag_name_hint">Tag name</string>
     <string name="tag_none_removed">No tags were removed</string>
@@ -487,8 +506,6 @@
     <string name="tag_select_at_least_one">Please select at least one tag to remove</string>
     <string name="tag_still_in_use">Tag \'%1$s\' still in use on some notes</string>
     <string name="tagged_note">Tagged Note</string>
-    <string name="tools_autohide_desc">Hides the button when the keyboard is visible while editing a note.</string>
-    <string name="tools_autohide_title">Auto-hide visibility button</string>
     <string name="tools_example_text">Example: Hello!</string>
     <string name="tools_saved_exclaim">Saved!</string>
     <string name="tools_text_not_updated">Text Not Updated!</string>
@@ -520,6 +537,8 @@
     <string name="live_attachment_preview">Live attachment preview (experimental)</string>
     <string name="live_attachment_preview_description">Show pictures and recordings as blocks while editing. The note is still stored as plain Markdown.</string>
     <string name="attachment_actions">Attachment actions</string>
+    <string name="cd_attachment_actions">Show attachment actions</string>
+    <string name="cd_attachment_image">Image attachment</string>
     <string name="attachment_edit_source">Edit Markdown</string>
     <string name="attachment_edit_source_title">Attachment Markdown</string>
     <string name="attachment_delete">Delete attachment</string>
@@ -550,7 +569,11 @@
     <string name="cloud_conflict_take_over_confirm_message">The backup on the server will be replaced by the notes on this device. This cannot be undone. Only do this if this device holds the notes you want to keep.</string>
     <string name="cloud_conflict_dismiss">Got it</string>
     <string name="msg_image_export_blank">The export came out empty, so nothing was saved. Try again, or export the note as text.</string>
-    <string name="msg_image_saved_pages">Saved %1$d pages. First one: %2$s</string>
+    <string name="msg_image_insert_failed">Could not insert image: %1$s</string>
+    <string name="image_insert_too_large">the selected image is too large</string>
+    <string name="image_insert_unreadable">the selected file could not be read</string>
+    <string name="image_insert_storage_failed">not enough storage or the file could not be written</string>
+    <string name="image_insert_encrypt_failed">the image could not be encrypted</string>
 
     <!-- Home note cards: the card is one combined-clickable target, so these labels are the only
          place TalkBack can learn what a tap or a long press does. -->
@@ -571,4 +594,31 @@
     <string name="cloud_webdav_redirect_refused">The server redirected the request. WebDAV backups are never followed through a redirect — check the address in Settings.</string>
     <string name="cloud_restore_too_large">The file on the server is too large to be a WriteOn backup; nothing was restored.</string>
     <string name="cloud_restore_no_space">Not enough free storage to download the backup; nothing was restored.</string>
+
+    <!-- Lock accessibility (UX-03): the pattern grid is drawn on a Canvas, so these labels are the
+         only way a screen reader can describe and operate the dots. The PIN dots report progress
+         the same way. -->
+    <string name="lock_a11y_pattern_hint">Pattern lock. Select dots in order, then press Unlock.</string>
+    <string name="lock_a11y_pattern_dot">Dot %1$d</string>
+    <string name="lock_a11y_pattern_selected">Selected</string>
+    <string name="lock_a11y_pattern_not_selected">Not selected</string>
+    <string name="lock_a11y_pattern_progress">%1$d of %2$d dots selected</string>
+    <string name="lock_a11y_pattern_select_dot">Select dot</string>
+    <string name="lock_a11y_pin_dots">PIN entry</string>
+    <string name="lock_a11y_pin_progress">%1$d of %2$d digits entered</string>
+
+    <!-- UX-04: biometric-only locks can become unusable when the device credential is removed. -->
+    <string name="lock_biometric_requires_credential">Set an app PIN or pattern first. Biometric unlock needs a fallback credential in case your device lock is removed.</string>
+    <string name="lock_biometric_only_locked_out">Your device credential was removed, so biometric unlock can no longer work. The app lock has been turned off; set up a PIN or pattern in Privacy.</string>
+
+    <!-- Second-round fixes: pattern submit for screen readers (REG-12), Vault eviction state and
+         throttle (REG-06/SEC-13), and the biometric/credential invariants (REG-07). -->
+    <string name="lock2_confirm_pattern">Confirm pattern</string>
+    <string name="lock2_vault_throttled">Too many attempts. Try again in %1$d s.</string>
+    <string name="lock2_vault_locked_title">Vault locked</string>
+    <string name="lock2_vault_locked_message">The vault locked while this note was open. Unlock it from the home screen, then open the note again to edit it.</string>
+    <string name="lock2_back_to_notes">Back to notes</string>
+    <string name="lock2_biometric_retry">Biometrics are temporarily unavailable. Try again in a moment.</string>
+    <string name="lock2_pin_disabled_biometric_cleared">PIN disabled. Biometric unlock was also turned off because a PIN or pattern is required.</string>
+    <string name="lock2_pattern_disabled_biometric_cleared">Pattern disabled. Biometric unlock was also turned off because a PIN or pattern is required.</string>
 </resources>

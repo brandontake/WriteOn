@@ -1,7 +1,7 @@
 package com.ezpnix.writeon.presentation.lock
 
 import android.content.Context
-import android.os.Build
+import android.widget.Toast
 import androidx.biometric.BiometricPrompt
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -78,7 +78,33 @@ fun LockScreen(lockManager: LockManager, modifier: Modifier = Modifier) {
     val scope = rememberCoroutineScope()
 
     val activity = context as? FragmentActivity
-    val biometricUnavailable = biometricEnabled && !isBiometricAvailable(context)
+    // REG-07: a non-success `canAuthenticate` is not proof that the authenticator is gone. Only
+    // NONE_ENROLLED / NO_HARDWARE / HW_NOT_PRESENT mean "no prompt can ever succeed"; a busy sensor
+    // or a lockout must keep the app lock and be shown as something to retry.
+    val biometricStatus = if (biometricEnabled) {
+        biometricAvailability(context)
+    } else {
+        BiometricAvailability.AVAILABLE
+    }
+    val biometricUnavailable = biometricEnabled && biometricStatus != BiometricAvailability.AVAILABLE
+    val biometricTransient = biometricEnabled && biometricStatus == BiometricAvailability.TRANSIENT_ERROR
+
+    // UX-04: a biometric-only lock whose device credential was removed can never be satisfied.
+    // There is no fallback to offer and no credential left to protect, so the unusable lock is
+    // turned off and the user is told to set up a PIN or pattern - the alternative is an app that
+    // can only be opened by clearing its data.
+    val unrecoverableBiometricOnly = biometricEnabled &&
+        biometricStatus == BiometricAvailability.UNRECOVERABLE &&
+        !pinEnabled && !patternEnabled
+    LaunchedEffect(unrecoverableBiometricOnly) {
+        if (unrecoverableBiometricOnly && lockManager.disableUnusableBiometricLock()) {
+            Toast.makeText(
+                context,
+                context.getString(R.string.lock_biometric_only_locked_out),
+                Toast.LENGTH_LONG,
+            ).show()
+        }
+    }
 
     LaunchedEffect(lockoutUntil) {
         while (true) {
@@ -210,6 +236,16 @@ fun LockScreen(lockManager: LockManager, modifier: Modifier = Modifier) {
                                 .fillMaxWidth(0.85f)
                                 .widthIn(max = 320.dp),
                         )
+                        Spacer(Modifier.height(12.dp))
+                        // UX-03: a drag submits on lift, but a screen reader builds the pattern
+                        // with the grid's dot buttons and has no lift event. The explicit button is
+                        // that submit action (disabled until a pattern can be accepted).
+                        Button(
+                            onClick = { submitPattern(pattern) },
+                            enabled = pattern.size >= LockManager.MIN_PATTERN_CELLS && !verifying,
+                        ) {
+                            Text(text = stringResource(id = R.string.lock_unlock))
+                        }
                         if (verifying) {
                             Spacer(Modifier.height(16.dp))
                             CircularProgressIndicator(
@@ -259,7 +295,14 @@ fun LockScreen(lockManager: LockManager, modifier: Modifier = Modifier) {
                 if (biometricUnavailable) {
                     Spacer(Modifier.height(16.dp))
                     Text(
-                        text = stringResource(id = R.string.lock_biometric_unavailable),
+                        // REG-07: "temporarily unavailable" is a retry, not a lost credential.
+                        text = stringResource(
+                            if (biometricTransient) {
+                                R.string.lock2_biometric_retry
+                            } else {
+                                R.string.lock_biometric_unavailable
+                            }
+                        ),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         textAlign = TextAlign.Center,
@@ -334,10 +377,7 @@ internal fun authenticateWithBiometrics(
         .setTitle(context.getString(R.string.lock_biometric_prompt_title))
         .setSubtitle(context.getString(R.string.lock_biometric_prompt_subtitle))
         .setAllowedAuthenticators(lockAuthenticators())
-    // Device credential may not be combined with a negative button, and pre API 30 platforms
-    // cannot mix it with biometrics at all, so they get the app level fallback instead.
-    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
-        builder.setNegativeButtonText(context.getString(R.string.lock_cancel))
-    }
+    // DEVICE_CREDENTIAL is part of the allowed set, and the platform forbids combining it with a
+    // negative button; the app-level fallback handles cancellation instead.
     prompt.authenticate(builder.build())
 }

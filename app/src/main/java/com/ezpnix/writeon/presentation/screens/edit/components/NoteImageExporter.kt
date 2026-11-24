@@ -2,15 +2,10 @@ package com.ezpnix.writeon.presentation.screens.edit.components
 
 import android.content.ContentValues
 import android.content.Context
+import android.app.ActivityManager
 import android.graphics.Bitmap
-import android.graphics.Canvas
-import android.graphics.Rect
-import android.media.MediaScannerConnection
-import android.os.Build
-import android.os.Environment
 import android.provider.MediaStore
 import android.widget.Toast
-import androidx.annotation.RequiresApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -19,7 +14,6 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.wrapContentHeight
@@ -28,10 +22,11 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -40,42 +35,37 @@ import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.drawWithContent
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.graphics.layer.CompositingStrategy
 import androidx.compose.ui.graphics.layer.drawLayer
 import androidx.compose.ui.graphics.rememberGraphicsLayer
-import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Constraints
+import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import coil.imageLoader
 import coil.request.ImageRequest
+import com.ezpnix.writeon.R
 import com.ezpnix.writeon.core.attachment.AttachmentSyntax
 import com.ezpnix.writeon.domain.model.Attachment
 import com.ezpnix.writeon.presentation.components.markdown.AttachmentRegistry
 import com.ezpnix.writeon.presentation.components.markdown.IMAGE_DECODE_MAX_HEIGHT_PX
 import com.ezpnix.writeon.presentation.components.markdown.IMAGE_DECODE_MAX_WIDTH_PX
-import kotlin.math.abs
-import androidx.compose.ui.unit.sp
-import com.ezpnix.writeon.R
 import com.ezpnix.writeon.presentation.components.markdown.MarkdownText
 import com.ezpnix.writeon.presentation.theme.LocalNoteFontFamily
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import java.io.File
-import java.io.FileOutputStream
 import java.io.OutputStream
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -85,14 +75,57 @@ import kotlin.math.sqrt
 /** Logical width of the exported picture; the physical size follows the device density. */
 private val EXPORT_WIDTH = 360.dp
 private val EXPORT_PADDING = 20.dp
+private val EXPORT_MARGIN = 12.dp
+
+/**
+ * Absolute ceiling on the area of the exported picture, in pixels.
+ *
+ * The note is exported as one picture, so the natural height of a long note is unbounded. 32 MP is
+ * the hard cap (about 128 MB as an ARGB_8888 bitmap); the budget actually used is lower on devices
+ * with a small heap, see [exportPixelBudgetForHeap]. Anything above the per-device budget is
+ * rendered at a lower density so the whole note still fits.
+ */
+internal const val MAX_EXPORT_PIXELS = 32_000_000L
+
+/**
+ * Per-device pixel budget: one third of the app's heap, expressed as 4-byte pixels.
+ *
+ * The capture holds one large bitmap and the WebP encoder needs working memory on top of it. A third
+ * of the heap leaves room for the rest of the app (and for the defensive software copy of a hardware
+ * bitmap) while allowing a 512 MB-heap device the full 32 MP. `memoryClass` is the limit the platform
+ * actually enforces for this process; `largeMemoryClass` is only available with `largeHeap`, which
+ * this app does not request.
+ */
+internal fun exportPixelBudgetForHeap(heapMb: Int): Long {
+    val megabytes = heapMb.coerceAtLeast(1).toLong()
+    val pixels = (megabytes * 1024L * 1024L) / 12L
+    return pixels.coerceIn(1L, MAX_EXPORT_PIXELS)
+}
+
+private fun contextExportPixelBudget(context: Context): Long {
+    val manager = context.getSystemService(ActivityManager::class.java)
+    return exportPixelBudgetForHeap(manager?.memoryClass ?: 256)
+}
+
+/**
+ * Hard ceiling on either side of the bitmap. Very tall bitmaps are rejected by parts of the
+ * graphics stack long before they run out of memory, and the density scale below makes this a
+ * backstop rather than the usual limit.
+ */
+internal const val MAX_EXPORT_DIMENSION_PX = 36_000
+
+/**
+ * Smallest readable picture width. Below this the text would be too small to read, so an
+ * impossibly long note is reported instead of silently writing a sliver.
+ */
+internal const val MIN_EXPORT_WIDTH_PX = 480
 
 /** Frames to let pass so the captured layer is guaranteed to have recorded its content. */
 private const val CAPTURE_FRAMES = 3
 
 /**
- * How many times an empty first page is retried before the export gives up. A blank first page is
- * never legitimate - it always carries the title - so it is worth waiting a few more frames for the
- * capture layer and any decoding image to catch up.
+ * How many times an empty capture is retried before the export gives up. The card always carries
+ * the title, so a fully transparent recording is a timing failure, not an empty note.
  */
 private const val CAPTURE_ATTEMPTS = 3
 
@@ -100,85 +133,57 @@ private const val CAPTURE_ATTEMPTS = 3
 private const val BLANK_SAMPLE_COLUMNS = 32
 private const val BLANK_SAMPLE_ROWS = 64
 
-/**
- * Samples that must differ from the background before a page counts as drawn.
- *
- * One is enough: an empty page is a uniform fill, so a single differing pixel already proves the
- * layer recorded something. Keeping it at one avoids ever declaring a real page blank - a wrong
- * "empty" verdict would be worse than the bug this guards against.
- */
-private const val BLANK_MIN_VISIBLE_SAMPLES = 1
-
-/** Channel tolerance when comparing a sampled pixel with the container colour. */
-private const val COLOR_TOLERANCE = 0.01f
-
 /** Far enough off screen that the capture is never visible, while still being drawn. */
 private const val OFF_SCREEN_X = -200_000
 
 /**
- * Upper bound on the area of an exported bitmap, in pixels.
- *
- * The capture is laid out at the note's natural height, so a very long note produced a bitmap of
- * unbounded size and [writeJpeg] then allocated a second, identical copy to flatten the background.
- * At 360 dp wide on a 3x screen the picture is 1080 px across, so a note a hundred screens long
- * would need roughly 1080 x 100000 x 4 bytes twice over - a guaranteed out of memory crash on the
- * user with the longest note. Eight million pixels is about 32 MB per ARGB_8888 copy.
- */
-private const val MAX_EXPORT_PIXELS = 8_000_000L
-
-/**
  * How long the export waits for the note's images to report loaded before it starts capturing.
- * Waiting keeps the first page from being recorded while a photo is still decoding; the timeout
- * keeps a broken attachment from stalling the export forever, at the cost of one slightly early
- * frame.
+ * Waiting keeps the card from being recorded while a photo is still decoding; the timeout keeps a
+ * broken attachment from stalling the export forever.
  */
 private const val IMAGE_LOAD_TIMEOUT_MS = 5_000L
 
-/**
- * The bottom of the pixels a note actually draws, in the capture's coordinate space.
- *
- * The measured column height includes [EXPORT_PADDING] at both ends, but the strip below the footer
- * holds nothing. Counting it as content produced one extra page that was nothing but background -
- * the trailing blank page users saw after the real last page.
- */
-internal fun exportContentBottomPx(contentHeightPx: Int, bottomPaddingPx: Int): Int =
-    (contentHeightPx - bottomPaddingPx.coerceAtLeast(0)).coerceAtLeast(0)
+/** Quality used for the lossy WebP encode (the format stores text well at this level). */
+private const val WEBP_QUALITY = 90
 
 /**
- * Number of pages a note of [contentHeightPx] needs at [pageHeightPx].
+ * Density multiplier that keeps a capture inside the pixel and dimension budgets.
  *
- * [contentHeightPx] is the natural height of the whole column, including the export padding; the
- * page count is measured against the content bottom instead so a note that ends inside the bottom
- * padding is not given a page that only holds that padding.
+ * The note is laid out in dp, so rendering it under a lower [Density] scales the whole card - text,
+ * padding and attachments - uniformly. Returns null when even [minWidthPx] would exceed
+ * the budget, which the caller reports instead of writing an unreadable picture. Invalid or tiny
+ * measurements return 1 so the caller keeps the normal density.
  */
-internal fun exportPageCount(
-    contentHeightPx: Int,
-    pageHeightPx: Int,
-    bottomPaddingPx: Int
-): Int {
-    if (contentHeightPx <= 0 || pageHeightPx <= 0) return 1
-    val contentBottomPx = exportContentBottomPx(contentHeightPx, bottomPaddingPx)
-    if (contentBottomPx <= 0) return 1
-    return ((contentBottomPx + pageHeightPx - 1) / pageHeightPx).coerceAtLeast(1)
-}
-
-/** Whether page [pageIndex] starts before the last drawn pixel of the note. */
-internal fun exportPageHasContent(
-    pageIndex: Int,
-    pageHeightPx: Int,
-    contentBottomPx: Int
-): Boolean {
-    if (pageIndex <= 0) return contentBottomPx > 0
-    if (pageHeightPx <= 0) return contentBottomPx > 0
-    return pageIndex.toLong() * pageHeightPx < contentBottomPx
+internal fun exportCaptureScale(
+    widthPx: Int,
+    heightPx: Int,
+    maxPixels: Long = MAX_EXPORT_PIXELS,
+    maxDimensionPx: Int = MAX_EXPORT_DIMENSION_PX,
+    minWidthPx: Int = MIN_EXPORT_WIDTH_PX,
+): Float? {
+    if (widthPx <= 0 || heightPx <= 0) return 1f
+    val pixels = widthPx.toLong() * heightPx.toLong()
+    var scale = 1f
+    if (maxPixels > 0 && pixels > maxPixels) {
+        scale = sqrt(maxPixels.toDouble() / pixels.toDouble()).toFloat()
+    }
+    if (maxDimensionPx > 0 && heightPx * scale > maxDimensionPx) {
+        scale = maxDimensionPx.toFloat() / heightPx
+    }
+    if (scale >= 1f) return 1f
+    if (widthPx * scale < minWidthPx) return null
+    return scale.coerceAtLeast(0.01f)
 }
 
 /**
- * Renders a note exactly the way the preview shows it and records it into an [ImageBitmap].
+ * Renders a note as one share card and records the whole thing into an [ImageBitmap].
  *
- * The content is laid out at its natural height (the caller positions it off screen), so the
- * recorded layer holds the *whole* note instead of the visible 128.dp preview viewport.
- * [onCaptured] is invoked once, after [CAPTURE_FRAMES] frames have been drawn.
+ * The layout follows the app's Material 3 surfaces: a surfaceContainerLow backdrop, a surface card
+ * with the user's corner radius, the note title and date at the top, the rendered note in the middle
+ * and the WriteOn signature at the bottom. The note keeps the font size from Settings. The content
+ * is laid out at its natural height, so a long note produces one tall picture; the host lowers the
+ * density when that picture would exceed the memory budget. [onCaptured] is invoked once, after
+ * [CAPTURE_FRAMES] frames have been drawn.
  */
 @Composable
 fun NoteImageCapture(
@@ -187,28 +192,18 @@ fun NoteImageCapture(
     createdAt: Long,
     isMarkdownEnabled: Boolean,
     fontSize: Float,
-    containerColor: Color,
     cornerRadius: Dp,
-    /**
-     * Zero for a single picture. When positive the capture is one window of this many pixels tall
-     * showing page [pageIndex]: the column keeps its natural height and is shifted up by the page
-     * offset, so the pixels outside the window are never laid out into a clipped constraint.
-     */
-    pageHeightPx: Int = 0,
-    pageIndex: Int = 0,
-    /** Total pages in this export; the last one may be dropped when it holds no content. */
-    pageCount: Int = 1,
-    /** Natural height of the note's column, reported once measured. */
-    onMeasuredHeight: (Int) -> Unit = {},
-    /** False for the measuring pass, which must not record a bitmap of the whole note. */
+    modifier: Modifier = Modifier,
+    /** False while the host is still measuring or waiting for images; the capture is skipped. */
     captureEnabled: Boolean = true,
-    /** Called instead of [onCaptured] when the page came out empty after every retry. */
+    /** Natural height of the card, reported once measured. */
+    onMeasuredHeight: (Int) -> Unit = {},
+    /** Called instead of [onCaptured] when the card came out empty after every retry. */
     onBlank: () -> Unit = {},
-    /** Receives the captured bitmap and the page index it belongs to. */
-    onCaptured: (ImageBitmap, Int) -> Unit,
+    /** Receives the captured bitmap. The picture is always a single card, never a page. */
+    onCaptured: (ImageBitmap) -> Unit,
     onImageLoaded: (String) -> Unit = {},
     onFailed: (Throwable) -> Unit = {},
-    modifier: Modifier = Modifier
 ) {
     val graphicsLayer = rememberGraphicsLayer()
     val customFont = LocalNoteFontFamily.current
@@ -219,49 +214,46 @@ fun NoteImageCapture(
         SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date())
     }
 
-    val density = LocalDensity.current
-    val pageHeight: Dp? = if (pageHeightPx > 0) with(density) { pageHeightPx.toDp() } else null
     var contentHeightPx by remember { mutableIntStateOf(0) }
+    var captureDone by remember(noteBody, cornerRadius) { mutableStateOf(false) }
     LaunchedEffect(contentHeightPx) {
         if (contentHeightPx > 0) onMeasuredHeight(contentHeightPx)
     }
-    // Size of the window that is actually on screen. Recording before it has been laid out at the
-    // page height is what produced an empty first bitmap: the capture effect fired in the frame where
-    // the layout switched from the unbounded measuring shape to the paged one.
-    var windowHeightPx by remember { mutableIntStateOf(0) }
+
+    val cardColor = MaterialTheme.colorScheme.surface
+    val containerColor = MaterialTheme.colorScheme.surfaceContainerLow
+    val footerSize = (fontSize - 3).coerceAtLeast(10f)
 
     Box(
         modifier = modifier
             .width(EXPORT_WIDTH)
-            // A paged capture is exactly one window tall, so the recorded layer never holds more
-            // pixels than the budget allows; the single picture keeps the unbounded layout.
-            .then(
-                if (pageHeight != null) Modifier.height(pageHeight)
-                else Modifier.wrapContentHeight(unbounded = true)
-            )
-            .clipToBounds()
-            .clip(RoundedCornerShape(cornerRadius))
-            .background(containerColor)
-            .onSizeChanged { windowHeightPx = it.height }
+            .wrapContentHeight(unbounded = true)
+            .onSizeChanged { contentHeightPx = it.height }
             .drawWithContent {
                 // Capture the content into a layer whose pixels live in regular memory. The default
                 // strategy renders through a RenderNode, and reading a RenderNode back gives a
-                // hardware bitmap, which the software canvas used for JPEG encoding cannot draw
-                // (IllegalArgumentException: Software rendering doesn't support hardware bitmaps).
+                // hardware bitmap, which the software canvas used for WebP encoding cannot draw.
                 // CompositingStrategy.Offscreen is the documented way to record into a bitmap backed
-                // layer instead. NoteImageSaver still converts defensively, because whether a given
-                // layer comes back as software memory also depends on the graphics layer version.
+                // layer instead. NoteImageSaver still converts defensively.
                 graphicsLayer.compositingStrategy = CompositingStrategy.Offscreen
                 graphicsLayer.record { this@drawWithContent.drawContent() }
                 drawLayer(graphicsLayer)
             }
     ) {
+        // The MD3 surface is a child rather than a `background` modifier on the box above: the
+        // recorded layer only contains drawContent(), so a background applied outside it would be
+        // transparent in the bitmap.
+        Box(
+            modifier = Modifier
+                .matchParentSize()
+                .background(containerColor)
+        )
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .wrapContentHeight(unbounded = true)
-                .offset { IntOffset(0, if (pageHeightPx > 0) -pageIndex * pageHeightPx else 0) }
-                .onSizeChanged { if (it.height > contentHeightPx) contentHeightPx = it.height }
+                .padding(EXPORT_MARGIN)
+                .clip(RoundedCornerShape(cornerRadius))
+                .background(cardColor)
                 .padding(EXPORT_PADDING)
         ) {
             Text(
@@ -274,7 +266,7 @@ fun NoteImageCapture(
             Spacer(Modifier.height(4.dp))
             Text(
                 text = timestamp,
-                fontSize = (fontSize - 3).sp,
+                fontSize = footerSize.sp,
                 fontFamily = customFont,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -283,7 +275,7 @@ fun NoteImageCapture(
                 radius = 0,
                 markdown = noteBody,
                 isEnabled = isMarkdownEnabled,
-                containerColor = containerColor,
+                containerColor = cardColor,
                 modifier = Modifier.fillMaxWidth(),
                 fontSize = fontSize.sp,
                 useLazyColumn = false,
@@ -304,7 +296,7 @@ fun NoteImageCapture(
             ) {
                 Text(
                     text = "WriteOn",
-                    fontSize = (fontSize - 3).sp,
+                    fontSize = footerSize.sp,
                     fontWeight = FontWeight.SemiBold,
                     fontFamily = customFont,
                     letterSpacing = 0.5.sp,
@@ -312,7 +304,7 @@ fun NoteImageCapture(
                 )
                 Text(
                     text = "  ·  $signatureDate",
-                    fontSize = (fontSize - 3).sp,
+                    fontSize = footerSize.sp,
                     fontFamily = customFont,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -323,33 +315,16 @@ fun NoteImageCapture(
     LaunchedEffect(
         noteTitle,
         noteBody,
-        pageIndex,
-        pageCount,
+        isMarkdownEnabled,
+        fontSize,
+        cornerRadius,
         contentHeightPx,
-        pageHeightPx,
-        windowHeightPx,
         captureEnabled
     ) {
-        // Nothing to record until the column has a height, and a page starting past the end of the
-        // note is empty; capturing it would write a blank page for a count computed from a stale
-        // height.
-        if (!captureEnabled) return@LaunchedEffect
-        if (contentHeightPx == 0) return@LaunchedEffect
-        // Wait until the window itself has the page height. Rounding through dp can be off by a
-        // pixel, hence the tolerance.
-        if (pageHeightPx > 0 && abs(windowHeightPx - pageHeightPx) > 2) return@LaunchedEffect
-        val bottomPaddingPx = with(density) { EXPORT_PADDING.roundToPx() }
-        val contentBottomPx = exportContentBottomPx(contentHeightPx, bottomPaddingPx)
-        if (pageHeightPx > 0 && !exportPageHasContent(pageIndex, pageHeightPx, contentBottomPx)) {
-            return@LaunchedEffect
-        }
+        // Nothing to record until the card has a height. A density change re-runs layout, and the
+        // host keeps captureEnabled false until the new height has settled.
+        if (!captureEnabled || captureDone || contentHeightPx <= 0) return@LaunchedEffect
 
-        // The first page always carries the title and the last page is the end of the note, so an
-        // empty bitmap there is a failure rather than a legitimate sliver: retry a few frames
-        // first, then report it instead of saving a blank file. A blank middle page is kept - it
-        // can be a deliberate run of empty lines.
-        val background = containerColor.toArgb()
-        val checkForBlank = pageIndex == 0 || (pageCount > 1 && pageIndex == pageCount - 1)
         var attempt = 0
         while (true) {
             repeat(CAPTURE_FRAMES) { withFrameNanos { } }
@@ -357,16 +332,18 @@ fun NoteImageCapture(
             // ran, and the save host sat in its "saving" state forever with no message. Report it so
             // the host can tell the user what actually went wrong.
             val captured = runCatching { graphicsLayer.toImageBitmap() }.getOrElse { error ->
+                captureDone = true
                 onFailed(error)
                 return@LaunchedEffect
             }
             attempt++
-            val blank = checkForBlank && captured.looksBlank(background)
-            if (!blank) {
-                onCaptured(captured, pageIndex)
+            if (!captured.looksEmpty()) {
+                captureDone = true
+                onCaptured(captured)
                 return@LaunchedEffect
             }
             if (attempt >= CAPTURE_ATTEMPTS) {
+                captureDone = true
                 onBlank()
                 return@LaunchedEffect
             }
@@ -375,23 +352,16 @@ fun NoteImageCapture(
 }
 
 /**
- * Whether a captured page holds nothing but the container colour.
+ * Whether the recorded layer is completely transparent.
  *
- * The page is downscaled to a small fixed grid before it is inspected. Sampling single pixels of a
- * 1080 x 7000 page gave only a handful of hits and could miss a short last page entirely, which
- * made the blank guard drop real content. Downscaling averages every source pixel into the grid, so
- * even one line of text survives; the scaled copy is tiny and recycled immediately. The graphics
- * layer records only the note's children, so empty space comes back transparent rather than filled
- * with the container colour; transparent samples are therefore treated as background. A layer that
- * does record the background is handled by the RGB comparison. A hardware backed bitmap refuses
- * pixel access; that is treated as "not blank" so an unreadable layer is still saved rather than
- * dropped.
+ * The surface background is part of the recorded children, so every drawn pixel is opaque and a
+ * capture that never recorded anything is the only way to get an all-transparent bitmap. The
+ * original exporter compared pixels against the container colour, which cannot work with a
+ * gradient. A hardware backed bitmap refuses pixel access; that is treated as "not empty" so an
+ * unreadable layer is still saved rather than dropped.
  */
-private fun ImageBitmap.looksBlank(backgroundColor: Int): Boolean {
+private fun ImageBitmap.looksEmpty(): Boolean {
     if (width <= 0 || height <= 0) return true
-    val backgroundRed = ((backgroundColor shr 16) and 0xFF) / 255f
-    val backgroundGreen = ((backgroundColor shr 8) and 0xFF) / 255f
-    val backgroundBlue = (backgroundColor and 0xFF) / 255f
     return try {
         val source = asAndroidBitmap()
         val scaled = Bitmap.createScaledBitmap(
@@ -400,32 +370,17 @@ private fun ImageBitmap.looksBlank(backgroundColor: Int): Boolean {
             BLANK_SAMPLE_ROWS,
             true
         )
-        var visible = 0
-        for (y in 0 until scaled.height) {
+        var visible = false
+        loop@ for (y in 0 until scaled.height) {
             for (x in 0 until scaled.width) {
-                val pixel = scaled.getPixel(x, y)
-                // Empty pixels in the recorded layer have no alpha at all. Comparing only RGB
-                // counted them as drawn content because a transparent pixel reports 0,0,0, which
-                // is far from a light surface colour - the reason the blank guard never fired.
-                val alpha = ((pixel ushr 24) and 0xFF) / 255f
-                if (alpha <= 0.01f) continue
-                val red = ((pixel shr 16) and 0xFF) / 255f
-                val green = ((pixel shr 8) and 0xFF) / 255f
-                val blue = (pixel and 0xFF) / 255f
-                if (abs(red - backgroundRed) > COLOR_TOLERANCE ||
-                    abs(green - backgroundGreen) > COLOR_TOLERANCE ||
-                    abs(blue - backgroundBlue) > COLOR_TOLERANCE
-                ) {
-                    visible++
-                    if (visible >= BLANK_MIN_VISIBLE_SAMPLES) {
-                        if (scaled !== source) scaled.recycle()
-                        return false
-                    }
+                if (((scaled.getPixel(x, y) ushr 24) and 0xFF) > 2) {
+                    visible = true
+                    break@loop
                 }
             }
         }
         if (scaled !== source) scaled.recycle()
-        true
+        !visible
     } catch (_: Throwable) {
         false
     }
@@ -435,8 +390,9 @@ private fun ImageBitmap.looksBlank(backgroundColor: Int): Boolean {
  * Decodes every image the note refers to before the capture starts.
  *
  * `AsyncImage` loads asynchronously, so a capture taken a few frames after composition recorded the
- * nothing-yet state, which is how photos went missing from exported pages. The requests use the same
- * size the renderer asks for, so by the time `MarkdownText` draws them they are a memory cache hit.
+ * nothing-yet state, which is how photos went missing from exported pictures. The requests use the
+ * same size the renderer asks for, so by the time `MarkdownText` draws them they are a memory cache
+ * hit.
  */
 private suspend fun preloadNoteImages(context: Context, body: String) {
     val loader = context.imageLoader
@@ -461,6 +417,10 @@ private suspend fun preloadNoteImages(context: Context, body: String) {
  * Hosts an off screen [NoteImageCapture] for one shot and writes the result into the picture
  * library. Compose measures the capture with unbounded constraints but reports a zero sized node,
  * so showing it never moves the real UI.
+ *
+ * The capture used to be cut into fixed-height pages. Long notes are now one picture: the first
+ * measurement decides how much the whole card has to shrink to stay inside the device's pixel budget, and
+ * the capture is re-laid out under that density before anything is recorded.
  */
 @Composable
 fun NoteImageSaveHost(
@@ -469,37 +429,37 @@ fun NoteImageSaveHost(
     createdAt: Long,
     isMarkdownEnabled: Boolean,
     fontSize: Float,
-    containerColor: Color,
     cornerRadius: Dp,
-    onFinished: () -> Unit
+    onFinished: () -> Unit,
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val density = LocalDensity.current
+    // The bitmap budget follows the device's heap instead of a single global number: a 512 MB-heap
+    // device gets the full 32 MP ceiling, while a smaller device keeps enough headroom to avoid an
+    // OOM during the capture/encode.
+    val pixelBudget = remember(context) { contextExportPixelBudget(context) }
 
-    // Tallest picture one page may hold at the export width. Every page is measured against this,
-    // so no single bitmap can exceed the budget the way the one-shot capture did: a long note used
-    // to be laid out taller than the budget, the excess was clipped away, and the exported picture
-    // silently stopped halfway through the note.
-    val pageHeightPx = remember(density) {
-        val widthPx = with(density) { EXPORT_WIDTH.roundToPx() }.coerceAtLeast(1)
-        (MAX_EXPORT_PIXELS / widthPx).toInt().coerceAtLeast(1)
+    // 1 means "render at the device's density". A long note lowers this before capture so the
+    // bitmap stays within budget; every dp in the card scales with it.
+    var densityScale by remember(noteBody, cornerRadius) { mutableFloatStateOf(1f) }
+    val captureDensity = remember(density, densityScale) {
+        Density(density.density * densityScale, density.fontScale)
     }
-    val bottomPaddingPx = remember(density) { with(density) { EXPORT_PADDING.roundToPx() } }
+    var measuredHeight by remember(noteBody, cornerRadius, densityScale) { mutableIntStateOf(0) }
+    var scaleSettled by remember(noteBody, cornerRadius) { mutableStateOf(false) }
 
-    var measured by remember { mutableStateOf(false) }
     // Images are decoded before the first capture. The capture only waits a few frames, and an
-    // AsyncImage that is still decoding draws nothing, which is how a note whose first page holds a
-    // photo used to export with an empty frame where the photo should be.
+    // AsyncImage that is still decoding draws nothing, which is how a note whose card holds a photo
+    // used to export with an empty frame where the photo should be.
     var preloaded by remember(noteBody) { mutableStateOf(false) }
     LaunchedEffect(noteBody) {
         preloadNoteImages(context, noteBody)
         preloaded = true
     }
-    // Decoding into Coil's cache is not the same as the note's AsyncImage having drawn: the first
-    // page used to be recorded while a photo was still one frame away, and the blank guard never
-    // noticed because the title and footer were already there. Wait until every image in this note
-    // reports loaded (or the timeout expires) before the capture is allowed to start.
+    // Decoding into Coil's cache is not the same as the note's AsyncImage having drawn: the capture
+    // used to be recorded while a photo was still one frame away. Wait until every image in this
+    // note reports loaded (or the timeout expires) before the capture is allowed to start.
     val imageIds = remember(noteBody, isMarkdownEnabled) {
         if (!isMarkdownEnabled) {
             emptySet()
@@ -519,16 +479,11 @@ fun NoteImageSaveHost(
             imagesTimedOut = true
         }
     }
-    var pageCount by remember { mutableIntStateOf(1) }
-    var pageIndex by remember { mutableIntStateOf(0) }
+
     var finished by remember { mutableStateOf(false) }
-    // Set on the first capture; after that the page count and the offsets must not move anymore.
-    var pagesLocked by remember(noteBody) { mutableStateOf(false) }
-    // A recomposition can restart the capture effect (a late image changes the measured height, for
-    // example). Only the first callback for a page may be saved, otherwise the same bitmap would be
-    // written twice and the page after it skipped.
-    var lastCapturedPage by remember(noteBody) { mutableIntStateOf(-1) }
-    val savedLocations = remember { mutableStateListOf<String>() }
+    // A recomposition can restart the capture effect (a late image changes the measured height,
+    // for example). Only the first callback may be saved.
+    var lastCaptured by remember(noteBody, cornerRadius) { mutableStateOf(false) }
 
     // Report the outcome exactly once and always leave the saving state, whether the capture
     // worked, the capture threw, or the write failed.
@@ -539,146 +494,130 @@ fun NoteImageSaveHost(
         onFinished()
     }
 
-    fun reportSuccess() {
-        val first = savedLocations.firstOrNull() ?: return
-        finish(
-            if (savedLocations.size > 1) {
-                context.getString(R.string.msg_image_saved_pages, savedLocations.size, first)
-            } else {
-                context.getString(R.string.msg_image_saved, first)
+    // Decide how much the card has to shrink. The first measurement happens at the normal density;
+    // after densityScale changes, the composable is laid out again and this effect runs once more
+    // with the new height, which then settles (the scaled dimensions already fit the budget). It
+    // deliberately keeps re-checking until the capture starts: a late image can still increase the
+    // measured height after the first scale was accepted.
+    LaunchedEffect(
+        noteBody,
+        cornerRadius,
+        densityScale,
+        measuredHeight,
+        preloaded,
+        imagesReady,
+        imagesTimedOut,
+        finished,
+        lastCaptured
+    ) {
+        if (finished || lastCaptured || measuredHeight <= 0) return@LaunchedEffect
+        if (!preloaded || !(imagesReady || imagesTimedOut)) return@LaunchedEffect
+        val widthPx = with(captureDensity) { EXPORT_WIDTH.roundToPx() }.coerceAtLeast(1)
+        val desired = exportCaptureScale(widthPx, measuredHeight, maxPixels = pixelBudget)
+        when {
+            desired == null -> {
+                scaleSettled = true
+                finish(context.getString(R.string.image_export_too_long))
             }
-        )
+
+            desired >= 0.999f -> scaleSettled = true
+
+            else -> {
+                scaleSettled = false
+                val next = densityScale * desired
+                if (next < 0.05f) {
+                    scaleSettled = true
+                    finish(context.getString(R.string.image_export_too_long))
+                } else {
+                    densityScale = next
+                }
+            }
+        }
     }
 
     Box(
         modifier = Modifier.layout { measurable, constraints ->
-            // `Constraints()` resolves to minWidth = maxWidth = minHeight = maxHeight = 0, which
-            // measured the capture into a 0 x 0 node: the bitmap was empty and every later step
-            // failed. Each capture is laid out with the width this host is given and a height bounded
-            // by one page, then reported as a zero sized node placed off screen so the real UI never
-            // moves.
-            val widthPx = constraints.maxWidth
-                .takeIf { it != Constraints.Infinity && it > 0 }
-                ?: with(density) { EXPORT_WIDTH.roundToPx() }
+            // The card has to be measured at its full natural height; the node itself reports 0 x 0
+            // and is placed off screen, so the real UI never moves.
             val placeable = measurable.measure(
                 constraints.copy(
                     minWidth = 0,
                     minHeight = 0,
-                    maxHeight = pageHeightPx
+                    maxWidth = Constraints.Infinity,
+                    maxHeight = Constraints.Infinity
                 )
             )
             layout(0, 0) { placeable.place(IntOffset(OFF_SCREEN_X, 0)) }
         }
     ) {
-        NoteImageCapture(
-            noteTitle = noteTitle,
-            noteBody = noteBody,
-            createdAt = createdAt,
-            isMarkdownEnabled = isMarkdownEnabled,
-            fontSize = fontSize,
-            containerColor = containerColor,
-            cornerRadius = cornerRadius,
-            // The first pass only measures: it renders nothing, and its height decides whether the
-            // note fits on one page or has to be cut into several.
-            captureEnabled = measured && preloaded && (imagesReady || imagesTimedOut) && !finished,
-            pageHeightPx = if (pageCount > 1) pageHeightPx else 0,
-            pageIndex = pageIndex,
-            pageCount = pageCount,
-            onMeasuredHeight = { height ->
-                if (!pagesLocked) {
-                    // Recompute for every measurement until the first capture: the height grows as
-                    // images finish decoding, and a page count locked in before that would leave
-                    // the tail of the note on no page at all. The bottom padding is not content,
-                    // so it must not add a trailing page of its own.
-                    val pages = exportPageCount(height, pageHeightPx, bottomPaddingPx)
-                    if (pages != pageCount) pageCount = pages
-                    measured = true
-                }
-            },
-            onCaptured = { bitmap, capturedPage ->
-                if (!finished && capturedPage == pageIndex && capturedPage != lastCapturedPage) {
-                    // From the first capture on, every page must use the offsets the first page was
-                    // laid out with, so the page count is no longer allowed to change.
-                    pagesLocked = true
-                    lastCapturedPage = capturedPage
-                    val base = NoteImageSaver.fileBaseName(noteTitle)
-                    val fileName = if (pageCount > 1) {
-                        base + "_" + (capturedPage + 1) + "of" + pageCount
-                    } else {
-                        base
-                    }
-                    scope.launch {
-                        val location = NoteImageSaver.save(
-                            context = context,
-                            bitmap = bitmap,
-                            baseName = fileName,
-                            backgroundColor = containerColor.toArgb()
-                        )
-                        if (location == null) {
-                            // Surface why: the old code reported a bare "could not save" that gave the
-                            // user nothing to act on, and hid the reason the write had failed.
-                            val reason = NoteImageSaver.lastFailure
-                            finish(
-                                if (reason != null) {
-                                    context.getString(R.string.msg_image_save_failed_reason, reason)
-                                } else {
-                                    context.getString(R.string.msg_image_save_failed)
-                                }
+        CompositionLocalProvider(LocalDensity provides captureDensity) {
+            NoteImageCapture(
+                noteTitle = noteTitle,
+                noteBody = noteBody,
+                createdAt = createdAt,
+                isMarkdownEnabled = isMarkdownEnabled,
+                fontSize = fontSize,
+                cornerRadius = cornerRadius,
+                captureEnabled = scaleSettled && preloaded && (imagesReady || imagesTimedOut) &&
+                    !finished && !lastCaptured,
+                onMeasuredHeight = { measuredHeight = it },
+                onCaptured = { bitmap ->
+                    if (!finished && !lastCaptured) {
+                        lastCaptured = true
+                        val base = NoteImageSaver.fileBaseName(noteTitle)
+                        scope.launch {
+                            val location = NoteImageSaver.save(
+                                context = context,
+                                bitmap = bitmap,
+                                baseName = base
                             )
-                        } else {
-                            savedLocations.add(location)
-                            if (capturedPage + 1 < pageCount) {
-                                // Recomposition moves the window down the note; that capture writes
-                                // the next page. Pages are written one at a time so only one bitmap
-                                // is alive at once.
-                                pageIndex = capturedPage + 1
+                            if (location == null) {
+                                // Surface why: the old code reported a bare "could not save" that gave
+                                // the user nothing to act on, and hid the reason the write had failed.
+                                val reason = NoteImageSaver.lastFailure
+                                finish(
+                                    if (reason != null) {
+                                        context.getString(R.string.msg_image_save_failed_reason, reason)
+                                    } else {
+                                        context.getString(R.string.msg_image_save_failed)
+                                    }
+                                )
                             } else {
-                                reportSuccess()
+                                finish(context.getString(R.string.msg_image_saved, location))
                             }
                         }
                     }
-                }
-            },
-            onImageLoaded = { id ->
-                if (!imagesReady) {
-                    pendingImageIds = pendingImageIds - id
-                    if (pendingImageIds.isEmpty()) imagesReady = true
-                }
-            },
-            onBlank = {
-                // An empty first page means the capture never caught up; say so instead of writing a
-                // blank picture. A later page can legitimately be an empty sliver, so if anything was
-                // already saved, report that as the outcome.
-                if (savedLocations.isEmpty()) {
+                },
+                onImageLoaded = { id ->
+                    if (!imagesReady) {
+                        pendingImageIds = pendingImageIds - id
+                        if (pendingImageIds.isEmpty()) imagesReady = true
+                    }
+                },
+                onBlank = {
                     finish(context.getString(R.string.msg_image_export_blank))
-                } else {
-                    reportSuccess()
-                }
-            },
-            onFailed = { error ->
-                finish(
-                    context.getString(
-                        R.string.msg_image_save_failed_reason,
-                        error.message ?: error.javaClass.simpleName
+                },
+                onFailed = { error ->
+                    finish(
+                        context.getString(
+                            R.string.msg_image_save_failed_reason,
+                            error.message ?: error.javaClass.simpleName
+                        )
                     )
-                )
-            }
-        )
+                }
+            )
+        }
     }
 }
 
 /**
- * Stores a captured note as a JPEG in the user's picture library.
- *
- * Android Q and later go through MediaStore, older releases into the app's own external pictures
- * folder (no storage permission is requested either way). Both return a human readable location.
+ * Stores a captured note as a WebP picture in the user's picture library through MediaStore.
+ * No storage permission is requested.
  */
 object NoteImageSaver {
 
     private const val RELATIVE_DIR = "Pictures/WriteOn"
-    private const val SUB_DIR = "WriteOn"
-    private const val MIME_TYPE = "image/jpeg"
-    private const val JPEG_QUALITY = 90
+    private const val MIME_TYPE = "image/webp"
 
     /** A file name stem derived from the note title, safe for the file system. */
     fun fileBaseName(title: String): String {
@@ -687,7 +626,7 @@ object NoteImageSaver {
     }
 
     /**
-     * Writes [bitmap] as a JPEG; returns the location it was written to, or null when it failed.
+     * Writes [bitmap] as a WebP; returns the location it was written to, or null when it failed.
      *
      * The failure reason is kept in [lastFailure] so the caller can surface it: swallowing it here
      * is what made "save as image" look like it simply never happened.
@@ -700,17 +639,12 @@ object NoteImageSaver {
         context: Context,
         bitmap: ImageBitmap,
         baseName: String,
-        backgroundColor: Int
     ): String? =
         withContext(Dispatchers.IO) {
-            val fileName = "$baseName-${System.currentTimeMillis()}.jpg"
+            val fileName = "$baseName-${System.currentTimeMillis()}.webp"
             lastFailure = null
             runCatching {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                    saveWithMediaStore(context, bitmap, fileName, backgroundColor)
-                } else {
-                    saveToAppPictures(context, bitmap, fileName, backgroundColor)
-                }
+                saveWithMediaStore(context, bitmap, fileName)
             }.fold(
                 onSuccess = { it },
                 onFailure = {
@@ -720,12 +654,10 @@ object NoteImageSaver {
             )
         }
 
-    @RequiresApi(Build.VERSION_CODES.Q)
     private fun saveWithMediaStore(
         context: Context,
         bitmap: ImageBitmap,
         fileName: String,
-        backgroundColor: Int
     ): String {
         val values = ContentValues().apply {
             put(MediaStore.Images.Media.DISPLAY_NAME, fileName)
@@ -743,7 +675,7 @@ object NoteImageSaver {
         try {
             val stream = resolver.openOutputStream(uri)
                 ?: error("Could not open $uri for writing")
-            stream.use { writeJpeg(bitmap, backgroundColor, it) }
+            stream.use { writeWebp(bitmap, it) }
         } catch (e: Throwable) {
             runCatching { resolver.delete(uri, null, null) }
             throw e
@@ -755,75 +687,28 @@ object NoteImageSaver {
 
         return "$RELATIVE_DIR/$fileName"
     }
+}
 
-    private fun saveToAppPictures(
-        context: Context,
-        bitmap: ImageBitmap,
-        fileName: String,
-        backgroundColor: Int
-    ): String {
-        val directory = File(context.getExternalFilesDir(Environment.DIRECTORY_PICTURES), SUB_DIR)
-        if (!directory.exists() && !directory.mkdirs()) {
-            error("Could not create ${directory.absolutePath}")
-        }
-
-        val file = File(directory, fileName)
-        FileOutputStream(file).use { writeJpeg(bitmap, backgroundColor, it) }
-        MediaScannerConnection.scanFile(context, arrayOf(file.absolutePath), arrayOf(MIME_TYPE), null)
-
-        return file.absolutePath
+/**
+ * Encodes the captured card as lossy WebP.
+ *
+ * The card is opaque (the MD3 surface is part of the recorded content), so no flattening pass is
+ * needed; WebP keeps an alpha channel if one ever appears. A hardware bitmap cannot be compressed,
+ * so it is copied into regular memory first.
+ */
+private fun writeWebp(bitmap: ImageBitmap, output: OutputStream) {
+    val source = bitmap.asAndroidBitmap()
+    val software = if (source.config == Bitmap.Config.HARDWARE) {
+        source.copy(Bitmap.Config.ARGB_8888, false)
+            ?: error("Could not read the captured bitmap")
+    } else {
+        source
     }
-
-    /**
-     * JPEG has no alpha channel, so the capture is flattened onto [backgroundColor] first.
-     *
-     * A captured layer can come back as a hardware bitmap. A hardware bitmap can only be drawn on
-     * a hardware accelerated canvas, so feeding one to the software canvas used for encoding raises
-     * `IllegalArgumentException: Software rendering doesn't support hardware bitmaps`.
-     *
-     * The conversion therefore has to happen through `Bitmap.copy`, which is the only public path
-     * that reads a hardware bitmap on the CPU. The previous version tried to do it with a software
-     * `Canvas` instead — which is precisely the thing that cannot read a hardware bitmap — and
-     * swallowed the resulting exception, so the hardware bitmap was passed straight back to the
-     * caller and the very same error was thrown again one line later.
-     */
-    private fun writeJpeg(bitmap: ImageBitmap, backgroundColor: Int, output: OutputStream) {
-        val raw = bitmap.asAndroidBitmap()
-        val source = if (raw.config == Bitmap.Config.HARDWARE) raw.toArgb8888() else raw
-        // Last line of defence for the heap. The capture is already clamped to MAX_EXPORT_PIXELS,
-        // but an unusual density must still not turn into an OOM inside createBitmap.
-        val pixels = source.width.toLong() * source.height.toLong()
-        val scale = if (pixels > MAX_EXPORT_PIXELS) {
-            sqrt(MAX_EXPORT_PIXELS.toDouble() / pixels.toDouble()).toFloat()
-        } else {
-            1f
+    try {
+        check(software.compress(Bitmap.CompressFormat.WEBP_LOSSY, WEBP_QUALITY, output)) {
+            "WebP encoder rejected the bitmap"
         }
-        val targetWidth = (source.width * scale).toInt().coerceAtLeast(1)
-        val targetHeight = (source.height * scale).toInt().coerceAtLeast(1)
-        val flattened = Bitmap.createBitmap(targetWidth, targetHeight, Bitmap.Config.ARGB_8888)
-        try {
-            flattened.eraseColor(backgroundColor)
-            Canvas(flattened).drawBitmap(source, null, Rect(0, 0, targetWidth, targetHeight), null)
-            // Recycle the CPU copy straight away: it is only needed to feed the encoder, and an
-            // exported picture can be tens of megabytes.
-            if (source !== raw) source.recycle()
-            flattened.compress(Bitmap.CompressFormat.JPEG, JPEG_QUALITY, output)
-            output.flush()
-        } finally {
-            flattened.recycle()
-        }
+    } finally {
+        if (software !== source) software.recycle()
     }
-
-    /**
-     * Copies a hardware bitmap into a CPU readable ARGB_8888 bitmap.
-     *
-     * `Bitmap.copy` is the only public API that pulls a hardware bitmap back into software memory;
-     * anything routed through `Canvas` hits the same "Software rendering doesn't support hardware
-     * bitmaps" rejection. When even that copy fails the bitmap cannot be encoded at all, so it is
-     * reported instead of silently falling back to something the encoder would reject anyway.
-     */
-    private fun Bitmap.toArgb8888(): Bitmap =
-        copy(Bitmap.Config.ARGB_8888, false) ?: throw IllegalStateException(
-            "Could not convert a ${width}x$height hardware bitmap to software memory"
-        )
 }

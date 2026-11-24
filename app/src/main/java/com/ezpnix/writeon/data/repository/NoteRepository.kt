@@ -1,5 +1,6 @@
 package com.ezpnix.writeon.data.repository
 import androidx.room.withTransaction
+import com.ezpnix.writeon.data.local.dao.compareAndSwapVaultFields
 import com.ezpnix.writeon.data.local.database.NoteDatabaseProvider
 import com.ezpnix.writeon.domain.model.Attachment
 import com.ezpnix.writeon.domain.model.Note
@@ -38,15 +39,38 @@ class NoteRepositoryImpl @Inject constructor(
         provider.noteDao().updatePlainDescription(id, description)
     }
 
-    override suspend fun updateVaultFields(id: Int, name: String, description: String): Int {
-        return provider.noteDao().updateVaultFields(id, name, description)
+    override suspend fun updateVaultFields(
+        id: Int,
+        previousName: String,
+        previousDescription: String,
+        name: String,
+        description: String,
+    ): Int {
+        // DAT-01: the CAS lives on the live database rather than on the wrapped DAO so the
+        // `previous*` predicates are part of the same statement as the write. The row is left
+        // untouched when an editor save replaced it after the sweep read it.
+        //
+        // The statement is already atomic; the transaction wrapper is what tells Room's
+        // invalidation tracker that the table changed. A raw write does not pass through the
+        // generated DAO's transaction hooks, and without this the open list would keep showing
+        // its pre-sweep emission until some other write happened to wake the tracker.
+        val database = provider.instance()
+        return database.withTransaction {
+            database.compareAndSwapVaultFields(
+                id = id,
+                previousName = previousName,
+                previousDescription = previousDescription,
+                name = name,
+                description = description,
+            )
+        }
     }
 
     override suspend fun saveNoteWithAttachments(
         note: Note,
         upsertAttachments: List<Attachment>,
         reviveAttachmentIds: List<String>,
-        deleteAttachmentIds: List<String>,
+        trashAttachmentIds: List<String>,
     ): Int {
         // One transaction over both tables: the note body and the rows it references either both
         // land or neither does. Room's withTransaction needs the database handle, which the
@@ -57,7 +81,15 @@ class NoteRepositoryImpl @Inject constructor(
             val insertedId = if (note.id == 0) {
                 noteDao.addNoteReturningId(note).toInt()
             } else {
-                noteDao.updateNote(note)
+                // CQ-08: a note deleted between the editor's read and this transaction matches zero
+                // rows. Continuing would insert its attachment rows for a note that no longer
+                // exists - rows no screen can show and no delete path owns. Throwing rolls the
+                // whole transaction (including those upserts) back; the editor reports the save as
+                // failed, which is the truth.
+                val changed = noteDao.updateNote(note)
+                check(changed > 0) {
+                    "Note ${note.id} no longer exists; refusing to save its attachments"
+                }
                 note.id
             }
             if (upsertAttachments.isNotEmpty()) {
@@ -66,23 +98,27 @@ class NoteRepositoryImpl @Inject constructor(
             if (reviveAttachmentIds.isNotEmpty()) {
                 provider.attachmentDao().setTrashedAt(reviveAttachmentIds, null)
             }
-            if (deleteAttachmentIds.isNotEmpty()) {
-                provider.attachmentDao().deleteByIds(deleteAttachmentIds)
+            if (trashAttachmentIds.isNotEmpty()) {
+                // DAT-02: the save's pruning is recycle-bin semantics, not deletion. The row and
+                // its file survive so the save-undo (which restores only the note row) can put the
+                // body back without leaving dead attachment links or destroying a recording.
+                provider.attachmentDao().setTrashedAt(trashAttachmentIds, System.currentTimeMillis())
             }
             insertedId
         }
     }
 
     override suspend fun deleteNoteWithAttachments(note: Note): List<Attachment> {
-        // Read the rows first (outside the transaction), then delete note + rows together so an
-        // interruption cannot leave an orphan attachment row pointing at a deleted note. The files
-        // are removed by the caller after this returns: a leftover file is recoverable, a row whose
-        // file is already gone is not.
+        // Read the rows first (outside the transaction) so the caller still receives the files it
+        // has to remove; then delete note + rows together so an interruption cannot leave an orphan
+        // attachment row pointing at a deleted note. CQ-08: the delete is by note id inside the
+        // transaction, not by the ids read a moment earlier, so a row inserted between the read and
+        // the transaction is deleted with its note instead of surviving it. The files are removed
+        // by the caller after this returns: a leftover file is recoverable, a row whose file is
+        // already gone is not.
         val attachments = provider.attachmentDao().getByNoteId(note.id)
         provider.instance().withTransaction {
-            if (attachments.isNotEmpty()) {
-                provider.attachmentDao().deleteByIds(attachments.map { it.id })
-            }
+            provider.attachmentDao().deleteByNoteId(note.id)
             provider.noteDao().deleteNote(note)
         }
         return attachments
@@ -93,6 +129,9 @@ class NoteRepositoryImpl @Inject constructor(
     }
     override fun getTrashedNotes(): Flow<List<Note>> {
         return provider.noteDao().getTrashedNotes()
+    }
+    override fun getTrashedNoteCount(): Flow<Int> {
+        return provider.noteDao().getTrashedNoteCount()
     }
     override fun getNotesByTag(tag: String): Flow<List<Note>> {
         // The old `WHERE :tag IN (tags)` SQL never matched (tags is one JSON text column), so the
@@ -151,5 +190,31 @@ class NoteRepositoryImpl @Inject constructor(
 
     override suspend fun setAttachmentTrashed(ids: List<String>, trashedAt: Long?) {
         if (ids.isNotEmpty()) provider.attachmentDao().setTrashedAt(ids, trashedAt)
+    }
+
+    override suspend fun setAttachmentTrashedAndUpdateNote(
+        attachmentId: String,
+        trashedAt: Long?,
+        note: Note,
+    ) {
+        provider.instance().withTransaction {
+            provider.attachmentDao().setTrashedAt(listOf(attachmentId), trashedAt)
+            val changed = provider.noteDao().updateNote(note)
+            check(changed > 0) {
+                "Note ${note.id} no longer exists; refusing to move its attachment"
+            }
+        }
+    }
+
+    override suspend fun setAttachmentTrashedAndUpdatePlainDescription(
+        attachmentId: String,
+        trashedAt: Long?,
+        noteId: Int,
+        description: String,
+    ) {
+        provider.instance().withTransaction {
+            provider.attachmentDao().setTrashedAt(listOf(attachmentId), trashedAt)
+            provider.noteDao().updatePlainDescription(noteId, description)
+        }
     }
 }

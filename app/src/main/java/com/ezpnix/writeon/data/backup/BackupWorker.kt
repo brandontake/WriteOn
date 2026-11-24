@@ -5,7 +5,6 @@ import android.content.Context
 import android.util.Log
 import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
-import com.ezpnix.writeon.core.attachment.AttachmentArchive
 import com.ezpnix.writeon.core.constant.DatabaseConst
 import com.ezpnix.writeon.core.util.AutoBackupCrypto
 import com.ezpnix.writeon.core.util.BackupRestoreLock
@@ -19,7 +18,6 @@ import java.io.FileOutputStream
 import java.io.IOException
 import java.io.InputStream
 import java.io.OutputStream
-import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
 
 private const val TAG = "BackupWorker"
@@ -91,23 +89,17 @@ open class BackupWorker(
                     val attachments = provider.writePortableDatabaseCopy(portableFile)
 
                     ZipOutputStream(FileOutputStream(tempZipFile)).use { zipOut ->
-                        FileInputStream(portableFile).use { fis ->
-                            val entry = ZipEntry(DatabaseConst.NOTES_DATABASE_FILE_NAME)
-                            zipOut.putNextEntry(entry)
-                            fis.copyTo(zipOut)
-                            zipOut.closeEntry()
-                        }
-                        // SEC-4: decrypting overload. An unreadable `WMV1` member aborts the run,
-                        // which is correct: a backup holding ciphertext restores nothing anywhere
-                        // but this install, and it would look like a valid restore point.
-                        AttachmentArchive.writeTo(zipOut, attachments, applicationContext)
-                        // DAT-11: the flashcard deck lives in SharedPreferences, not the database
-                        // copied above, so without this member an automatic restore brought the
-                        // notes back and silently dropped every card.
-                        FlashcardArchive.writeToZip(applicationContext, zipOut)
-                        // PERF-2: the `v3:` envelope salt is also outside the database. Without it
-                        // the restored rows are ciphertext no later session can derive a KEK for.
-                        VaultSaltArchive.writeToZip(applicationContext, zipOut)
+                        // CQ-03: the shared writer owns the archive layout (portable database,
+                        // attachment tree, flashcard deck, vault salt), so this producer cannot
+                        // drift from the SAF export and the WebDAV upload. The `.part`, fsync,
+                        // authenticate and rename sequence below stays here because it is specific
+                        // to the device-bound automatic backup format.
+                        BackupArchiveWriter.write(
+                            zip = zipOut,
+                            context = applicationContext,
+                            portableDatabase = portableFile,
+                            attachments = attachments,
+                        )
                     }
 
                     // Streamed: the zip is encrypted as it is written, so an archive with a gigabyte of
@@ -154,7 +146,7 @@ open class BackupWorker(
             }
 
             val authentic = FileInputStream(part).use { written ->
-                AutoBackupCrypto.decryptTo(context, written, NullSink)
+                AutoBackupCrypto.decryptTo(context, written, OutputStream.nullOutputStream())
             }
             check(authentic) { "The finished automatic backup did not authenticate" }
 
@@ -321,16 +313,4 @@ internal object BackupRotation {
             }
         }
     }
-}
-
-/**
- * Discards verified plaintext while checking an archive.
- *
- * `OutputStream.nullOutputStream()` is a Java 11 API that only reached Android in API 33; the app
- * supports API 26, so this is the same sink by hand.
- */
-private object NullSink : OutputStream() {
-    override fun write(b: Int) = Unit
-
-    override fun write(b: ByteArray, off: Int, len: Int) = Unit
 }

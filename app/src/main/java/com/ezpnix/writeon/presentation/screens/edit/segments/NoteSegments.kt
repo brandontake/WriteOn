@@ -59,18 +59,85 @@ data class AttachmentSegment(
 ) : NoteSegment
 
 /**
+ * True when [text] contains something [segmentize] could possibly turn into a block.
+ *
+ * PERF-01: this is the check that keeps an ordinary note off the segmentation path entirely. There
+ * are only two shapes that become blocks - `![](attachment://id)` and `[caption](attachment://id)` -
+ * plus the legacy `!()`, `?audio()` and `![` forms the parser recognises as blocks. A body without
+ * any of those markers is one text field, no matter how long it is, and a handful of `indexOf`
+ * scans cost a fraction of splitting every line into a substring and running two regexes on it.
+ *
+ * Deliberately conservative: a candidate that turns out to be prose only means [segmentize] runs,
+ * never that an attachment line is missed.
+ */
+internal fun mayContainAttachmentSyntax(text: String): Boolean =
+    text.contains(AttachmentSyntax.SCHEME) ||
+        text.contains("?audio(") ||
+        text.contains("!(") ||
+        text.contains("![")
+
+/**
+ * The one field a body without attachment syntax is edited as.
+ *
+ * Kept identical to what [segmentize] would produce for such a body (one segment covering every
+ * byte, key `text:0`), so callers can switch between the two without a behavioural difference.
+ */
+internal fun wholeBodyTextSegment(text: String): TextSegment = TextSegment(
+    startLine = 0,
+    endLine = text.count { it == '\n' },
+    startOffset = 0,
+    endOffset = text.length,
+    text = text,
+    key = "text:0"
+)
+
+/**
+ * The segments the editor should lay out for [text].
+ *
+ * PERF-01: [mayContainAttachmentSyntax] is the fast path - a note that has never held an
+ * attachment skips [segmentize] completely. [segmentizeFn] exists so a test can pass a counting
+ * wrapper and prove that without a counter in production code; real callers keep the default.
+ */
+fun segmentsFor(
+    text: String,
+    segmentizeFn: (String) -> List<NoteSegment> = ::segmentize
+): List<NoteSegment> =
+    if (mayContainAttachmentSyntax(text)) segmentizeFn(text) else listOf(wholeBodyTextSegment(text))
+
+/**
+ * The text segment called [key] in the current [text], without segmentizing an ordinary body.
+ *
+ * PERF-01: the editor's `onSegmentChange` used to call [segmentize] a second time per keystroke just
+ * to translate a composition-captured key back into offsets. With no attachment markers there is
+ * exactly one text field, so the offsets are the whole body and no scan is needed; a note that does
+ * have markers keeps the exact lookup it had before.
+ *
+ * REG-09: the no-marker branch answers only for the one key that field actually has. A disposed
+ * segment can still deliver one callback carrying the key it had before the body lost its last
+ * attachment (`text:1`, say). Returning the whole body for that stale key let the callback replace
+ * the entire note with one field's text; the caller treats null as "ignore this edit".
+ */
+internal fun currentTextSegment(text: String, key: String): TextSegment? =
+    if (mayContainAttachmentSyntax(text)) {
+        segmentize(text).filterIsInstance<TextSegment>().firstOrNull { it.key == key }
+    } else {
+        wholeBodyTextSegment(text).takeIf { it.key == key }
+    }
+
+/**
  * Splits [text] into text and attachment segments without changing a single byte.
  *
  * Fenced code is always text: an `![](attachment://...)` line inside a fence has to stay source,
  * because that is the only way to write about the syntax. A line only becomes an attachment when
  * the whole trimmed line matches the same regex the renderer uses, so pasted prose that merely
  * mentions a link keeps working.
+ *
+ * One pass, no per-line result list: start/end offsets are tracked over the string itself. Lines
+ * whose first visible character cannot start an attachment (`!` or `[`) or a fence (`` ` ``) never
+ * allocate a substring or run a regex; only the few candidate lines pay for `trim()` and a match.
  */
 fun segmentize(text: String): List<NoteSegment> {
-    val lines = splitLines(text)
     val segments = mutableListOf<NoteSegment>()
-    var textOrdinal = 0
-
     // The same attachment id can legitimately appear on two lines (copy/paste, or a legacy body
     // that reused one id for one file). A LazyColumn key must be unique, so only the second and
     // later occurrences get an ordinal suffix. Using the occurrence rather than the offset keeps
@@ -91,7 +158,9 @@ fun segmentize(text: String): List<NoteSegment> {
             startOffset = textStartOffset,
             endOffset = textEndOffset,
             text = text.substring(textStartOffset, textEndOffset),
-            key = "text:${textOrdinal++}"
+            // REG-09 residual: assigned in the second pass below, where the segment's identity can
+            // be derived from the attachment that precedes it instead of its ordinal.
+            key = ""
         )
         textStartLine = -1
         textEndLine = -1
@@ -99,14 +168,30 @@ fun segmentize(text: String): List<NoteSegment> {
         textEndOffset = -1
     }
 
-    lines.forEachIndexed { index, line ->
-        val content = text.substring(line.start, line.end)
-        val trimmed = content.trim()
-        val opensOrClosesFence = trimmed.startsWith("```")
+    // Hoisted out of the loop: the regexes are process-wide, but a note with thousands of lines
+    // dereferences them thousands of times.
+    val imageLine = AttachmentSyntax.IMAGE_LINE
+    val audioLine = AttachmentSyntax.AUDIO_LINE
 
-        if (!insideFence && !opensOrClosesFence) {
-            val image = AttachmentSyntax.IMAGE_LINE.matchEntire(trimmed)
-            val audio = AttachmentSyntax.AUDIO_LINE.matchEntire(trimmed)
+    var lineIndex = 0
+    var lineStart = 0
+    // `<=` deliberately: a body ending in `\n` still has one empty line after it, exactly like
+    // `splitLines` produced before this loop replaced it.
+    while (lineStart <= text.length) {
+        var lineEnd = lineStart
+        while (lineEnd < text.length && text[lineEnd] != '\n') lineEnd++
+
+        var first = lineStart
+        while (first < lineEnd && text[first].isWhitespace()) first++
+        val firstChar = if (first < lineEnd) text[first] else '\u0000'
+        val opensOrClosesFence = firstChar == '`' &&
+            first + 2 < lineEnd && text[first + 1] == '`' && text[first + 2] == '`'
+
+        if (!insideFence && !opensOrClosesFence && (firstChar == '!' || firstChar == '[')) {
+            val content = text.substring(lineStart, lineEnd)
+            val trimmed = content.trim()
+            val image = imageLine.matchEntire(trimmed)
+            val audio = audioLine.matchEntire(trimmed)
             if (image != null || audio != null) {
                 flushText()
                 val id = image?.groupValues?.getOrNull(1)
@@ -116,10 +201,10 @@ fun segmentize(text: String): List<NoteSegment> {
                 val occurrence = attachmentOccurrences.getOrDefault(id, 0)
                 attachmentOccurrences[id] = occurrence + 1
                 segments += AttachmentSegment(
-                    startLine = index,
-                    endLine = index,
-                    startOffset = line.start,
-                    endOffset = line.end,
+                    startLine = lineIndex,
+                    endLine = lineIndex,
+                    startOffset = lineStart,
+                    endOffset = lineEnd,
                     raw = content,
                     attachmentId = id,
                     type = if (image != null) Attachment.TYPE_IMAGE else Attachment.TYPE_AUDIO,
@@ -130,17 +215,24 @@ fun segmentize(text: String): List<NoteSegment> {
                         "attachment:$id#$occurrence"
                     }
                 )
-                return@forEachIndexed
+                lineIndex++
+                if (lineEnd >= text.length) break
+                lineStart = lineEnd + 1
+                continue
             }
         }
 
         if (opensOrClosesFence) insideFence = !insideFence
         if (textStartLine < 0) {
-            textStartLine = index
-            textStartOffset = line.start
+            textStartLine = lineIndex
+            textStartOffset = lineStart
         }
-        textEndLine = index
-        textEndOffset = line.end
+        textEndLine = lineIndex
+        textEndOffset = lineEnd
+
+        lineIndex++
+        if (lineEnd >= text.length) break
+        lineStart = lineEnd + 1
     }
     flushText()
 
@@ -156,12 +248,50 @@ fun segmentize(text: String): List<NoteSegment> {
             startOffset = text.length,
             endOffset = text.length,
             text = "",
-            key = "text:${textOrdinal++}",
+            key = "",
             synthetic = !endsWithNewline
         )
     }
 
-    return segments
+    return keyTextSegments(segments)
+}
+
+/**
+ * REG-09 residual: gives every text segment an identity that survives typing but not a structural
+ * edit.
+ *
+ * The old keys were ordinals (`text:0`, `text:1`, ...). Deleting one attachment line merged two
+ * text runs while the ordinal of the following run stayed free for reuse, so a callback captured by
+ * a disposed field could be applied to a completely different range. Every text run is now keyed by
+ * the attachment next to it (`text:after:<id>` or, for the leading run, `text:before:<id>`), which
+ * keeps the LazyColumn key stable while the user types and makes it disappear the moment that
+ * attachment line is removed or rewritten. A body without attachments keeps the fast-path
+ * `text:0` key.
+ */
+private fun keyTextSegments(segments: List<NoteSegment>): List<NoteSegment> {
+    var precedingAttachment: String? = null
+    return segments.mapIndexed { index, segment ->
+        when (segment) {
+            is AttachmentSegment -> {
+                precedingAttachment = segment.key
+                segment
+            }
+            is TextSegment -> {
+                // The leading run is named after the attachment that *follows* it. With a plain
+                // `text:0` for every leading run, deleting the first attachment line made an old
+                // field's key reusable for a different range - the residual REG-09 window. Every
+                // text key in a segmented body now depends on an attachment id, so a structural
+                // edit that removes/renames one invalidates exactly the keys that described it.
+                val key = precedingAttachment?.let { "text:after:$it" }
+                    ?: segments.subList(index, segments.size)
+                        .filterIsInstance<AttachmentSegment>()
+                        .firstOrNull()
+                        ?.let { "text:before:${it.key}" }
+                    ?: "text:0"
+                segment.copy(key = key)
+            }
+        }
+    }
 }
 
 /** Undoes [segmentize]. For every string `assemble(segmentize(x)) == x`. */
@@ -176,24 +306,6 @@ fun assemble(segments: List<NoteSegment>): String = buildString {
     }
 }
 
-private data class LineRange(val start: Int, val end: Int)
-
-/**
- * Splits on `\n` while keeping a trailing `\r` in the line content. That is what makes a CRLF body
- * round-trip through [assemble] unchanged: the `\r` stays with the preceding line and the `\n` is
- * the separator the assembler writes back.
- */
-private fun splitLines(text: String): List<LineRange> {
-    val result = mutableListOf<LineRange>()
-    var start = 0
-    var index = 0
-    while (index < text.length) {
-        if (text[index] == '\n') {
-            result += LineRange(start, index)
-            start = index + 1
-        }
-        index++
-    }
-    result += LineRange(start, text.length)
-    return result
-}
+// The line walk above replaces the old `splitLines`/`LineRange` pair. Folding it into `segmentize`
+// keeps a `\r` with its line (so CRLF bodies still round-trip through `assemble`) without building
+// a range object for every line of a note that has no attachments at all.

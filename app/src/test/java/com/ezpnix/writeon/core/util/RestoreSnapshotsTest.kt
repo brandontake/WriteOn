@@ -13,7 +13,6 @@ import java.util.Base64
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.withLock
@@ -377,8 +376,19 @@ class RestoreSnapshotsTest {
         }
         locked.await()
 
-        val restore = async(Dispatchers.IO) { RestoreSnapshots.restorePrevious(context) }
-        delay(100)
+        val reachedLock = CompletableDeferred<Unit>()
+        val restore = async(Dispatchers.IO) {
+            RestoreSnapshots.restorePrevious(
+                context,
+                onBeforeLock = { reachedLock.complete(Unit) },
+            ) { target, staged, replaced ->
+                DatabaseRestore.replaceDatabaseAtomically(target, staged, replaced)
+            }
+        }
+        // TST-06: no sleep. The hook fires on the IO dispatcher immediately before the shared lock
+        // is taken; this test still holds that lock, so the restore is guaranteed not to have read
+        // `.bak` when the replacement below lands.
+        reachedLock.await()
         // Simulate a concurrent restore that replaced both `.bak` and its sidecar while this undo
         // was waiting for the lock. The old sidecar now describes different bytes.
         val second = compatibleDatabase(temporaryFolder.newFile("second.db")).readBytes() +

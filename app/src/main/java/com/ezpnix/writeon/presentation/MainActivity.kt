@@ -41,6 +41,7 @@ import com.ezpnix.writeon.presentation.navigation.BackGestureRouter
 import com.ezpnix.writeon.presentation.navigation.HomeOverlayState
 import com.ezpnix.writeon.presentation.navigation.NavRoutes
 import com.ezpnix.writeon.presentation.navigation.PredictiveBackHost
+import com.ezpnix.writeon.presentation.screens.edit.NoteNotificationManager
 import com.ezpnix.writeon.presentation.screens.settings.model.SettingsViewModel
 import com.ezpnix.writeon.presentation.share.ShareIntake
 import com.ezpnix.writeon.presentation.share.readShareIntent
@@ -51,6 +52,7 @@ import com.ezpnix.writeon.presentation.theme.NoteFontManager
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import javax.inject.Inject
@@ -61,11 +63,27 @@ class MainActivity : AppCompatActivity() {
     lateinit var settingsRepositoryImpl: SettingsRepositoryImpl
     private val settingsViewModel: SettingsViewModel by viewModels()
 
+    /**
+     * UX-13: a pinned-note tap that arrives while the activity is alive (singleTask).
+     *
+     * The cold-start case needs no state - its intent already selects the start destination - but a
+     * warm tap has to be handed to the running composition, which owns the NavController. The value
+     * is consumed by the effect that navigates, so a recomposition cannot reopen the note twice.
+     */
+    private val pendingNoteOpen = MutableStateFlow<Int?>(null)
+
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         // singleTask delivers later shares here instead of creating a second activity, so the
         // payload is parked and the running composition is asked to open a new note.
         setIntent(intent)
+        // UX-13: a tap on a pinned note's notification. This is not a share: the share read below
+        // would return null anyway, but returning early keeps the two paths visibly separate.
+        val pinnedNoteId = intent.getIntExtra(NoteNotificationManager.EXTRA_NOTE_ID, -1)
+        if (pinnedNoteId > 0) {
+            pendingNoteOpen.value = pinnedNoteId
+            return
+        }
         // P-10: importing a shared image copies up to 100 MB out of the sender's URI. Doing that
         // in onNewIntent blocked the main thread for the whole copy; the cold-start path already
         // moved it to IO, and the warm path has to do the same.
@@ -90,7 +108,17 @@ class MainActivity : AppCompatActivity() {
         val startup = CompletableDeferred<Boolean>()
         splashScreen.setKeepOnScreenCondition { !startup.isCompleted }
 
-        val noteId = intent?.getIntExtra("noteId", -1) ?: -1
+        // UX-13: a pinned notification carries the note id (the same extra the widgets use), so a
+        // cold start can land straight in that note. The extra is consumed here: a configuration
+        // change re-runs onCreate with the same intent, and the start destination below must not
+        // keep pointing at a note the user has long left.
+        //
+        // REG-02: this value is only read to build the start destination. The nav graph encodes the
+        // id in the route, so every later Edit destination uses its own argument instead of
+        // inheriting the notification's note (which used to make every note opened after the cold
+        // start load the one from the notification).
+        val noteId = intent?.getIntExtra(NoteNotificationManager.EXTRA_NOTE_ID, -1) ?: -1
+        if (noteId > 0) intent?.removeExtra(NoteNotificationManager.EXTRA_NOTE_ID)
         val isNewNoteShortcut = intent?.action == "com.ezpnix.writeon.action.NEW_NOTE" ||
                 intent?.getBooleanExtra("new_note", false) == true
 
@@ -141,6 +169,9 @@ class MainActivity : AppCompatActivity() {
                         navController.navigate(NavRoutes.Edit.createRoute(0, false))
                     }
                 }
+                // UX-13: a warm tap on a pinned-note notification is handled by the effect inside
+                // LockGate below: a locked cold start has no NavHost yet, and a navigation there
+                // would throw instead of waiting for the unlock.
                 val predictiveBackEnabled = settingsViewModel.settings.value.predictiveBackEnabled
                 // One provider for the whole app: every screen and component reads the radius the
                 // user chose in Settings > Colours from this local, so no corner stays hard-coded.
@@ -169,6 +200,16 @@ class MainActivity : AppCompatActivity() {
                                 color = MaterialTheme.colorScheme.surfaceContainerLow,
                             ) {
                                 LockGate {
+                                    // UX-13: a warm tap on a pinned-note notification navigates to
+                                    // that note. Declared inside the gate so it only runs once the
+                                    // NavHost exists (a locked cold start has none yet) and so the
+                                    // request waits behind the lock screen instead of bypassing it.
+                                    val pendingNote by pendingNoteOpen.collectAsStateWithLifecycle()
+                                    LaunchedEffect(pendingNote) {
+                                        val id = pendingNote ?: return@LaunchedEffect
+                                        navController.navigate(NavRoutes.Edit.createRoute(id, false))
+                                        pendingNoteOpen.value = null
+                                    }
                                     // Compare destination ids, not route strings: a start destination built
                                     // by createRoute() is a filled path ("edit/0/false"), while the graph
                                     // stores the template ("edit/{id}/{encrypted}"), so the old comparison
@@ -202,7 +243,6 @@ class MainActivity : AppCompatActivity() {
                                     ) {
                                         AppNavHost(
                                             settingsViewModel = settingsViewModel,
-                                            noteId = noteId,
                                             navController = navController,
                                             startDestination = startDestination
                                         )

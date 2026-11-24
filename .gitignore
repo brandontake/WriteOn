@@ -79,3 +79,6 @@ keystore.properties
 
 # Local offline Gradle cache (per-machine, ~1.5 GB). Never belongs in the repository.
 .gradle-user-home/
+
+# ZCode workspace ignore file (per-machine agent configuration)
+/.zcodeignore

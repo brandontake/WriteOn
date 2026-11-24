@@ -8,6 +8,7 @@ import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import androidx.work.CoroutineWorker
@@ -91,6 +92,30 @@ object WebDavPrefs {
      * server has a file we have never seen", which must not be overwritten.
      */
     const val REMOTE_WRITTEN = "webdav_remote_written"
+
+    /**
+     * R2-01: validators of a canonical file this install published but could not verify.
+     *
+     * An unverified publication is not "someone else's file": the bytes on the server are the
+     * truncated or misunderstood result of this run's own MOVE/PUT. Forgetting every validator
+     * made the next run classify that file as a stranger, park yet another conflict copy and never
+     * repair the canonical archive. These two keys record what the failed run actually saw, so the
+     * next run may overwrite *that exact file* conditionally. The value is never treated as proof
+     * of ownership for any other remote state.
+     */
+    const val REPAIR_ETAG = "webdav_repair_etag"
+    const val REPAIR_LAST_MODIFIED = "webdav_repair_last_modified"
+
+    /**
+     * R3-02: the canonical URL the lease was created for, and how many automatic repair runs it
+     * has driven.
+     *
+     * WebDAV validators are only meaningful for one URL. Saving a new server must not let an old
+     * lease match a same-named file there, and a lease that keeps failing must stop after
+     * [WebDavRepairLease.MAX_REPAIR_ATTEMPTS] instead of retrying forever.
+     */
+    const val REPAIR_URL = "webdav_repair_url"
+    const val REPAIR_ATTEMPTS = "webdav_repair_attempts"
 }
 
 /** Tink keyset for the WebDAV credentials, shared by the settings screen and the workers. */
@@ -150,10 +175,10 @@ open class WebDAVRestoreWorker(
 ) : CoroutineWorker(context, workerParams) {
 
     /**
-     * W10/W11: the shared client carries the whole-call timeout and never follows a redirect, so
-     * a "download" that is really a redirect lands here as a 3xx instead of a truncated body.
+     * W10/W11: downloads use the shared client's timeout/redirect policy via
+     * [WebDavHttp.clientForTransfer], which adds the SYN-7 transfer budget (or removes the
+     * whole-call ceiling when the size is not known yet) without following a redirect.
      */
-    private val client = WebDavHttp.client()
 
     /** Main-looper handler used to post the post-restore restart after the result is recorded. */
     private val restartHandler = android.os.Handler(android.os.Looper.getMainLooper())
@@ -236,7 +261,11 @@ open class WebDAVRestoreWorker(
 
             var downloadedEtag: String? = null
             var downloadedLastModified: String? = null
-            client.newCall(request).execute().use { response ->
+            // SYN-7: an archive with recordings can be hundreds of megabytes, and its size is not
+            // known before the response headers arrive. The download therefore has no whole-call
+            // ceiling; the read timeout still ends a stalled connection, and copyWithLimit ends an
+            // oversized body.
+            WebDavHttp.clientForTransfer(expectedBytes = null).newCall(request).execute().use { response ->
                 if (!response.isSuccessful) {
                     // W11 first: a redirect is never worth another attempt, and 401/403/404 are
                     // terminal too (W9) - the same request cannot start working on its own.
@@ -296,30 +325,56 @@ open class WebDAVRestoreWorker(
             )
 
             unzipAndReplaceDatabase(tempEncryptedFile, userPassword)
-            applicationContext.webDavDataStore.edit { stored ->
-                val etagKey = stringPreferencesKey(WebDavPrefs.ETAG)
-                val lastModifiedKey = stringPreferencesKey(WebDavPrefs.LAST_MODIFIED)
-                if (restoringOtherFile) {
-                    // This was a conflict copy, not the canonical archive: its validator says
-                    // nothing about the file the next upload will target. Clear both markers so the
-                    // upload path treats the canonical file as "someone else's" and makes a fresh
-                    // conflict copy instead of overwriting it.
-                    stored.remove(etagKey)
-                    stored.remove(lastModifiedKey)
-                    stored[booleanPreferencesKey(WebDavPrefs.REMOTE_WRITTEN)] = false
-                } else {
-                    // The remote archive is now the database we just installed. Remember the
-                    // validators that belong to it (instead of deleting them) so the next upload
-                    // does not treat the file as a stranger and cannot silently overwrite another
-                    // device's copy. Either validator keeps that upload conditional (W5).
-                    if (downloadedEtag.isNullOrBlank()) stored.remove(etagKey) else stored[etagKey] = downloadedEtag!!
-                    if (downloadedLastModified.isNullOrBlank()) {
+
+            // SYN-8: the restore has already happened, so a failure to *store* the download's
+            // validators must not retry the whole download and restore. This edit used to be
+            // unguarded: a DataStore I/O error (disk full, for instance) returned `retry()` after
+            // the database had been replaced, causing a second full restore and a restore screen
+            // that never cleared. Losing the validators is benign - the next upload then treats
+            // the remote as someone else's and makes a conflict copy instead of overwriting it.
+            try {
+                applicationContext.webDavDataStore.edit { stored ->
+                    val etagKey = stringPreferencesKey(WebDavPrefs.ETAG)
+                    val lastModifiedKey = stringPreferencesKey(WebDavPrefs.LAST_MODIFIED)
+                    // R2-01: a restore replaces what this install knows about the remote, so a
+                    // repair lease from an earlier failed upload no longer describes anything.
+                    stored.remove(stringPreferencesKey(WebDavPrefs.REPAIR_ETAG))
+                    stored.remove(stringPreferencesKey(WebDavPrefs.REPAIR_LAST_MODIFIED))
+                    stored.remove(stringPreferencesKey(WebDavPrefs.REPAIR_URL))
+                    stored.remove(intPreferencesKey(WebDavPrefs.REPAIR_ATTEMPTS))
+                    if (restoringOtherFile) {
+                        // This was a conflict copy, not the canonical archive: its validator says
+                        // nothing about the file the next upload will target. Clear both markers so
+                        // the upload path treats the canonical file as "someone else's" and makes a
+                        // fresh conflict copy instead of overwriting it.
+                        stored.remove(etagKey)
                         stored.remove(lastModifiedKey)
+                        stored[booleanPreferencesKey(WebDavPrefs.REMOTE_WRITTEN)] = false
                     } else {
-                        stored[lastModifiedKey] = downloadedLastModified!!
+                        // The remote archive is now the database we just installed. Remember the
+                        // validators that belong to it (instead of deleting them) so the next
+                        // upload does not treat the file as a stranger and cannot silently
+                        // overwrite another device's copy. Either validator keeps that upload
+                        // conditional (W5).
+                        if (downloadedEtag.isNullOrBlank()) stored.remove(etagKey) else stored[etagKey] = downloadedEtag!!
+                        if (downloadedLastModified.isNullOrBlank()) {
+                            stored.remove(lastModifiedKey)
+                        } else {
+                            stored[lastModifiedKey] = downloadedLastModified!!
+                        }
+                        stored[booleanPreferencesKey(WebDavPrefs.REMOTE_WRITTEN)] = true
                     }
-                    stored[booleanPreferencesKey(WebDavPrefs.REMOTE_WRITTEN)] = true
                 }
+            } catch (e: IOException) {
+                Log.w(TAG, "Restore succeeded but the WebDAV validators could not be stored", e)
+            }
+
+            // SYN-04: restoring a parked conflict copy is the merge that copy's notice was asking
+            // for, so resolve exactly that notice once the restore succeeded. Only the copy's own
+            // URL is dismissed (other parked copies keep their notices), and a canonical restore
+            // leaves the list alone because it proves nothing about any copy.
+            if (restoringOtherFile) {
+                WebDavBackupState.dismissConflict(applicationContext, restoreUrl)
             }
 
             withContext(Dispatchers.Main) {
@@ -354,7 +409,16 @@ open class WebDAVRestoreWorker(
             // streaming cipher stream rethrows it); retrying would spin on every run, so it is
             // terminal. A real network/IO problem still deserves a retry - but a bounded one (W9).
             val cause = e.cause
-            if (cause is javax.crypto.BadPaddingException || cause is javax.crypto.IllegalBlockSizeException) {
+            // SYN-9: a malformed archive is deterministic - an HTML login page saved under the
+            // archive name, a truncated zip, an illegal entry. The same bytes fail every time, so
+            // retrying only re-downloads them (up to six times, each capped at 1 GiB) and keeps
+            // the sync chain busy. Only transport/5xx/429/space problems are worth another run.
+            val malformedArchive = e is java.util.zip.ZipException ||
+                cause is java.util.zip.ZipException
+            if (malformedArchive) {
+                Log.e(TAG, "WebDAV restore archive is not a valid archive; not retrying", e)
+                failWithToast()
+            } else if (cause is javax.crypto.BadPaddingException || cause is javax.crypto.IllegalBlockSizeException) {
                 Log.e(TAG, "WebDAV restore archive failed authentication", e)
                 failWithToast()
             } else if (runAttemptCount < WebDavRetry.MAX_RUN_ATTEMPTS) {
@@ -420,21 +484,26 @@ open class WebDAVRestoreWorker(
      */
     private suspend fun unzipAndReplaceDatabase(encryptedArchive: File, passphrase: String) {
         val dbFile = applicationContext.getDatabasePath(DatabaseConst.NOTES_DATABASE_FILE_NAME)
-        val tempDir = File(applicationContext.cacheDir, "unzipped_restore")
-        tempDir.deleteRecursively()
-        tempDir.mkdirs()
+        // REG-04: staging is per operation. The old fixed directory was shared with the local
+        // import/export path, and this worker deleted it *before* taking the restore mutex (and
+        // again in its finally, after releasing it), so a superseded or cancelled restore could
+        // delete the bytes of a newer operation. The unique child makes the directory private to
+        // this run; creation and removal still happen only inside the mutex below.
+        val tempDir = AttachmentArchive.newStagingDirectory(applicationContext)
 
-        try {
-            // W15: the exact @Singleton Mutex the local import/export paths hold (Hilt gives this
-            // entry point the same instance DataModule provides to ImportExportRepository).
-            // Download and decryption stay outside the lock; everything that touches the database
-            // file or the attachment directories runs inside it, so a cloud restore can no longer
-            // close() and rename() over a running local import - or vice versa.
-            val restoreMutex = EntryPointAccessors
-                .fromApplication(applicationContext, RestoreLockEntryPoint::class.java)
-                .restoreMutex()
+        // W15: the exact @Singleton Mutex the local import/export paths hold (Hilt gives this
+        // entry point the same instance DataModule provides to ImportExportRepository).
+        // Download and decryption stay outside the lock; everything that touches the database
+        // file or the attachment directories runs inside it, so a cloud restore can no longer
+        // close() and rename() over a running local import - or vice versa.
+        val restoreMutex = EntryPointAccessors
+            .fromApplication(applicationContext, RestoreLockEntryPoint::class.java)
+            .restoreMutex()
 
-            restoreMutex.withLock {
+        restoreMutex.withLock {
+            tempDir.deleteRecursively()
+            tempDir.mkdirs()
+            try {
                 val stagedDatabase = encryptedArchive.inputStream().use { encryptedInput ->
                     val decrypted = BackupArchiveCrypto.decryptStream(encryptedInput, passphrase)
                     ZipInputStream(decrypted).use { zipStream ->
@@ -474,7 +543,9 @@ open class WebDAVRestoreWorker(
                 // the UI.
                 var attachmentSnapshotId: String? = null
                 var snapshotPaired = false
-                RestoreCoordinator.begin()
+                // REG-04: this transition's token; a superseded worker's failure path must not
+                // clear the overlay of the restore that replaced it.
+                val restoreToken = RestoreCoordinator.begin()
                 try {
                     // The connection has to be closed before its file is replaced. Room keeps the
                     // old file mapped, so a restore that only renamed the new file into place left
@@ -487,9 +558,25 @@ open class WebDAVRestoreWorker(
                     if (newSalt != null && !VaultSaltArchive.isValidEncoded(newSalt)) {
                         throw IOException("downloaded backup vault salt is invalid")
                     }
+                    // DAT-04: a deck member that exists but cannot be read/re-sealed is not "no
+                    // deck to apply". Abort before the swap instead of writing a journal that
+                    // would later leave the restored database with the old deck (or clear it).
+                    val stagedDeck = File(tempDir, FlashcardArchive.ENTRY_NAME)
                     val newDeck = FlashcardArchive.readStagedPlainJson(tempDir)
                         ?.let(FlashcardArchive::sealForRecovery)
-                    if (!RestoreJournal.write(applicationContext, stagedDatabase, newSalt, newDeck)) {
+                    if (stagedDeck.isFile && newDeck == null) {
+                        throw IOException("downloaded backup flashcard deck could not be prepared")
+                    }
+                    if (!RestoreJournal.write(
+                            applicationContext,
+                            stagedDatabase,
+                            newSalt,
+                            newDeck,
+                            attachmentStaging = tempDir.absolutePath,
+                            // R5-01: stamp before the hash; AttachmentArchive.install reuses it.
+                            stampGeneration = true,
+                        )
+                    ) {
                         throw IOException("could not write the restore journal")
                     }
                     val previousBackup = DatabaseRestore.replaceDatabaseAtomically(
@@ -528,7 +615,10 @@ open class WebDAVRestoreWorker(
                     // Now that the restored database is live, the bytes may follow it. install()
                     // moves same-name files aside first and puts them back itself if it fails.
                     try {
-                        AttachmentArchive.install(applicationContext, preparedAttachments)
+                        AttachmentArchive.install(
+                            applicationContext,
+                            preparedAttachments,
+                        )
                     } catch (e: IOException) {
                         // The file on disk and the attachment bytes must agree again.
                         // rollbackFromBackup keeps `.bak` intact, so a retry or a manual "restore
@@ -574,13 +664,18 @@ open class WebDAVRestoreWorker(
                     }
                     // Every failure/rollback path reopens the app. Success leaves the coordinator
                     // set: this worker restarts the process a moment later, and a fresh process
-                    // starts from the default (not restoring).
-                    RestoreCoordinator.end()
+                    // starts from the default (not restoring). REG-04: the token makes this a
+                    // no-op when a newer restore already owns the overlay.
+                    RestoreCoordinator.end(restoreToken)
                     throw e
                 }
+            } finally {
+                // REG-04: only this operation's own directory, and only while its restore lock is
+                // still held. Deleting after releasing the lock was how a cancelled worker could
+                // erase a newer operation's staging tree. DAT-10: an incomplete rollback keeps the
+                // install journal, so the sources it still needs must survive too.
+                AttachmentArchive.deleteStagingUnlessReferenced(applicationContext, tempDir)
             }
-        } finally {
-            tempDir.deleteRecursively()
         }
     }
 

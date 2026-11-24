@@ -14,11 +14,13 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.Sort
 import androidx.compose.material.icons.rounded.Architecture
 import androidx.compose.material.icons.rounded.AutoFixHigh
+import androidx.compose.material.icons.rounded.Calculate
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.Home
+import androidx.compose.material.icons.rounded.Image
 import androidx.compose.material.icons.rounded.Style
 import androidx.compose.material.icons.rounded.TextFields
-import androidx.compose.material.icons.rounded.VisibilityOff
+import androidx.compose.material.icons.rounded.Title
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
@@ -39,7 +41,9 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavController
+import com.ezpnix.writeon.BuildConfig
 import com.ezpnix.writeon.R
 import com.ezpnix.writeon.presentation.navigation.NavRoutes
 import com.ezpnix.writeon.presentation.screens.settings.SettingsScaffold
@@ -53,7 +57,13 @@ fun ToolsScreen(navController: NavController, settingsViewModel: SettingsViewMod
     LaunchedEffect(Unit) { settingsViewModel.refreshNotes() }
     var showSearchDialog by remember { mutableStateOf(false) }
     var showSortByDialog by remember { mutableStateOf(false) }
-    var dynamicPlaceholderInput by remember { mutableStateOf(context.getString(R.string.app_subtitle)) }
+    // UX-12: the input starts from the saved greeting, not from the default subtitle, so opening
+    // the dialog and pressing Save no longer overwrites a custom greeting with "Simple Notepad".
+    val savedPlaceholder by settingsViewModel.dynamicPlaceholder.collectAsStateWithLifecycle()
+    var dynamicPlaceholderInput by remember { mutableStateOf(savedPlaceholder) }
+    LaunchedEffect(showSearchDialog) {
+        if (showSearchDialog) dynamicPlaceholderInput = savedPlaceholder
+    }
     
     if (showSortByDialog) {
         val currentSortBy = settingsViewModel.settings.value.sortBy
@@ -167,29 +177,71 @@ fun ToolsScreen(navController: NavController, settingsViewModel: SettingsViewMod
                     radius = shapeManager(
                         radius = settingsViewModel.settings.value.cornerRadius,
                         isFirst = true,
-                        isLast = false
+                        isLast = true
                     ),
                     customAction = {
+                        dynamicPlaceholderInput = savedPlaceholder
                         showSearchDialog = true
                     }
                 )
+                Spacer(modifier = Modifier.height(18.dp))
             }
             item {
+                // The old Behaviour page was merged here. The four switches are one segmented
+                // card instead of four separate rounded rectangles: first/middle/last corners keep
+                // the block visually attached, and the 18 dp gap separates it from the tools above.
+                val settings = settingsViewModel.settings.value
                 SettingsBox(
-                    title = stringResource(R.string.tools_autohide_title),
-                    description = stringResource(R.string.tools_autohide_desc),
-                    icon = Icons.Rounded.VisibilityOff,
+                    title = stringResource(id = R.string.markdown),
+                    description = stringResource(id = R.string.markdown_description),
+                    icon = Icons.Rounded.Style,
                     actionType = ActionType.SWITCH,
-                    radius = shapeManager(
-                        radius = settingsViewModel.settings.value.cornerRadius,
-                        isLast = true
-                    ),
-                    variable = settingsViewModel.settings.value.hideVisibilityButtonWhenKeyboard,
+                    radius = shapeManager(radius = settings.cornerRadius, isFirst = true),
+                    variable = settings.isMarkdownEnabled,
                     switchEnabled = {
                         settingsViewModel.update(
-                            settingsViewModel.settings.value.copy(
-                                hideVisibilityButtonWhenKeyboard = it
+                            settingsViewModel.settings.value.copy(isMarkdownEnabled = it)
+                        )
+                    }
+                )
+                SettingsBox(
+                    title = stringResource(id = R.string.latex_rendering),
+                    description = stringResource(id = R.string.latex_rendering_description),
+                    icon = Icons.Rounded.Calculate,
+                    actionType = ActionType.SWITCH,
+                    radius = shapeManager(radius = settings.cornerRadius),
+                    variable = settings.renderLatex,
+                    switchEnabled = {
+                        settingsViewModel.update(
+                            settingsViewModel.settings.value.copy(renderLatex = it)
+                        )
+                    }
+                )
+                if (BuildConfig.FEATURE_ATTACHMENT_LIVE_RENDER) {
+                    SettingsBox(
+                        title = stringResource(id = R.string.live_attachment_preview),
+                        description = stringResource(id = R.string.live_attachment_preview_description),
+                        icon = Icons.Rounded.Image,
+                        actionType = ActionType.SWITCH,
+                        radius = shapeManager(radius = settings.cornerRadius),
+                        variable = settings.liveAttachmentPreview,
+                        switchEnabled = {
+                            settingsViewModel.update(
+                                settingsViewModel.settings.value.copy(liveAttachmentPreview = it)
                             )
+                        }
+                    )
+                }
+                SettingsBox(
+                    title = stringResource(id = R.string.show_only_title),
+                    description = stringResource(id = R.string.show_only_title_description),
+                    icon = Icons.Rounded.Title,
+                    actionType = ActionType.SWITCH,
+                    radius = shapeManager(radius = settings.cornerRadius, isLast = true),
+                    variable = settings.showOnlyTitle,
+                    switchEnabled = {
+                        settingsViewModel.update(
+                            settingsViewModel.settings.value.copy(showOnlyTitle = it)
                         )
                     }
                 )
@@ -213,7 +265,9 @@ fun ToolsScreen(navController: NavController, settingsViewModel: SettingsViewMod
         }
         if (showSearchDialog) {
             AlertDialog(
-                onDismissRequest = { showSearchDialog = true },
+                // UX-12: this used to set the flag back to true, which made the dialog impossible
+                // to close with back or a scrim tap. Dismissing now just closes it.
+                onDismissRequest = { showSearchDialog = false },
                 title = { Text(stringResource(R.string.tools_example_text)) },
                 text = {
                     TextField(
@@ -226,8 +280,9 @@ fun ToolsScreen(navController: NavController, settingsViewModel: SettingsViewMod
                 confirmButton = {
                     TextButton(onClick = {
                         settingsViewModel.updatePlaceholder(dynamicPlaceholderInput)
-                        // X2 fixed the double-Home push; one pop back to Home is enough now.
-                        navController.popBackStack(NavRoutes.Home.route, inclusive = false)
+                        // Saving the greeting no longer navigates to Home: the user stays on Tools
+                        // where they opened the dialog.
+                        showSearchDialog = false
                         Toast.makeText(context, context.getString(R.string.tools_text_updated), Toast.LENGTH_SHORT)
                             .show()
                     }) {
@@ -236,7 +291,7 @@ fun ToolsScreen(navController: NavController, settingsViewModel: SettingsViewMod
                 },
                 dismissButton = {
                     TextButton(onClick = {
-                        navController.popBackStack(NavRoutes.Home.route, inclusive = false)
+                        showSearchDialog = false
                         Toast.makeText(context, context.getString(R.string.tools_text_not_updated), Toast.LENGTH_SHORT)
                             .show()
                     }) {

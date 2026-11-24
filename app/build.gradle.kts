@@ -4,7 +4,6 @@ import java.util.Properties
 
 plugins {
     alias(libs.plugins.android.application)
-    alias(libs.plugins.jetbrains.kotlin.android)
     alias(libs.plugins.ksp)
     alias(libs.plugins.compose.compiler)
     alias(libs.plugins.hilt)
@@ -15,27 +14,56 @@ plugins {
 //   storePassword=...
 //   keyAlias=upload
 //   keyPassword=...
-// When the file is absent the release build falls back to the debug keystore so that
-// `assembleRelease`/`bundleRelease` keep working locally.
+// A release artifact MUST be signed with the real key. CQ-02: when the file is absent,
+// assembleRelease/bundleRelease fail instead of silently shipping a debug-signed APK - that build
+// cannot overwrite an installed release and masks a broken release configuration. For local
+// convenience the failure can be opted out of explicitly with -PallowDebugSigning=true, which
+// signs with the debug key but also suffixes versionName with "-debugsigned" and logs a warning.
 val keystorePropertiesFile = rootProject.file("keystore.properties")
+val releaseKeystoreAvailable = keystorePropertiesFile.exists()
+val allowDebugSigning = providers.gradleProperty("allowDebugSigning")
+    .map { it.toBoolean() }
+    .orElse(false)
+    .get()
 val keystoreProperties = Properties().apply {
-    if (keystorePropertiesFile.exists()) {
+    if (releaseKeystoreAvailable) {
         keystorePropertiesFile.inputStream().use { load(it) }
     }
 }
 
+if (!releaseKeystoreAvailable && allowDebugSigning) {
+    logger.warn(
+        "WARNING: keystore.properties is missing and -PallowDebugSigning=true was passed. " +
+            "The release artifact will be signed with the DEBUG key and its versionName will " +
+            "end in -debugsigned. Do not distribute this artifact."
+    )
+}
+
 android {
     namespace = "com.ezpnix.writeon"
-    // Pinned on purpose (no dynamic versions): Android 16 = API 36.
-    compileSdk = 36
+    // Android 17 / API 37.2: the current Compose BOM declares minCompileSdk 37.1, and AGP 9
+    // exposes the minor API level through the new compileSdk spec DSL. targetSdk stays 36 so the
+    // runtime behaviour contract of the 2.1 release does not change with this toolchain bump.
+    compileSdk {
+        version = release(37) {
+            minorApiLevel = 2
+        }
+    }
 
     defaultConfig {
         applicationId = "com.ezpnix.writeon"
-        minSdk = 26
+        // Android 13 (API 33) is the floor from 2.1 on: it lets the app drop its pre-33
+        // compatibility branches and rely on the Android 13 permission model (POST_NOTIFICATIONS,
+        // per-app languages) being present on every supported device.
+        minSdk = 33
         // Google Play requires new submissions to target API 36 from 2026-08-31.
         targetSdk = 36
-        versionCode = 16
-        versionName = "2.0.4"
+        versionCode = 17
+        versionName = "2.1.0"
+        // TST-01: the device-test entry point. AGP uses this for connectedDebugAndroidTest; the
+        // tests under app/src/androidTest cover the parts that need real hardware (Android
+        // Keystore, media encryption), which Robolectric cannot model.
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         // The segmented editor (attachment lines rendered as blocks) is still experimental. The
         // user-facing switch in Settings > Behaviour must be on as well; this flag is the
         // compile-time kill switch that lets a build ship without the code path at all.
@@ -43,17 +71,17 @@ android {
         vectorDrawables {
             useSupportLibrary = true
         }
+    }
 
-        // https://developer.android.com/guide/topics/resources/app-languages#gradle-config
-        // Ship only the locales the app actually has translations for (res/values + res/values-zh
-        // + res/values-ja). NOTE: the previous `resourceConfigurations.plus(listOf("en"))` was a
-        // no-op - `plus` on a List returns a new list that was discarded, so no resource stripping
-        // happened at all.
-        resourceConfigurations += setOf("en", "zh", "ja")
+    // Ship only the locales the app actually has translations for (res/values + res/values-zh +
+    // res/values-ja). AGP 8.13 deprecates `resourceConfigurations`; `localeFilters` is the
+    // replacement and feeds the same per-language resource stripping.
+    androidResources {
+        localeFilters += listOf("en", "zh", "ja")
     }
 
     signingConfigs {
-        if (keystorePropertiesFile.exists()) {
+        if (releaseKeystoreAvailable) {
             create("release") {
                 storeFile = rootProject.file(keystoreProperties.getProperty("storeFile"))
                 storePassword = keystoreProperties.getProperty("storePassword")
@@ -72,10 +100,17 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
-            signingConfig = if (keystorePropertiesFile.exists()) {
+            // CQ-02: never fall back to the debug key by accident. With keystore.properties the
+            // real release key signs the artifact; without it the build fails below unless the
+            // caller explicitly opted into -PallowDebugSigning=true, in which case the artifact is
+            // deliberately marked in its versionName so it cannot be mistaken for a real release.
+            signingConfig = if (releaseKeystoreAvailable) {
                 signingConfigs.getByName("release")
             } else {
                 signingConfigs.getByName("debug")
+            }
+            if (!releaseKeystoreAvailable) {
+                versionNameSuffix = "-debugsigned"
             }
         }
 
@@ -100,9 +135,6 @@ android {
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
-    }
-    kotlinOptions {
-        jvmTarget = "17"
     }
     buildFeatures {
         compose = true
@@ -148,6 +180,15 @@ android {
         }
     }
 
+    lint {
+        // AGP 9 introduced LocalContextGetResourceValueCall. The project has ~150 pre-existing
+        // context.getString call sites in composables (mostly Toast/error text captured at
+        // composition). They are configuration-aware concerns, not build errors; keep them visible
+        // as warnings rather than failing the release gate. Migrating them to stringResource /
+        // LocalResources is a separate, mechanical follow-up.
+        warning += "LocalContextGetResourceValueCall"
+    }
+
     testOptions {
         unitTests {
             // Robolectric reads the merged resources/assets instead of a device's. Required by
@@ -167,6 +208,44 @@ android {
                     "--add-opens=java.base/jdk.internal.access=ALL-UNNAMED",
                     "--add-opens=java.desktop/java.awt.font=ALL-UNNAMED",
                     "--add-opens=jdk.compiler/com.sun.tools.javac.api=ALL-UNNAMED",
+                )
+            }
+        }
+    }
+}
+
+// Kotlin 2.3 removed the string-based kotlinOptions.jvmTarget; the compilerOptions DSL is the
+// supported form and keeps bytecode on Java 17.
+kotlin {
+    compilerOptions {
+        jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
+    }
+}
+
+// CQ-02: a release artifact without a real signing key is refused at execution time, not at
+// configuration time - debug builds and unit tests must keep working on a clean checkout that has
+// no keystore.properties. Adding the check as a `doFirst` on the packaging tasks covers both
+// assembleRelease and bundleRelease (including invoking packageRelease directly); the action
+// captures only constants so it stays configuration-cache compatible.
+if (!releaseKeystoreAvailable && !allowDebugSigning) {
+    val guardedReleaseTasks = setOf(
+        "assembleRelease",
+        "bundleRelease",
+        "packageRelease",
+        "packageReleaseBundle",
+        "signReleaseBundle"
+    )
+    tasks.configureEach {
+        if (name in guardedReleaseTasks) {
+            val guardedTaskName = name
+            doFirst {
+                throw GradleException(
+                    "Refusing to build '$guardedTaskName': keystore.properties is missing, so the " +
+                        "release artifact would be signed with the debug key and could never " +
+                        "replace an installed release. Create keystore.properties " +
+                        "(storeFile/storePassword/keyAlias/keyPassword) in the project root, or " +
+                        "pass -PallowDebugSigning=true to build a deliberately debug-signed " +
+                        "artifact (its versionName gets the -debugsigned suffix)."
                 )
             }
         }
@@ -245,4 +324,11 @@ dependencies {
     testImplementation(libs.androidx.room.testing)
     testImplementation(libs.robolectric)
     testImplementation(libs.androidx.test.core)
+    // TST-01: device tests under app/src/androidTest. The runner and AndroidJUnit4 come from
+    // androidx.test; ApplicationProvider (androidx.test:core) constructs the classes under test
+    // directly, so no Hilt test graph is needed.
+    androidTestImplementation(libs.junit)
+    androidTestImplementation(libs.androidx.test.runner)
+    androidTestImplementation(libs.androidx.test.ext.junit)
+    androidTestImplementation(libs.androidx.test.core)
 }

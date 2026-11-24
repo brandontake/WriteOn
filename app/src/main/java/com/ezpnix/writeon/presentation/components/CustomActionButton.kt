@@ -44,10 +44,12 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -60,12 +62,13 @@ import com.maxkeppeler.sheets.calendar.models.CalendarConfig
 import com.maxkeppeler.sheets.calendar.models.CalendarSelection
 import com.maxkeppeler.sheets.calendar.models.CalendarStyle
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
 import java.util.Date
-import java.util.Locale
 import java.util.Stack
 import androidx.compose.ui.res.stringResource
 import com.ezpnix.writeon.R
@@ -123,21 +126,45 @@ fun PreviewButton(
 }
 
 
+/** Clipboard transactions are capped around 1 MB; a larger note is saved to the file instead. */
+private const val MAX_CLIPBOARD_CHARS = 100_000
+
 @Composable
 fun TxtButton(currentText: String) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val defaultFileName = stringResource(R.string.default_txt_file_name)
+    // The file picker returns after an arbitrary delay, during which the note can keep changing.
+    // Capturing the text at click time keeps the export consistent with what the user saw.
+    var pendingText by remember { mutableStateOf("") }
 
     val saveToFileLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.CreateDocument("text/plain"),
         onResult = { uri ->
             if (uri != null) {
-                try {
-                    context.contentResolver.openOutputStream(uri)?.use { outputStream ->
-                        outputStream.write(currentText.toByteArray())
+                // `pendingText` is the click-time capture; the fallback covers a configuration
+                // change while the picker was open, where the remembered capture is gone but the
+                // composition already holds the restored note text.
+                val text = pendingText.ifEmpty { currentText }
+                // PERF-10: the SAF stream used to be opened and written on the main thread, which
+                // stalled the UI for a large note. The write is on IO; the toasts stay on Main.
+                scope.launch {
+                    val failure = withContext(Dispatchers.IO) {
+                        runCatching {
+                            context.contentResolver.openOutputStream(uri)?.use { outputStream ->
+                                outputStream.write(text.toByteArray())
+                            } ?: error("No output stream for $uri")
+                        }.exceptionOrNull()
                     }
-                    Toast.makeText(context, context.getString(R.string.msg_text_saved), Toast.LENGTH_SHORT).show()
-                } catch (e: Exception) {
-                    Toast.makeText(context, context.getString(R.string.msg_error_saving_file, e.message ?: ""), Toast.LENGTH_SHORT).show()
+                    if (failure == null) {
+                        Toast.makeText(context, context.getString(R.string.msg_text_saved), Toast.LENGTH_SHORT).show()
+                    } else {
+                        Toast.makeText(
+                            context,
+                            context.getString(R.string.msg_error_saving_file, failure.message ?: ""),
+                            Toast.LENGTH_SHORT
+                        ).show()
+                    }
                 }
             }
         }
@@ -147,17 +174,24 @@ fun TxtButton(currentText: String) {
         modifier = Modifier.size(56.dp),
         onClick = {
             // A6: the same path CopyButton uses - copyToClipboard() flags the clip
-            // EXTRA_IS_SENSITIVE on API 33+ so the whole note is not previewed on the clipboard
-            // surface or in the suggestion strip. The Compose setText() API has no such flag;
-            // API 26-32 has no EXTRA_IS_SENSITIVE at all and keeps the original behaviour
-            // inside copyToClipboard(). Note the file previously also imported the unflagged
-            // copyToClipboard from settings.widgets: an explicit import beats a same-file
-            // top-level declaration, so that import silently routed every call here through the
-            // unflagged copy - it was removed so all three call sites bind to the flagged one.
-            copyToClipboard(context, currentText)
+            // EXTRA_IS_SENSITIVE so the whole note is not previewed on the clipboard surface or
+            // in the suggestion strip. The Compose setText() API has no such flag.
+            // Note the file previously also imported the unflagged copyToClipboard from
+            // settings.widgets: an explicit import beats a same-file top-level declaration, so
+            // that import silently routed every call here through the unflagged copy - it was
+            // removed so all three call sites bind to the flagged one.
+            //
+            // A note past the binder transaction limit would throw out of the clipboard call, so
+            // the copy is skipped with an explanation and the file export still runs.
+            if (currentText.length <= MAX_CLIPBOARD_CHARS) {
+                copyToClipboard(context, currentText)
+            } else {
+                Toast.makeText(context, context.getString(R.string.msg_copy_too_large), Toast.LENGTH_SHORT).show()
+            }
             Toast.makeText(context, context.getString(R.string.msg_exporting), Toast.LENGTH_SHORT).show()
 
-            saveToFileLauncher.launch("rename.txt")
+            pendingText = currentText
+            saveToFileLauncher.launch(defaultFileName)
         }
     ) {
         Icon(Icons.Rounded.AddComment, contentDescription = context.getString(R.string.cd_copy_and_save))
@@ -172,9 +206,12 @@ fun CalButton() {
         LocalDate.now().minusDays(0),
     )
     val calendarState = rememberUseCaseState()
-    val context = LocalContext.current
-    val currentDate = LocalDate.now().format(DateTimeFormatter.ofPattern("MMMM d, yyyy"))
-    val dayOfWeek = SimpleDateFormat("EEEE", Locale.getDefault()).format(Date())
+    val configuration = LocalConfiguration.current
+    // The locale is part of the Configuration snapshot, so a locale change recomposes this button;
+    // Locale.getDefault() would keep the old month/day names until the next cold start.
+    val locale = configuration.locales[0]
+    val currentDate = LocalDate.now().format(DateTimeFormatter.ofPattern("MMMM d, yyyy", locale))
+    val dayOfWeek = SimpleDateFormat("EEEE", locale).format(Date())
 
     IconButton(
         modifier = Modifier.size(56.dp),
@@ -218,13 +255,11 @@ fun CopyButton(viewModel: EditViewModel, onClick: () -> Unit) {
 fun copyToClipboard(context: Context, text: String) {
     val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
     val clip = android.content.ClipData.newPlainText(context.getString(R.string.clipboard_label_copied_text), text)
-    // A note is user content; without this flag Android 13+ previews it in full on the clipboard
+    // A note is user content; without this flag Android previews it in full on the clipboard
     // surface and in the suggestion strip, so anyone glancing at the phone (or an on-screen
     // recorder) reads it. The clip also lingers there after the app is backgrounded.
-    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
-        clip.description.extras = android.os.PersistableBundle().apply {
-            putBoolean(android.content.ClipDescription.EXTRA_IS_SENSITIVE, true)
-        }
+    clip.description.extras = android.os.PersistableBundle().apply {
+        putBoolean(android.content.ClipDescription.EXTRA_IS_SENSITIVE, true)
     }
     clipboard.setPrimaryClip(clip)
 }

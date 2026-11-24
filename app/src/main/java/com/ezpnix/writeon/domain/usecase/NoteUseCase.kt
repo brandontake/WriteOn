@@ -15,6 +15,7 @@ import com.ezpnix.writeon.domain.repository.NoteRepository
 import com.ezpnix.writeon.core.security.DecryptFailureRegistry
 import com.ezpnix.writeon.core.security.DecryptionResult
 import com.ezpnix.writeon.core.security.EncryptionHelper
+import com.ezpnix.writeon.core.util.NoteBodyEditLock
 import com.ezpnix.writeon.core.util.RestoreCoordinator
 import com.ezpnix.writeon.core.widget.WidgetRefresher
 import com.ezpnix.writeon.data.local.database.LegacyCaptionBackfillFlag
@@ -28,16 +29,20 @@ import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.firstOrNull
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.shareIn
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -113,6 +118,105 @@ class NoteUseCase @Inject constructor(
      * the caption reset depends on reading the note marker before the note sweep re-marks it.
      */
     private val legacyBackfillAttempted = AtomicBoolean(false)
+
+    /**
+     * PERF-06: decrypted vault rows, keyed by id and validated against the row's metadata.
+     *
+     * `processNotes` runs for every Room emission, and a vault row costs two password-based
+     * decrypts (split, four base64 segments, two AES-GCM passes in the current envelope). Rows
+     * that did not change between emissions are served from here instead. The cache is only
+     * populated while a passphrase is loaded - storing the LOADING result of the locked state
+     * would keep the rows hidden after an unlock - and [refresh], [clearSensitiveState] and every
+     * row write drop the affected entries.
+     *
+     * REG-03: `updated_at` alone is not enough. `updateTags`, `updatePinned` and `updateTrashed`
+     * change one column without stamping it, so those values are part of the validation too - even
+     * a write that raced the invalidation below cannot make this cache serve a stale tag/pin/trash
+     * value to the list or to a card checkbox write.
+     *
+     * [NoteUseCase] is a singleton, so the map is process-wide without a companion; the lock is
+     * needed because the note and tag collectors both map on `Dispatchers.Default`.
+     */
+    private class CachedVaultRow(
+        val updatedAt: Long,
+        val pinned: Boolean,
+        val trashed: Boolean,
+        val tags: List<String>,
+        val note: Note,
+        val result: DecryptionResult,
+    ) {
+        fun matches(row: Note): Boolean =
+            updatedAt == row.updatedAt &&
+                pinned == row.pinned &&
+                trashed == row.trashed &&
+                tags == row.tags
+    }
+
+    private val vaultRowCache = object : LinkedHashMap<Int, CachedVaultRow>(64, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<Int, CachedVaultRow>?): Boolean =
+            size > VAULT_CACHE_MAX_ENTRIES
+    }
+    private val vaultCacheLock = Any()
+
+    /**
+     * UX-06: the widget signature of the last published list, compared off the main thread.
+     *
+     * Hashing every name and body twice per emission on the Main collector made a large library a
+     * frame cost. The signature is now computed inside [processNotes] (on `Dispatchers.Default`) and
+     * kept here so the next emission can be compared without touching a body on Main. Only hashes
+     * are stored; [clearSensitiveState] still drops it with the rest.
+     */
+    private var lastWidgetSignature: List<NoteWidgetSignature> = emptyList()
+    private val widgetSignatureLock = Any()
+
+    /**
+     * DAT-02: lets the attachment library/recycle bin re-evaluate the vault-visibility rule.
+     *
+     * `libraryNoteIds` filters vault rows by whether a passphrase is currently loaded, which is not
+     * observable from the notes table. Bumping this on [refresh] (unlock) and [clearSensitiveState]
+     * (lock/vault eviction) makes a long-lived collector recompute its filter when the session
+     * changes instead of keeping the previous list until some unrelated write.
+     */
+    private val vaultVisibilityRevision = MutableStateFlow(0)
+
+    /**
+     * PERF-06 test seam: how many vault rows were actually decrypted.
+     *
+     * A test can assert that a second emission of an unchanged row does not grow this, without
+     * timing a PBKDF2 or reaching into a private map. Diagnostic surface, not vault API.
+     */
+    private val vaultDecryptionCount = AtomicInteger()
+    internal val vaultRowDecryptions: Int get() = vaultDecryptionCount.get()
+
+    private fun decryptVaultRow(note: Note): Pair<Note, DecryptionResult> {
+        // No passphrase means every vault row reports LOADING; caching that answer would hide the
+        // rows even after the unlock reloaded them.
+        if (encryptionHelper.isPasswordEmpty()) return decryptNote(note)
+        synchronized(vaultCacheLock) {
+            vaultRowCache[note.id]
+                ?.takeIf { it.matches(note) }
+                ?.let { return it.note to it.result }
+            val decrypted = decryptNote(note)
+            vaultRowCache[note.id] = CachedVaultRow(
+                updatedAt = note.updatedAt,
+                pinned = note.pinned,
+                trashed = note.trashed,
+                tags = note.tags,
+                note = decrypted.first,
+                result = decrypted.second,
+            )
+            return decrypted
+        }
+    }
+
+    private fun invalidateVaultRow(id: Int) {
+        if (id == 0) return
+        synchronized(vaultCacheLock) { vaultRowCache.remove(id) }
+    }
+
+    private fun clearVaultRowCache() {
+        synchronized(vaultCacheLock) { vaultRowCache.clear() }
+    }
 
     /**
      * P-5: one table stream shared by the note list and the tag index.
@@ -280,6 +384,13 @@ class NoteUseCase @Inject constructor(
      * while the vault was locked come back without a database write.
      */
     fun refresh() {
+        // PERF-06: the passphrase may be a different one than the cache was filled with (the
+        // unlock path retries a wrong candidate, removes it, then sets the verified one), so no
+        // cached decrypt can be trusted across a refresh.
+        clearVaultRowCache()
+        // DAT-02: a collector holding the attachment library/bins re-filters vault rows with the
+        // passphrase that just (may have) changed.
+        vaultVisibilityRevision.value++
         observeNotes()
         observeTags()
     }
@@ -389,6 +500,14 @@ class NoteUseCase @Inject constructor(
         // Advance first, before anything else: a decrypt already running on Dispatchers.Default
         // checks this value when it finishes, and it must already see the new generation.
         loadEpoch.advance()
+        // PERF-06: decrypted vault bodies are plaintext and must go with the rest.
+        clearVaultRowCache()
+        // UX-06: the signature is only hashes, but it describes the cleared list - keeping it
+        // would make the emission after an unlock compare against pre-lock content.
+        resetWidgetSignature()
+        // DAT-02: the vault passphrase is cleared next to this call, so an open attachment library
+        // has to hide the vault rows it was showing.
+        vaultVisibilityRevision.value++
         observeKeysJob?.cancel()
         observeTagsJob?.cancel()
         observeKeysJob = null
@@ -416,7 +535,7 @@ class NoteUseCase @Inject constructor(
         // A genuinely empty library is loaded, not loading: the home screen uses LOADING below to
         // decide whether to show its first-frame spinner, and this state used to survive forever.
         if (sourceNotes.isEmpty()) {
-            return ProcessedNotes(emptyList(), DecryptionResult.EMPTY, 0)
+            return ProcessedNotes(emptyList(), DecryptionResult.EMPTY, 0, emptyList())
         }
         var result = DecryptionResult.LOADING
         val hasUnencryptedNotes = sourceNotes.any { !it.encrypted }
@@ -427,7 +546,7 @@ class NoteUseCase @Inject constructor(
         var sawPlainNote = false
         val processed = sourceNotes.mapNotNull { note ->
             if (note.encrypted) {
-                val (decryptedNote, status) = decryptNote(note)
+                val (decryptedNote, status) = decryptVaultRow(note)
                 result = status
                 if (status == DecryptionResult.SUCCESS) decryptedNote else {
                     hiddenVault++
@@ -449,7 +568,9 @@ class NoteUseCase @Inject constructor(
         ) {
             result = DecryptionResult.SUCCESS
         }
-        return ProcessedNotes(processed, result, hiddenVault)
+        // UX-06: hashing the title/body of every note is CPU-bound; it happens here, inside the
+        // caller's Dispatchers.Default block, instead of twice per emission on the Main collector.
+        return ProcessedNotes(processed, result, hiddenVault, WidgetRefreshSignature.of(processed))
     }
 
     /** Publishes one [processNotes] result; always on the collector's thread (Main). */
@@ -466,17 +587,34 @@ class NoteUseCase @Inject constructor(
                 // Captured before the hop: a lock that lands while the block below runs advances
                 // the generation, and the assignment must then not happen.
                 val epoch = loadEpoch.current()
-                // Decrypting every note touches the Keystore, so it must stay off the main thread.
-                val processed = withContext(Dispatchers.Default) { processNotes(sourceNotes) }
+                // UX-06: the previous signature is only a reference read; the hashing of the new
+                // list happens inside processNotes on Default, and the comparison is done in the
+                // same background block so neither touches a body on the Main thread.
+                val previousSignature = widgetSignatureSnapshot()
+                val (processed, signatureChanged) = withContext(Dispatchers.Default) {
+                    val result = processNotes(sourceNotes)
+                    result to (result.widgetSignature != previousSignature)
+                }
                 if (!loadEpoch.isCurrent(epoch)) return@collectLatest
-                val previousIds = notes.map { it.id }
+                storeWidgetSignature(processed.widgetSignature)
                 applyProcessed(processed)
                 // Refreshing on an unchanged list made the widget recompose for nothing.
-                if (previousIds != processed.notes.map { it.id }) {
+                if (signatureChanged) {
                     widgetRefresher.refreshAll()
                 }
             }
         }
+    }
+
+    private fun widgetSignatureSnapshot(): List<NoteWidgetSignature> =
+        synchronized(widgetSignatureLock) { lastWidgetSignature }
+
+    private fun storeWidgetSignature(signature: List<NoteWidgetSignature>) {
+        synchronized(widgetSignatureLock) { lastWidgetSignature = signature }
+    }
+
+    private fun resetWidgetSignature() {
+        synchronized(widgetSignatureLock) { lastWidgetSignature = emptyList() }
     }
 
     private fun observeTags() {
@@ -550,6 +688,13 @@ class NoteUseCase @Inject constructor(
      * The `encrypted = 1` column is untouched by `updateVaultFields`, and the query only matches such
      * rows, so a plain note can never receive vault ciphertext.
      *
+     * DAT-01: the write-back is a compare-and-swap against the exact bytes read here. The sweep can
+     * run for tens of seconds on the first unlock of an old library, and the user may open one of
+     * these notes and save it meanwhile. Without the predicates this sweep then wrote its older
+     * ciphertext back over the save - and since the editor had already recorded that text as saved,
+     * exiting did not write it again. A changed row matches zero rows and is counted as skipped
+     * (like a row that vanished), not as upgraded.
+     *
      * @return how many rows were rewritten; 0 when the vault is locked or everything is current.
      */
     suspend fun upgradeLegacyVaultRows(): Int = withContext(Dispatchers.IO) {
@@ -558,6 +703,7 @@ class NoteUseCase @Inject constructor(
         // are exactly the sealed columns this method has to inspect.
         val vaultRows = noteRepository.getAllNotes().first().filter { it.encrypted }
         var upgraded = 0
+        var skipped = 0
         vaultRows.forEach { row ->
             val nameNeedsMigration = encryptionHelper.needsEnvelopeMigration(row.name)
             val bodyNeedsMigration = encryptionHelper.needsEnvelopeMigration(row.description)
@@ -570,7 +716,25 @@ class NoteUseCase @Inject constructor(
             // Nothing is written unless every field that had to authenticate did.
             if (sealedName == null || sealedBody == null) return@forEach
 
-            if (noteRepository.updateVaultFields(row.id, sealedName, sealedBody) > 0) upgraded++
+            val changed = noteRepository.updateVaultFields(
+                id = row.id,
+                previousName = row.name,
+                previousDescription = row.description,
+                name = sealedName,
+                description = sealedBody,
+            )
+            // 0 means the row was saved or deleted between the read and this write. The save owns
+            // the row now, so counting it as upgraded would hide both the skip and a bug in the
+            // predicates.
+            if (changed > 0) {
+                invalidateVaultRow(row.id)
+                upgraded++
+            } else {
+                skipped++
+            }
+        }
+        if (skipped > 0) {
+            Log.i(TAG, "Skipped $skipped vault row(s) that changed while the envelope sweep ran")
         }
         upgraded
     }
@@ -590,19 +754,82 @@ class NoteUseCase @Inject constructor(
         return encryptionHelper.encrypt(plain)
     }
 
+    /**
+     * PERF-06 test seam: counts actual vault decryptions, not cache hits.
+     *
+     * Kept at the bottom of [decryptNote]'s encrypted branch so a test can prove that an unchanged
+     * row served from [vaultRowCache] never reaches the cipher.
+     *
+     * REG-08: name and description are independent columns, and a row is only readable when both
+     * are. The old code returned the description's status and defaulted a failed name to `""`,
+     * which made a row with an unreadable title indistinguishable from a note whose title is
+     * empty - and a card toggle then wrote that empty title back over the only ciphertext.
+     */
     private fun decryptNote(note: Note): Pair<Note, DecryptionResult> {
+        // Plain rows arrive already decrypted from `EncryptedNoteDao`; running their text through
+        // the vault parser would only manufacture failures.
+        if (!note.encrypted) return Pair(note, DecryptionResult.SUCCESS)
+
         val (decryptedName, nameResult) = encryptionHelper.decrypt(note.name)
         val (decryptedDescription, descriptionResult) = encryptionHelper.decrypt(note.description)
-        return if (note.encrypted) {
-            Pair(
-                note.copy(
-                    name = decryptedName ?: "",
-                    description = decryptedDescription ?: "",
-                ), descriptionResult
-            )
-        } else {
-            Pair(note, DecryptionResult.SUCCESS)
+        vaultDecryptionCount.incrementAndGet()
+        val status = combineVaultColumnResults(
+            nameCiphertext = note.name,
+            namePlaintext = decryptedName,
+            nameResult = nameResult,
+            descriptionCiphertext = note.description,
+            descriptionPlaintext = decryptedDescription,
+            descriptionResult = descriptionResult,
+        )
+        return Pair(
+            note.copy(
+                name = decryptedName ?: "",
+                description = decryptedDescription ?: "",
+            ),
+            status,
+        )
+    }
+
+    /**
+     * REG-08: the row-level verdict for two independently decrypted columns.
+     *
+     * `BLANK_DATA` with a blank stored value is a successfully-empty column - most importantly an
+     * empty title or body the editor itself can write - not a failure. Any non-blank ciphertext
+     * that does not authenticate fails the whole row, so the list hides it, [getEditableNote]
+     * returns null and every full-row write is refused. `LOADING` wins over the failure kinds
+     * because a locked vault is not a corrupt row; `BAD_PASSWORD` wins over `INVALID_DATA` because
+     * it is the one the unlock UI can act on.
+     */
+    private fun combineVaultColumnResults(
+        nameCiphertext: String,
+        namePlaintext: String?,
+        nameResult: DecryptionResult,
+        descriptionCiphertext: String,
+        descriptionPlaintext: String?,
+        descriptionResult: DecryptionResult,
+    ): DecryptionResult {
+        val failures = listOfNotNull(
+            vaultColumnFailure(nameCiphertext, namePlaintext, nameResult),
+            vaultColumnFailure(descriptionCiphertext, descriptionPlaintext, descriptionResult),
+        )
+        return when {
+            failures.isEmpty() -> DecryptionResult.SUCCESS
+            failures.any { it == DecryptionResult.LOADING } -> DecryptionResult.LOADING
+            failures.any { it == DecryptionResult.BAD_PASSWORD } -> DecryptionResult.BAD_PASSWORD
+            else -> DecryptionResult.INVALID_DATA
         }
+    }
+
+    /** Null when the column was read successfully (including a genuinely empty one). */
+    private fun vaultColumnFailure(
+        ciphertext: String,
+        plaintext: String?,
+        result: DecryptionResult,
+    ): DecryptionResult? = when {
+        result == DecryptionResult.SUCCESS ->
+            if (plaintext != null) null else DecryptionResult.INVALID_DATA
+        result == DecryptionResult.BLANK_DATA && ciphertext.isBlank() -> null
+        else -> result
     }
 
     fun updateNotes(newNotes: List<Note>) {
@@ -649,6 +876,7 @@ class NoteUseCase @Inject constructor(
     suspend fun restoreNote(note: Note) {
         if (refusesUndecryptable(note.id, "restore")) return
         noteRepository.updateNote(note)
+        invalidateVaultRow(note.id)
     }
 
     suspend fun addNote(note: Note) {
@@ -663,6 +891,7 @@ class NoteUseCase @Inject constructor(
         } else {
             noteRepository.updateNote(noteToSave)
         }
+        invalidateVaultRow(noteToSave.id)
     }
 
     /**
@@ -671,8 +900,11 @@ class NoteUseCase @Inject constructor(
      * [addNote] plus three separate attachment writes could stop halfway (a cancelled coroutine, a
      * database error) and leave the body pointing at rows that were never written, or rows deleted
      * for a body that never landed. The transaction makes "saved" mean all of it or none of it.
-     * File deletion stays outside, in the caller: a leftover file is recoverable, a row whose file
-     * was already deleted is not.
+     *
+     * DAT-02: [trashAttachmentIds] are rows the new body no longer references. They move to the
+     * attachment recycle bin in this same transaction instead of being deleted, because the save's
+     * undo restores the note row alone - the rows (and files) it pruned have to still be there for
+     * that restored body to resolve. Only permanent deletion removes an attachment row or file.
      *
      * @return the id Room assigned when the note was new, or the note's own id.
      */
@@ -680,23 +912,31 @@ class NoteUseCase @Inject constructor(
         note: Note,
         upsertAttachments: List<Attachment>,
         reviveAttachmentIds: List<String> = emptyList(),
-        deleteAttachmentIds: List<String> = emptyList(),
+        trashAttachmentIds: List<String> = emptyList(),
     ): Int {
         // No row write for an undecryptable note - the placeholder the editor is showing must
         // never become the stored body. The editor refuses even earlier (EditViewModel.saveNote)
         // so the user is told why nothing happened; this is the last line of defence.
         if (refusesUndecryptable(note.id, "save")) return note.id
+        // PERF-11: sealing a vault note is split/base64/AES-GCM over the whole body. The caller's
+        // save scope is Main.immediate (wrapped in NonCancellable), so do the CPU work on Default
+        // and let only the Room call and the returned id stay on the caller's thread.
         val noteToSave = if (note.encrypted) {
-            encryptNote(note.copy(tags = note.tags.map { it.trim().lowercase() }.distinct()))
+            withContext(Dispatchers.Default) {
+                encryptNote(note.copy(tags = note.tags.map { it.trim().lowercase() }.distinct()))
+            }
         } else {
             note.copy(tags = note.tags.map { it.trim().lowercase() }.distinct())
         }
-        return noteRepository.saveNoteWithAttachments(
+        val savedId = noteRepository.saveNoteWithAttachments(
             note = noteToSave,
             upsertAttachments = upsertAttachments,
             reviveAttachmentIds = reviveAttachmentIds,
-            deleteAttachmentIds = deleteAttachmentIds,
+            trashAttachmentIds = trashAttachmentIds,
         )
+        invalidateVaultRow(note.id)
+        invalidateVaultRow(savedId)
+        return savedId
     }
 
     suspend fun batchUpdateNotes(notes: List<Note>) {
@@ -708,63 +948,99 @@ class NoteUseCase @Inject constructor(
             if (note.encrypted) encryptNote(note.copy(tags = note.tags.map { it.trim().lowercase() }.distinct())) else note
         }
         noteRepository.batchUpdateNotes(notesToSave)
+        notesToSave.forEach { invalidateVaultRow(it.id) }
     }
 
     /** Replaces one note's tag column without rewriting its body. */
     suspend fun setTags(noteId: Int, tags: List<String>) {
         if (noteId == 0) return
         val normalized = tags.map { it.trim().lowercase() }.distinct().filter { it.isNotBlank() }
-        withContext(Dispatchers.IO) { noteRepository.updateTags(noteId, normalized) }
+        withContext(Dispatchers.IO) {
+            // R4-04: the card/widget read-modify-write writes the whole row. Serialising this
+            // single-column write against it is what keeps a concurrent tap from restoring the
+            // tag list the card captured before the edit.
+            NoteBodyEditLock.mutex.withLock { noteRepository.updateTags(noteId, normalized) }
+        }
+        // REG-03: the SQL leaves `updated_at` alone, so the row cache would keep serving the old
+        // tag list - and a card checkbox write would put it back.
+        invalidateVaultRow(noteId)
     }
 
     /** Moves one note in or out of the recycle bin without rewriting its body. */
     suspend fun setTrashed(noteId: Int, trashed: Boolean) {
         if (noteId == 0) return
-        withContext(Dispatchers.IO) { noteRepository.updateTrashed(noteId, trashed) }
+        withContext(Dispatchers.IO) {
+            NoteBodyEditLock.mutex.withLock { noteRepository.updateTrashed(noteId, trashed) }
+        }
+        // REG-03: trashed is part of the cached Note as well and this statement does not stamp it.
+        invalidateVaultRow(noteId)
     }
 
     suspend fun addTagToNote(noteId: Int, tag: String) {
         val trimmedTag = tag.trim().lowercase()
         if (trimmedTag.isNotBlank()) {
-            val note = noteRepository.getNoteById(noteId).firstOrNull() ?: return
-            if (trimmedTag !in note.tags.map { it.lowercase() }) {
-                // Tags are a separate column, so this does not rewrite the body the editor owns.
-                noteRepository.updateTags(noteId, note.tags + trimmedTag)
+            withContext(Dispatchers.IO) {
+                // R4-04: read and write share the row lock. A card write between them would
+                // otherwise restore the tag list this read predates.
+                NoteBodyEditLock.mutex.withLock {
+                    val note = noteRepository.getNoteById(noteId).firstOrNull() ?: return@withLock
+                    if (trimmedTag !in note.tags.map { it.lowercase() }) {
+                        // Tags are a separate column, so this does not rewrite the body the editor owns.
+                        noteRepository.updateTags(noteId, note.tags + trimmedTag)
+                        invalidateVaultRow(noteId)
+                    }
+                }
             }
         }
     }
 
-    suspend fun deleteTagFromNotes(tag: String) {
-        val trimmedTag = tag.trim().lowercase()
-        val allNotes = noteRepository.getAllNotes().first()
-        val updatedNotes = allNotes.mapNotNull { note ->
-            if (trimmedTag in note.tags.map { it.lowercase() }) {
-                note to note.tags.filterNot { it.lowercase() == trimmedTag }
-            } else {
-                null
+    suspend fun deleteTagFromNotes(tag: String) = deleteTagsFromNotes(listOf(tag))
+
+    /**
+     * Removes every tag in [tags] from every note, then rebuilds the tag index.
+     *
+     * Only the tag column is written: note bodies and the notes themselves are untouched, and a
+     * note's other tags stay in place. Tag matching is trimmed and case-insensitive.
+     */
+    suspend fun deleteTagsFromNotes(tags: Collection<String>) {
+        val wanted = tags.mapNotNull { it.trim().lowercase().takeIf { value -> value.isNotBlank() } }.toSet()
+        if (wanted.isEmpty()) return
+
+        // R4-04: the read and the single-column writes run under the row lock. A card write that
+        // slipped between them would put the tag list this read predates back on the row.
+        val computedTags = withContext(Dispatchers.IO) {
+            NoteBodyEditLock.mutex.withLock {
+                val allNotes = noteRepository.getAllNotes().first()
+                val updatedNotes = allNotes.mapNotNull { note ->
+                    val newTags = note.tags.filterNot { it.trim().lowercase() in wanted }
+                    if (newTags.size != note.tags.size) note to newTags else null
+                }
+
+                // One column per note: deleting tags from the tag manager must not overwrite a note
+                // body from the stale snapshot this function just read.
+                updatedNotes.forEach { (note, newTags) ->
+                    noteRepository.updateTags(note.id, newTags)
+                    // REG-03: same reason as setTags - the row's cached Note still holds the old tags.
+                    invalidateVaultRow(note.id)
+                }
+
+                // Recompute from what the database actually holds rather than from the pre-update
+                // list, so the tag list is right whether or not there was anything to update.
+                noteRepository.getAllNotes().first().flatMap { it.tags }
+                    .map { it.trim().lowercase() }
+                    .distinct()
+                    .sorted()
+                    .filter { it.isNotBlank() }
             }
         }
-
-        // One column per note: deleting a tag from the tag manager must not overwrite a note body
-        // from the stale snapshot this function just read.
-        updatedNotes.forEach { (note, newTags) ->
-            noteRepository.updateTags(note.id, newTags)
-        }
-
-        // Recompute from what the database actually holds rather than from the pre-update list, so
-        // the tag list is right whether or not there was anything to update.
-        val freshNotes = noteRepository.getAllNotes().first()
-        val computedTags = freshNotes.flatMap { it.tags }
-            .map { it.trim().lowercase() }
-            .distinct()
-            .sorted()
-            .filter { it.isNotBlank() }
         updateTags(computedTags)
     }
 
     fun pinNote(note: Note) {
         coroutineScope.launch(NonCancellable + Dispatchers.IO) {
-            addNote(note)
+            // R4-04: flag-only. Rewriting the whole row from this snapshot would revert a body the
+            // editor saved after the card was drawn; updatePinStatus also takes the shared lock.
+            updatePinStatus(note.id, note.pinned)
         }
     }
 
@@ -775,8 +1051,41 @@ class NoteUseCase @Inject constructor(
         }
     }
 
-    fun getNoteById(id: Int): Flow<Note> {
+    suspend fun getNoteById(id: Int): Flow<Note> {
         return noteRepository.getNoteById(id)
+    }
+
+    /**
+     * UX-09: the row as it reads right now, for a writer that has to start from the stored text.
+     *
+     * A card's checkbox toggle used to rebuild the note from the body captured at composition
+     * time, so two quick taps both started from the same text and the last write won. Reading the
+     * database here (instead of the last emitted list) makes the second tap see the first one.
+     * Vault rows are handed through as ciphertext by the DAO, so they are decrypted here - through
+     * the PERF-06 cache - exactly like the list does.
+     *
+     * @return null when the row is gone, trashed, or a vault row this process cannot open.
+     */
+    suspend fun getEditableNote(id: Int): Note? {
+        if (id == 0) return null
+        val stored = withContext(Dispatchers.IO) {
+            noteRepository.getNoteById(id).firstOrNull()
+        } ?: return null
+        if (stored.trashed) return null
+        if (!stored.encrypted) return stored
+        return withContext(Dispatchers.Default) {
+            val (decrypted, status) = decryptVaultRow(stored)
+            decrypted
+                .takeIf { status == DecryptionResult.SUCCESS }
+                // REG-03: the row cache validates tags/pin/trash now, but copying them from the
+                // fresh row read above is the final guarantee that a metadata write which did not
+                // move `updatedAt` can never be undone by this card's full-row write.
+                ?.copy(
+                    pinned = stored.pinned,
+                    trashed = stored.trashed,
+                    tags = stored.tags,
+                )
+        }
     }
 
     suspend fun updatePinStatus(noteId: Int, pinned: Boolean) {
@@ -785,18 +1094,29 @@ class NoteUseCase @Inject constructor(
         // that followed overwrote the text field in the middle of a sentence (P0-2). A missing id
         // (a brand-new note still at 0) simply updates nothing, which is also what the old
         // firstOrNull() early return did - without the NoSuchElementException risk.
-        noteRepository.updatePinned(noteId, pinned)
+        //
+        // R4-04: taking the shared row lock serialises this single-column statement with the
+        // card/widget read-modify-write, so neither can restore the other's stale pin value.
+        withContext(Dispatchers.IO) {
+            NoteBodyEditLock.mutex.withLock { noteRepository.updatePinned(noteId, pinned) }
+        }
+        // REG-03: the flag is part of the cached row's metadata validation too; drop the entry so
+        // the next emission cannot show the previous pin state.
+        invalidateVaultRow(noteId)
     }
 
     fun moveToTrash(note: Note) {
         coroutineScope.launch(NonCancellable + Dispatchers.IO) {
-            noteRepository.updateTrashed(note.id, true)
+            NoteBodyEditLock.mutex.withLock { noteRepository.updateTrashed(note.id, true) }
+            // REG-03: the write is asynchronous; invalidate only after it has landed.
+            invalidateVaultRow(note.id)
         }
     }
 
     fun restoreFromTrash(note: Note) {
         coroutineScope.launch(NonCancellable + Dispatchers.IO) {
-            noteRepository.updateTrashed(note.id, false)
+            NoteBodyEditLock.mutex.withLock { noteRepository.updateTrashed(note.id, false) }
+            invalidateVaultRow(note.id)
         }
     }
 
@@ -818,6 +1138,9 @@ class NoteUseCase @Inject constructor(
      */
     private suspend fun performDelete(note: Note) {
         val attachments = noteRepository.deleteNoteWithAttachments(note)
+        // REG-03: a deleted row must not be served from the vault cache (an id can be reused by a
+        // restored database, and the stale plaintext would describe a note that no longer exists).
+        invalidateVaultRow(note.id)
 
         try {
             if (attachments.isNotEmpty()) {
@@ -840,12 +1163,28 @@ class NoteUseCase @Inject constructor(
 
     fun getTrashedNotesFlow(): Flow<List<Note>> = noteRepository.getTrashedNotes()
 
+    /**
+     * PERF-07: the drawer badge's count, without handing Home the whole decrypted recycle bin.
+     *
+     * The production repository answers this with `SELECT COUNT(*)`, so an unchanged bin costs no
+     * decryption at all. The interface default (used by test fakes) derives it from the trashed
+     * flow, which keeps one definition of "trashed".
+     *
+     * TrashScreen keeps collecting [getTrashedNotesFlow] itself; Home no longer does.
+     */
+    fun getTrashedNoteCountFlow(): Flow<Int> =
+        noteRepository.getTrashedNoteCount().distinctUntilChanged()
+
     // ---------------------------------------------------------------------------------------------
     // 2.0.2 attachment management: the library lists every live attachment of a type across the
     // notes, and deleting one moves the row to the recycle bin instead of removing it on the spot.
     // ---------------------------------------------------------------------------------------------
 
-    /** Live attachments of [type], newest first, minus the notes the manager must keep private. */
+    /**
+     * Live attachments of [type], newest first, minus the notes the manager must keep private.
+     *
+     * DAT-02: Vault notes join this list while their passphrase is loaded (see [libraryNoteIds]).
+     */
     fun getLibraryAttachmentsFlow(type: String): Flow<List<Attachment>> =
         combine(
             noteRepository.observeAttachmentsByType(type),
@@ -862,17 +1201,42 @@ class NoteUseCase @Inject constructor(
     /**
      * Ids of the notes whose attachments a management screen may show.
      *
-     * Vault rows are sealed with the user's password, so this process can neither rewrite their
-     * bodies nor safely show their files; they stay out of the library and its trash. The library
-     * additionally skips notes that already sit in the recycle bin - their attachments travel with
-     * the note.
+     * DAT-02: while the vault is locked, its rows are sealed with the user's password and stay out
+     * of the library and its recycle bin. Once a passphrase is loaded they are **included**: an
+     * attachment a save pruned from a vault note is otherwise unreachable - the only remaining
+     * cleanup would be permanently deleting the whole note. Nothing is decrypted for this list: the
+     * `attachments` row (path, caption) belongs to the Keystore layer, not to the vault password.
+     *
+     * The passphrase has no observable flow, so [vaultVisibilityRevision] makes a collector
+     * re-evaluate this rule on unlock and on lock/eviction. The library additionally skips notes
+     * that already sit in the recycle bin - their attachments travel with the note.
      */
-    private fun libraryNoteIds(includeTrashedNotes: Boolean): Flow<Set<Int>> =
-        noteRepository.getAllNotes().map { notes ->
-            notes.filter { !it.encrypted && (includeTrashedNotes || !it.trashed) }
+    private fun libraryNoteIds(includeTrashedNotes: Boolean): Flow<Set<Int>> {
+        // R2-04/DAT-02: `getAllNotes()` is `WHERE trashed = 0`, so the old "include trashed" flag
+        // could never actually see a trashed row. The recycle bin's attachment list therefore kept
+        // hiding vault attachments even while the passphrase was loaded. Merge the two live flows
+        // instead of asking the DAO for a third query.
+        val notes: Flow<List<Note>> = if (includeTrashedNotes) {
+            combine(noteRepository.getAllNotes(), noteRepository.getTrashedNotes()) { live, trashed ->
+                live + trashed
+            }
+        } else {
+            noteRepository.getAllNotes()
+        }
+        return combine(
+            vaultVisibilityRevision,
+            notes
+        ) { _, rows ->
+            // Read at emission time, and again on every revision bump.
+            val includeVault = !encryptionHelper.isPasswordEmpty()
+            rows.filter { note ->
+                (includeVault || !note.encrypted) &&
+                    (includeTrashedNotes || !note.trashed)
+            }
                 .map { it.id }
                 .toSet()
         }
+    }
 
     /**
      * Moves one attachment to the recycle bin.
@@ -880,26 +1244,73 @@ class NoteUseCase @Inject constructor(
      * The row is stamped and, for a plain note, its line leaves the body in the same pass, so the
      * note keeps rendering cleanly even if it is never opened again. The editor passes
      * `rewriteBody = false` because it already edited its own copy of the text and saves that body
-     * itself. A vault note is left untouched: only the editor's save path may rewrite its body.
+     * itself. A vault note is only rewritten on that same path, and only once the passphrase is
+     * loaded; see [trashVaultAttachment].
      */
     suspend fun trashAttachment(id: String, rewriteBody: Boolean = true) {
         withContext(Dispatchers.IO) {
-            val attachment = noteRepository.getAttachmentById(id) ?: return@withContext
-            if (attachment.trashedAt != null) return@withContext
-            val note = noteRepository.getNoteById(attachment.noteId).firstOrNull()
-            if (note?.encrypted == true) return@withContext
-            noteRepository.setAttachmentTrashed(listOf(id), System.currentTimeMillis())
-            if (rewriteBody && note != null &&
-                !refusesUndecryptable(note.id, "body rewrite for a trashed attachment")
-            ) {
-                val updated = AttachmentSyntax.removeId(note.description, id)
-                if (updated != note.description) {
-                    // Body-only update: the note may have gained new text since this row was read,
-                    // and a full-row write would put the old text back.
-                    noteRepository.updatePlainDescription(note.id, updated)
-                }
+            // R4-04: the plain path reads the body and writes it back (single-column, but still a
+            // read-modify-write), and the vault path rewrites the whole row. Both run under the
+            // shared row lock so a card checkbox tap cannot interleave and restore the removed
+            // attachment line (or lose the card's toggle).
+            NoteBodyEditLock.mutex.withLock { trashAttachmentLocked(id, rewriteBody) }
+        }
+    }
+
+    private suspend fun trashAttachmentLocked(id: String, rewriteBody: Boolean) {
+        val attachment = noteRepository.getAttachmentById(id) ?: return
+        if (attachment.trashedAt != null) return
+        val note = noteRepository.getNoteById(attachment.noteId).firstOrNull()
+        if (note != null && note.encrypted) {
+            // DAT-02: vault attachments are visible in the library only while the passphrase
+            // is loaded. The editor passes `rewriteBody = false` because its save plan owns the
+            // body; the library/card path rewrites the decrypted body here, like a plain note.
+            if (!rewriteBody) return
+            trashVaultAttachment(attachment, note)
+            return
+        }
+        if (rewriteBody && note != null &&
+            !refusesUndecryptable(note.id, "body rewrite for a trashed attachment")
+        ) {
+            val updated = AttachmentSyntax.removeId(note.description, id)
+            if (updated != note.description) {
+                // R6-04: the row and the body move in one transaction; a failure cannot leave the
+                // attachment in the bin while the note still links to it.
+                noteRepository.setAttachmentTrashedAndUpdatePlainDescription(
+                    id,
+                    System.currentTimeMillis(),
+                    note.id,
+                    updated,
+                )
+                return
             }
         }
+        noteRepository.setAttachmentTrashed(listOf(id), System.currentTimeMillis())
+    }
+
+    /**
+     * DAT-02: moves one attachment of a vault note to the recycle bin and drops its body line.
+     *
+     * The line can only be removed from the plaintext form, so both columns must open first (same
+     * verdict as the list, see REG-08); a row that fails is left alone rather than rewritten from
+     * placeholders. The re-seal is a full-row write because a vault body has no single-column
+     * update - the same shape [restoreVaultAttachment] uses.
+     */
+    private suspend fun trashVaultAttachment(attachment: Attachment, stored: Note) {
+        val (decrypted, status) = decryptNote(stored)
+        if (status != DecryptionResult.SUCCESS) return
+        val updated = AttachmentSyntax.removeId(decrypted.description, attachment.id)
+        if (updated == decrypted.description) {
+            noteRepository.setAttachmentTrashed(listOf(attachment.id), System.currentTimeMillis())
+            return
+        }
+        // Encrypt before the transaction: if the session is gone, nothing has been trashed yet.
+        noteRepository.setAttachmentTrashedAndUpdateNote(
+            attachment.id,
+            System.currentTimeMillis(),
+            encryptNote(decrypted.copy(description = updated)),
+        )
+        invalidateVaultRow(stored.id)
     }
 
     /** Used by the editor's save path to revive a row whose line came back through undo. */
@@ -913,23 +1324,72 @@ class NoteUseCase @Inject constructor(
      *
      * The line is appended at the end of the body: the position it originally occupied was never
      * stored, and appending is the one placement that can never split an existing line.
+     *
+     * DAT-02: a vault attachment is restorable too, but only while its passphrase is loaded. Its
+     * body is ciphertext to this layer, so the line is added to the decrypted body and the row is
+     * sealed again; a row whose title or body does not authenticate (REG-08) is left untouched.
      */
     suspend fun restoreAttachment(id: String) {
         withContext(Dispatchers.IO) {
-            val attachment = noteRepository.getAttachmentById(id) ?: return@withContext
-            if (attachment.trashedAt == null) return@withContext
-            val note = noteRepository.getNoteById(attachment.noteId).firstOrNull()
-            if (note?.encrypted == true) return@withContext
-            noteRepository.setAttachmentTrashed(listOf(id), null)
-            if (note == null) return@withContext
-            if (id in AttachmentSyntax.idsIn(note.description)) return@withContext
-            // The description read above is the placeholder for an undecryptable row: appending
-            // the line would store that placeholder plus one attachment line as the new body.
-            if (refusesUndecryptable(note.id, "body rewrite for a restored attachment")) return@withContext
-            val line = AttachmentSyntax.lineFor(attachment.id, attachment.type, attachment.caption)
-            val separator = if (note.description.isEmpty() || note.description.endsWith("\n")) "" else "\n"
-            noteRepository.updatePlainDescription(note.id, note.description + separator + line)
+            // R4-04: same read-modify-write shape as [trashAttachment]; the shared lock keeps a
+            // concurrent card edit from being overwritten by the body this path read.
+            NoteBodyEditLock.mutex.withLock { restoreAttachmentLocked(id) }
         }
+    }
+
+    private suspend fun restoreAttachmentLocked(id: String) {
+        val attachment = noteRepository.getAttachmentById(id) ?: return
+        if (attachment.trashedAt == null) return
+        val note = noteRepository.getNoteById(attachment.noteId).firstOrNull()
+        if (note != null && note.encrypted) {
+            restoreVaultAttachment(attachment, note)
+            return
+        }
+        if (note == null) {
+            noteRepository.setAttachmentTrashed(listOf(id), null)
+            return
+        }
+        if (id in AttachmentSyntax.idsIn(note.description)) {
+            noteRepository.setAttachmentTrashed(listOf(id), null)
+            return
+        }
+        // The description read above is the placeholder for an undecryptable row: appending
+        // the line would store that placeholder plus one attachment line as the new body.
+        if (refusesUndecryptable(note.id, "body rewrite for a restored attachment")) return
+        val line = AttachmentSyntax.lineFor(attachment.id, attachment.type, attachment.caption)
+        val separator = if (note.description.isEmpty() || note.description.endsWith("\n")) "" else "\n"
+        noteRepository.setAttachmentTrashedAndUpdatePlainDescription(
+            id,
+            null,
+            note.id,
+            note.description + separator + line,
+        )
+    }
+
+    /**
+     * DAT-02: un-trash and re-link one attachment of a vault note.
+     *
+     * Runs only while a passphrase is loaded (a locked vault reports LOADING). REG-08's combined
+     * verdict is reused, so a row with an unreadable title is never rewritten: re-sealing it would
+     * replace that title's ciphertext with the empty placeholder.
+     */
+    private suspend fun restoreVaultAttachment(attachment: Attachment, stored: Note) {
+        val (decrypted, status) = decryptNote(stored)
+        if (status != DecryptionResult.SUCCESS) return
+        if (attachment.id in AttachmentSyntax.idsIn(decrypted.description)) {
+            noteRepository.setAttachmentTrashed(listOf(attachment.id), null)
+            return
+        }
+        val line = AttachmentSyntax.lineFor(attachment.id, attachment.type, attachment.caption)
+        val separator = if (decrypted.description.isEmpty() || decrypted.description.endsWith("\n")) "" else "\n"
+        // Encrypt before the transaction: a missing session leaves the row trashed, not half-written.
+        noteRepository.setAttachmentTrashedAndUpdateNote(
+            attachment.id,
+            null,
+            encryptNote(decrypted.copy(description = decrypted.description + separator + line)),
+        )
+        // Several columns changed (both ciphertexts), and `updateNote` does not stamp updatedAt.
+        invalidateVaultRow(stored.id)
     }
 
     /**
@@ -959,6 +1419,9 @@ class NoteUseCase @Inject constructor(
 
     private companion object {
         const val TAG = "NoteUseCase"
+
+        /** PERF-06: keeps decrypted vault bodies bounded even for a large vault library. */
+        const val VAULT_CACHE_MAX_ENTRIES = 512
     }
 }
 
@@ -973,7 +1436,46 @@ private data class ProcessedNotes(
     val notes: List<Note>,
     val decryptionResult: DecryptionResult,
     val hiddenVaultCount: Int,
+    /** UX-06: computed with the decrypt pass, on the same background dispatcher. */
+    val widgetSignature: List<NoteWidgetSignature>,
 )
+
+/**
+ * UX-06: the part of a note's state that a home-screen widget renders.
+ *
+ * The widget refresh used to fire only when the note **ids** changed, so editing a title or a
+ * checkbox left the launcher showing the old text. [updatedAt] covers the editor (every commit
+ * stamps it), while [contentHash] covers the writes that rebuild a note without touching the
+ * timestamp - the home card's inline title edit and its checkbox write both copy the row this way.
+ * Pinning and trashing are included because they decide which notes a widget lists.
+ *
+ * Sorted by id: a database emission may reorder rows without changing what the widget would show,
+ * and a reorder alone must not cause a redraw. Plain data, no Android - the diff is unit-testable
+ * without a database or Glance.
+ */
+internal data class NoteWidgetSignature(
+    val id: Int,
+    val updatedAt: Long,
+    val pinned: Boolean,
+    val trashed: Boolean,
+    val contentHash: Int,
+)
+
+internal object WidgetRefreshSignature {
+
+    fun of(notes: List<Note>): List<NoteWidgetSignature> =
+        notes.map { note ->
+            NoteWidgetSignature(
+                id = note.id,
+                updatedAt = note.updatedAt,
+                pinned = note.pinned,
+                trashed = note.trashed,
+                // The exact text is not kept: a pure hash keeps the signature small while still
+                // detecting a body edit that did not advance updatedAt.
+                contentHash = 31 * note.name.hashCode() + note.description.hashCode(),
+            )
+        }.sortedBy { it.id }
+}
 
 /**
  * Generation counter that keeps a slow load from republishing what a lock just evicted (V-5).

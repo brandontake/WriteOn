@@ -16,7 +16,10 @@ data class Settings(
     // Users who explicitly turned it off keep their stored value.
     var liveAttachmentPreview: Boolean = true,
     var screenProtection: Boolean = false,
-    var encryptBackup: Boolean = false,
+    // SEC-03: new installs write encrypted database backups by default. A user who already turned
+    // the switch off keeps the stored `false`; only a library with vault notes overrides it (see
+    // BackupEncryptionPolicy), because a plaintext archive would expose decrypted vault media.
+    var encryptBackup: Boolean = true,
     var sortDescending: Boolean = true,
     var sortBy: Int = 0, // 0: CreatedAt, 1: UpdatedAt, 2: Title
     var vaultSettingEnabled: Boolean = false,
@@ -28,6 +31,5 @@ data class Settings(
     val isBiometricEnabled: Boolean = false,
     val autoBackupEnabled: Boolean = false,
     val fontSize: Float = 16f,
-    val columnsCount: Int = 2,
-    val hideVisibilityButtonWhenKeyboard: Boolean = true
+    val columnsCount: Int = 2
 )

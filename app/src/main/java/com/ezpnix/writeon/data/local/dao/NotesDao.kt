@@ -9,6 +9,7 @@ import androidx.room.Transaction
 import androidx.room.TypeConverters
 import androidx.room.Update
 import com.ezpnix.writeon.core.database.Converters
+import com.ezpnix.writeon.data.local.database.NoteDatabase
 import com.ezpnix.writeon.domain.model.Note
 import kotlinx.coroutines.flow.Flow
 
@@ -42,8 +43,15 @@ interface NoteDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun addNoteReturningId(note: Note): Long
 
+    /**
+     * CQ-08: reports the affected row count.
+     *
+     * Room supports an `Int` return for `@Update`, and the one-transaction save needs it: a note
+     * removed between the caller's read and the transaction matches zero rows, and the attachment
+     * upserts that follow must not run for a note that no longer exists.
+     */
     @Update
-    suspend fun updateNote(note: Note)
+    suspend fun updateNote(note: Note): Int
 
     /**
      * Applies a batch of updates in one transaction.
@@ -161,4 +169,56 @@ interface NoteDao {
 
     @Query("SELECT * FROM `notes-table` WHERE trashed = 1")
     fun getTrashedNotes(): Flow<List<Note>>
+
+    /**
+     * PERF-07: the recycle-bin badge count without decrypting a single body.
+     *
+     * The drawer only needs "how many", while [getTrashedNotes] maps every row through the
+     * Keystore and hands the full list to a screen the user may never open. This query is answered
+     * by SQLite and emits the same invalidation stream, so it tracks the bin exactly.
+     */
+    @Query("SELECT COUNT(*) FROM `notes-table` WHERE trashed = 1")
+    fun getTrashedNoteCount(): Flow<Int>
+}
+
+/**
+ * DAT-01: compare-and-swap write for the vault re-seal sweep, on the live connection.
+ *
+ * [NoteDao.updateVaultFields] only checks `id` and `encrypted = 1`, so a sweep that was still
+ * working through an old snapshot could write its pre-save ciphertext back over a row the user had
+ * just saved from the editor - and because the editor's `lastSavedContent` then matched the screen,
+ * the edit looked saved while the database held the previous version. This statement carries the
+ * same `previous*` predicates [NoteDao.updateLegacyPlaintextFields] uses: a row that changed since
+ * the sweep read it matches zero rows and is left alone.
+ *
+ * It is a plain statement rather than another `NoteDao` method because `EncryptedNoteDao` wraps the
+ * generated DAO and would have to grow a pass-through override. The repository issues it inside a
+ * Room transaction, so Room's invalidation notification still runs when the transaction ends and
+ * the open note list sees the resealed row instead of waiting for an unrelated write.
+ *
+ * @return the number of rows changed (0 when the row is gone, is no longer a vault row, or no
+ *   longer holds the bytes the sweep read).
+ */
+internal fun NoteDatabase.compareAndSwapVaultFields(
+    id: Int,
+    previousName: String,
+    previousDescription: String,
+    name: String,
+    description: String,
+): Int {
+    val statement = openHelper.writableDatabase.compileStatement(
+        "UPDATE `notes-table` SET `note-name` = ?, `note-description` = ? " +
+            "WHERE id = ? AND encrypted = 1 " +
+            "AND `note-name` = ? AND `note-description` = ?"
+    )
+    return try {
+        statement.bindString(1, name)
+        statement.bindString(2, description)
+        statement.bindLong(3, id.toLong())
+        statement.bindString(4, previousName)
+        statement.bindString(5, previousDescription)
+        statement.executeUpdateDelete()
+    } finally {
+        statement.close()
+    }
 }

@@ -42,12 +42,27 @@ internal object WebDavHttp {
     const val READ_TIMEOUT_SECONDS = 60L
 
     /**
-     * Hard ceiling for a whole call, including body transfer.
+     * Hard ceiling for a *metadata* call (HEAD/PROPFIND/MOVE/DELETE), including a small body.
      *
-     * Longer than the socket timeouts on purpose: a large archive over a slow uplink must still be
-     * allowed to finish, while a connection that trickles forever is cut off.
+     * Transfers do not use this value: a note database plus every recording can be hundreds of
+     * megabytes, and 200 MB on a 1.5 Mbps uplink already takes ~18 minutes - the old shared
+     * 300-second cap cut every attempt of such a backup (SYN-7). [clientForTransfer] scales the
+     * ceiling from the archive size instead.
      */
     const val CALL_TIMEOUT_SECONDS = 300L
+
+    /**
+     * SYN-7: how long a transfer is allowed to take when its size is known.
+     *
+     * The budget is [TRANSFER_BASE_SECONDS] plus the time the bytes need at
+     * [MIN_TRANSFER_BYTES_PER_SECOND], a deliberately pessimistic floor (~256 kbps). A call that
+     * is merely slow therefore finishes, while a server that stops making progress is still
+     * caught by the read/write timeouts.
+     */
+    const val TRANSFER_BASE_SECONDS = 120L
+
+    /** SYN-7: the pessimistic throughput a transfer budget is computed from (~256 kbps). */
+    const val MIN_TRANSFER_BYTES_PER_SECOND = 32L * 1024L
 
     /**
      * Refuse to download an archive larger than this.
@@ -67,6 +82,26 @@ internal object WebDavHttp {
     /** The process-wide client, built once. */
     fun client(): OkHttpClient = sharedClient ?: synchronized(this) {
         sharedClient ?: buildClient().also { sharedClient = it }
+    }
+
+    /**
+     * SYN-7: a client whose whole-call ceiling is scaled to the transfer.
+     *
+     * [expectedBytes] null means "the size is not known before the response headers arrive" (the
+     * restore download): the call then has no whole-call ceiling at all, because any fixed value
+     * either truncates a legitimate large archive or is meaningless. Connect/read/write timeouts
+     * stay in force, so a stalled socket is still detected. The clone shares the connection pool
+     * and dispatcher of [client].
+     */
+    fun clientForTransfer(expectedBytes: Long?): OkHttpClient {
+        val base = client()
+        return if (expectedBytes == null) {
+            base.newBuilder().callTimeout(0, TimeUnit.MILLISECONDS).build()
+        } else {
+            base.newBuilder()
+                .callTimeout(WebDavTransferTimeouts.secondsFor(expectedBytes), TimeUnit.SECONDS)
+                .build()
+        }
     }
 
     private fun buildClient(): OkHttpClient = OkHttpClient.Builder()
@@ -123,4 +158,23 @@ internal object WebDavHttp {
     /** Thrown when a response body is bigger than [MAX_ARCHIVE_BYTES]. */
     class ArchiveTooLargeException(limit: Long) :
         IOException("Remote archive is larger than the $limit byte limit")
+}
+
+/**
+ * SYN-7: the arithmetic behind the transfer budget, kept pure so it can be tested without a
+ * server or a socket.
+ *
+ * The old fixed 300-second call timeout was shorter than the transfer time of any archive with
+ * real media on a mobile uplink. Scaling from a pessimistic minimum rate keeps the ceiling useful
+ * (a stuck transfer still ends) without rejecting legitimate slow ones.
+ */
+internal object WebDavTransferTimeouts {
+
+    /** Whole-call ceiling in seconds for a body of [bytes]: base + bytes at the minimum rate. */
+    fun secondsFor(bytes: Long): Long {
+        val length = bytes.coerceAtLeast(0L)
+        val rate = WebDavHttp.MIN_TRANSFER_BYTES_PER_SECOND
+        val transferSeconds = (length + rate - 1) / rate
+        return WebDavHttp.TRANSFER_BASE_SECONDS + transferSeconds
+    }
 }

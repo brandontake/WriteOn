@@ -6,7 +6,6 @@
     <string name="build_type">ビルドの種類</string>
     <string name="latest_release">最新リリースを確認</string>
     <string name="source_code">オープンソースコードを開く</string>
-    <string name="app_list">バージョン一覧</string>
     <string name="android">端末情報</string>
     <string name="android_description">詳細</string>
     <string name="about">アプリについて</string>
@@ -37,6 +36,7 @@
     <string name="share">共有</string>
     <string name="share_text">テキストを共有</string>
     <string name="save_as_image">画像として保存</string>
+    <string name="image_export_too_long">このメモは長すぎて 1 枚の画像に書き出せません。短い範囲でお試しください。</string>
     <string name="msg_image_saved">画像を %1$s に保存しました</string>
     <string name="msg_image_save_failed">画像を保存できませんでした</string>
     <string name="msg_image_save_failed_reason">画像を保存できませんでした: %1$s</string>
@@ -113,6 +113,9 @@
     <string name="auto_backup_description">ノートの暗号化コピーを毎日アプリのプライベートストレージに保存し、最新 7 件かつ合計 200 MB まで保持します（超過分は古い順に削除し、最低 3 件は常に保持）。設定 → クラウド からこの端末でのみ復元できます。暗号化鍵は端末から出ません</string>
     <string name="backup_dropdown">バックアップ</string>
     <string name="backup_description">すべてのノートを zip ファイルに保存、または zip ファイルから復元します。なお、この操作は既存のノートをすべて置き換え、ゴミ箱も空になります。</string>
+    <!-- SEC-03: 保管庫ノートがある場合、ローカルデータベースのバックアップは常に暗号化されます。 -->
+    <string name="backup_vault_requires_encryption">このライブラリには保管庫ノートが含まれています。これらのノートとメディアを含むデータベースのバックアップは暗号化が必須のため、パスワードが必要です。</string>
+    <string name="backup_vault_requires_password">このバックアップは暗号化が必要です。パスワードを設定して再度エクスポートしてください。</string>
     <string name="restore_description">zip ファイルからノートを復元します</string>
 
     <!-- File Import -->
@@ -126,7 +129,6 @@
     <string name="markdown">Markdown 形式</string>
     <string name="markdown_description">オフにすると分割プレビューも非表示になります</string>
     <string name="description_markdown">サポート • 画像</string>
-    <string name="description_behavior">Markdown • LaTeX • ライブプレビュー • リスト表示</string>
     <string name="images_support">画像のサポート</string>
     <string name="description_widgets">ウィジェット • Markdown</string>
 
@@ -174,6 +176,9 @@
     <string name="feature">こんにちは</string>
     <string name="support">(✦) WriteOn: シンプルなメモ帳</string>
     <string name="support_description">ぜひ応援してください</string>
+    <string name="support_youtube">YouTube</string>
+    <string name="support_github">GitHub</string>
+    <string name="support_kofi">KoFi</string>
     <string name="issue">不具合の報告</string>
     <string name="issue_description">開発者に機能を提案する</string>
     <string name="guide">ヘルプ &amp; 回答</string>
@@ -181,14 +186,13 @@
     <string name="invalid_input">入力が正しくありません</string>
     <string name="save_and_exit">保存して終了</string>
 
-    <!-- Behavior -->
-    <string name="Behavior">動作</string>
     <string name="show_only_title">ホーム画面にタイトルのみ表示</string>
     <string name="show_only_title_description">内容を隠して表示スペースを広げます</string>
 
     <!-- Terms of Service -->
     <string name="terms_of_service">利用規約</string>
     <string name="agree">同意</string>
+    <string name="terms_accept_failed">同意を保存できませんでした。もう一度お試しください。</string>
     <string name="terms_acceptance_title">1. 規約への同意</string>
     <string name="terms_acceptance_body">WriteOn へようこそ。本アプリケーションを使用することで、本利用規約に同意したものとみなされます。よくお読みください。</string>
     <string name="terms_license_title">2. ライセンスについて</string>
@@ -249,7 +253,6 @@
     <string name="action_start_test">テストを開始</string>
 
     <string name="activate_search">検索を開始</string>
-    <string name="app_list_latest">最新リリース</string>
     <string name="app_subtitle">シンプルなメモ帳</string>
     <string name="backup_successful">バックアップに成功しました</string>
     <string name="calculator_result">結果</string>
@@ -313,10 +316,16 @@
     <string name="cloud_backup_completed">WebDAV バックアップが完了しました</string>
     <string name="cloud_backup_failed">WebDAV バックアップに失敗しました</string>
     <string name="cloud_backup_no_validator">サーバーが検証情報（ETag/Last-Modified）を提供しないため、データ損失を防ぐため上書きを拒否しました</string>
+    <string name="webdav_remote_unverified">サーバー上のバックアップを確認できなかったため、データ損失を防ぐため上書きを拒否しました。WebDAV サーバーを確認して再試行するか、この端末のノートを優先する場合は「リモートを上書き」を使用してください。</string>
+    <string name="webdav_invalid_url">WebDAV アドレスが有効な URL ではありません。バックアップファイルの完全なアドレスを入力してください。</string>
+    <string name="webdav_url_points_to_folder">WebDAV アドレスがバックアップファイルではなくフォルダーを指しています。アドレスの末尾にファイル名（例: notes.zip）を追加してください。</string>
+    <string name="webdav_conflict_no_space">サーバーの空き容量が不足しています。競合用コピーが残りの容量を使用しています。容量を確保するか、サーバー上の古い競合用コピーを削除してから再試行してください。</string>
+    <string name="webdav_conflict_limit_note">最新の %1$d 件の競合用コピーのみを表示しています。それ以前のコピーは WebDAV サーバー上に残っています。</string>
     <string name="cloud_restore_manifest_freshness">%1$s のバックアップ・%2$d 件のノート</string>
     <string name="cloud_restore_manifest_unknown">年代不明：このアーカイブにはバックアップ時刻が記録されていません</string>
     <string name="cloud_restore_manifest_loading">バックアップ情報を読み取っています…</string>
     <string name="cloud_conflict_kept">リモートのバックアップが変更されていたため、この端末のコピーを競合用コピーとして保存しました。</string>
+    <string name="webdav2_publish_unverified">サーバーはアップロードを受け付けましたが、公開されたファイルがこの端末のバックアップであることを確認できませんでした。バックアップ成功としては記録せず、この端末のアーカイブを競合用コピーとして保存しました。</string>
     <string name="cloud_webdav_restore_failed">WebDAV 復元に失敗しました</string>
     <string name="cloud_credentials_unreadable">保存された WebDAV 認証情報を読み取れませんでした。設定で再入力してください。</string>
     <string name="cloud_restore_newer_version">このバックアップは新しいバージョンの WriteOn で作成されました。アプリを更新してから再度復元してください。</string>
@@ -388,6 +397,7 @@
     <string name="flashcard_wrong_answer">不正解！ 正しい答え: %1$s</string>
     <string name="flashcard_wrong_answers">❌ 不正解数: %1$d</string>
     <string name="flashcards">単語カード</string>
+    <string name="msg_flashcard_deleted">単語カードを削除しました</string>
     <string name="fmt_heading">見出し</string>
     <string name="fmt_link">リンクを挿入</string>
     <string name="fmt_divider">区切り線</string>
@@ -428,11 +438,13 @@
     <string name="issue_item">項目 %1$d</string>
     <string name="msg_error_saving_file">ファイルの保存エラー: %1$s</string>
     <string name="msg_error_with_message">エラー: %1$s</string>
+    <string name="msg_copy_too_large">ノートが大きすぎてコピーできません。代わりにファイルへ保存します。</string>
     <string name="msg_exporting">エクスポート中…</string>
 
     <string name="msg_link_copied">リンクをクリップボードにコピーしました</string>
     <string name="msg_no_browser_found">ブラウザが見つかりません</string>
     <string name="msg_note_saved">ノートを保存しました</string>
+    <string name="msg_note_save_failed">ノートを保存できませんでした</string>
     <string name="msg_note_moved_to_trash">ノートをごみ箱に移動しました</string>
     <string name="msg_opening_browser">既定のブラウザを開いています…</string>
     <string name="msg_text_saved">テキストを保存しました</string>
@@ -440,12 +452,14 @@
     <string name="nav_homepage">ホーム</string>
     <string name="nav_pinned_notes">ピン留めしたノート</string>
     <string name="nav_tags">タグ</string>
+    <string name="nav_untagged">タグなし</string>
     <string name="nav_trash">ゴミ箱</string>
     <string name="note_filter_support">(^-^) ご支援いただけると嬉しいです！ https://github.com/Brandontake/Writeon</string>
     <string name="notif_channel_pinned_notes">ピン留めしたノート</string>
     <string name="notif_channel_pinned_notes_description">ピン留めしたノートを常時表示します</string>
     <string name="notif_no_content">内容がありません</string>
     <string name="notif_pin_denied">権限がありません。通知にピン留めできません。</string>
+    <string name="notif_pin_save_first">通知に固定する前にノートを保存してください。</string>
     <string name="notif_pinned_to">通知にピン留めしました</string>
     <string name="notif_unpinned">通知へのピン留めを解除しました</string>
     <string name="notif_untitled_note">無題のノート</string>
@@ -467,6 +481,8 @@
     <string name="quick_export">クイックエクスポート</string>
     <string name="save_as_txt">TXT として保存</string>
     <string name="scratchpad_about">このセクションでは、1 つの入力欄に自由に文字を入力できます。注意: アプリを再起動したりアンインストールしたりすると、データは削除されます。</string>
+    <string name="scratchpad_placeholder">ここに入力...</string>
+    <string name="default_txt_file_name">ノート.txt</string>
     <string name="select_an_item">項目を選択</string>
     <string name="settings_locked">ロック中</string>
     <string name="settings_locked_message">このセクションは開発者によりロックされています。ご了承ください。</string>
@@ -476,9 +492,12 @@
     <string name="tag_added_count">タグ「%1$s」を %2$d 件のノートに追加しました</string>
     <string name="tag_already_exists">タグ「%1$s」は選択したすべてのノートに既にあります</string>
     <string name="tag_delete_confirm_title">タグを削除しますか？</string>
+    <string name="tag_delete_confirm_title_many">タグを削除しますか？</string>
 <string name="tag_delete_confirm_message">タグ「%1$s」をすべてのノートから外します。ノート自体は削除されません。</string>
+<string name="tag_delete_confirm_message_many">選択したタグをすべてのノートから外します。ノート自体は削除されません。</string>
 <string name="tag_delete">タグを削除</string>
     <string name="tag_deleted">タグ「%1$s」を削除しました</string>
+    <string name="tags_deleted">選択したタグを削除しました</string>
     <string name="tag_name_empty">タグ名を空にすることはできません</string>
     <string name="tag_name_hint">タグ名</string>
     <string name="tag_none_removed">削除されたタグはありません</string>
@@ -491,8 +510,6 @@
     <string name="tag_select_at_least_one">削除するタグを 1 つ以上選択してください</string>
     <string name="tag_still_in_use">タグ「%1$s」は一部のノートで使用中です</string>
     <string name="tagged_note">タグ付きノート</string>
-    <string name="tools_autohide_desc">ノートの編集中にキーボードが表示されているとき、ボタンを非表示にします。</string>
-    <string name="tools_autohide_title">表示ボタンを自動で隠す</string>
     <string name="tools_example_text">例: こんにちは！</string>
     <string name="tools_saved_exclaim">保存しました</string>
     <string name="tools_text_not_updated">テキストは更新されませんでした</string>
@@ -524,6 +541,8 @@
     <string name="live_attachment_preview">添付のライブプレビュー（実験的）</string>
     <string name="live_attachment_preview_description">編集中に画像と録音をブロックとして表示します。ノート自体は通常の Markdown のままです。</string>
     <string name="attachment_actions">添付の操作</string>
+    <string name="cd_attachment_actions">添付の操作を表示</string>
+    <string name="cd_attachment_image">画像の添付ファイル</string>
     <string name="attachment_edit_source">Markdown を編集</string>
     <string name="attachment_edit_source_title">添付の Markdown</string>
     <string name="attachment_delete">添付を削除</string>
@@ -554,7 +573,11 @@
     <string name="cloud_conflict_take_over_confirm_message">サーバー上のバックアップがこの端末のノートで置き換えられます。この操作は取り消せません。この端末に必要なノートがある場合のみ実行してください。</string>
     <string name="cloud_conflict_dismiss">OK</string>
     <string name="msg_image_export_blank">書き出した画像が空だったため、保存していません。もう一度お試しいただくか、テキストで書き出してください。</string>
-    <string name="msg_image_saved_pages">%1$d ページを保存しました。1 枚目: %2$s</string>
+    <string name="msg_image_insert_failed">画像を挿入できませんでした: %1$s</string>
+    <string name="image_insert_too_large">選択した画像が大きすぎます</string>
+    <string name="image_insert_unreadable">選択したファイルを読み取れませんでした</string>
+    <string name="image_insert_storage_failed">空き容量不足、またはファイルを書き込めませんでした</string>
+    <string name="image_insert_encrypt_failed">画像を暗号化できませんでした</string>
 
     <!-- ホームのノートカード: カード全体がひとつのタップ対象なので、タップと長押しの動作は
          ここでしか読み上げに伝えられません。 -->
@@ -574,4 +597,31 @@
     <string name="cloud_webdav_redirect_refused">サーバーがリクエストをリダイレクトしました。WebDAV バックアップはリダイレクトを追跡しません。設定のアドレスを確認してください。</string>
     <string name="cloud_restore_too_large">サーバー上のファイルが大きすぎるため、WriteOn のバックアップではありません。何も復元されていません。</string>
     <string name="cloud_restore_no_space">バックアップをダウンロードする空き容量が不足しています。何も復元されていません。</string>
+
+    <!-- ロック画面のアクセシビリティ (UX-03): パターングリッドは Canvas 描画なので、読み上げが
+         ドットを説明・操作できるのはこれらのラベルだけです。PIN のドットも同じ方法で進捗を
+         読み上げます。 -->
+    <string name="lock_a11y_pattern_hint">パターンロックです。ドットを順番に選び、「ロック解除」を押してください。</string>
+    <string name="lock_a11y_pattern_dot">ドット %1$d</string>
+    <string name="lock_a11y_pattern_selected">選択済み</string>
+    <string name="lock_a11y_pattern_not_selected">未選択</string>
+    <string name="lock_a11y_pattern_progress">%2$d 個中 %1$d 個のドットを選択</string>
+    <string name="lock_a11y_pattern_select_dot">ドットを選択</string>
+    <string name="lock_a11y_pin_dots">PIN 入力</string>
+    <string name="lock_a11y_pin_progress">%2$d 桁中 %1$d 桁を入力済み</string>
+
+    <!-- UX-04: 端末の画面ロックが削除されると、生体認証だけのアプリロックは解除できなくなります。 -->
+    <string name="lock_biometric_requires_credential">先にアプリの PIN またはパターンを設定してください。生体認証のロック解除には、端末の画面ロックが削除された場合に備えて代替の認証情報が必要です。</string>
+    <string name="lock_biometric_only_locked_out">端末の画面ロックが削除されたため、生体認証ではロック解除できなくなりました。アプリロックを解除しました。プライバシー設定で PIN またはパターンを設定してください。</string>
+
+    <!-- 第 2 ラウンドの修正: 読み上げによるパターン確定 (REG-12)、保管庫のロック状態と
+         スロットル (REG-06/SEC-13)、生体認証と認証情報の不変条件 (REG-07)。 -->
+    <string name="lock2_confirm_pattern">パターンを確定</string>
+    <string name="lock2_vault_throttled">試行回数が多すぎます。%1$d 秒後にもう一度お試しください。</string>
+    <string name="lock2_vault_locked_title">保管庫はロックされています</string>
+    <string name="lock2_vault_locked_message">このノートを開いている間に保管庫がロックされました。ホーム画面で保管庫のロックを解除してから、ノートを開き直してください。</string>
+    <string name="lock2_back_to_notes">ノート一覧に戻る</string>
+    <string name="lock2_biometric_retry">生体認証は一時的に利用できません。しばらくしてからもう一度お試しください。</string>
+    <string name="lock2_pin_disabled_biometric_cleared">PIN を無効にしました。PIN またはパターンが必要なため、生体認証によるロック解除もオフにしました。</string>
+    <string name="lock2_pattern_disabled_biometric_cleared">パターンを無効にしました。PIN またはパターンが必要なため、生体認証によるロック解除もオフにしました。</string>
 </resources>

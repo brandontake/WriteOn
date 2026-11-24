@@ -1,7 +1,6 @@
 package com.ezpnix.writeon.presentation.lock
 
 import android.content.Context
-import android.os.Build
 import androidx.biometric.BiometricManager
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
@@ -34,16 +33,12 @@ fun rememberLockManager(): LockManager {
 /**
  * Authenticator set the app is allowed to ask for.
  *
- * Mixing biometrics with the device credential is only supported from API 30 on, so older
- * platforms fall back to strong biometrics alone (see [authenticateWithBiometrics]).
+ * Mixing biometrics with the device credential is supported from API 30 on, and this app now
+ * requires API 33, so both are always offered.
  */
 internal fun lockAuthenticators(): Int =
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-        BiometricManager.Authenticators.BIOMETRIC_STRONG or
-            BiometricManager.Authenticators.DEVICE_CREDENTIAL
-    } else {
-        BiometricManager.Authenticators.BIOMETRIC_STRONG
-    }
+    BiometricManager.Authenticators.BIOMETRIC_STRONG or
+        BiometricManager.Authenticators.DEVICE_CREDENTIAL
 
 internal fun isBiometricAvailable(context: Context): Boolean =
     BiometricManager.from(context).canAuthenticate(lockAuthenticators()) ==

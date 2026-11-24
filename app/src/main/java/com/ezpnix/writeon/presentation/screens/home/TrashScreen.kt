@@ -32,6 +32,7 @@ import androidx.compose.material.icons.filled.DeleteForever
 import androidx.compose.material.icons.filled.RestoreFromTrash
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.DoneAll
+import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.RemoveDone
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.ui.res.stringResource
@@ -46,6 +47,12 @@ import com.ezpnix.writeon.presentation.screens.home.widgets.filterNotes
 import com.ezpnix.writeon.presentation.screens.settings.settings.shapeManager
 import com.ezpnix.writeon.presentation.theme.appCornerShape
 import java.io.File
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
+
+/** PERF-04: same settle window as the home feed's search, for the same reason. */
+private const val TRASH_SEARCH_DEBOUNCE_MS = 180L
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -77,10 +84,20 @@ fun TrashScreen(
         trashedAttachments.filter { it.type == Attachment.TYPE_AUDIO }
     }
     val longPressedAttachment = trashedAttachments.firstOrNull { it.id == longPressedAttachmentId }
-    // Search narrows the list, so every selection decision is made against what the user can see.
-    // Comparing sizes against the unfiltered list - as this screen used to - reported "all selected"
-    // as soon as one note was hidden by the query, and flipped the toggle to "deselect" instead.
-    val visibleNotes = remember(trashedNotes, searchQuery) { filterNotes(trashedNotes, searchQuery) }
+    // PERF-04: the narrowing used to run in `remember`, i.e. on every query change and every Room
+    // emission, on the composition thread. It now waits out the typing burst and scans on Default;
+    // `visibleNotes` keeps the previous result published while the new scan runs. A blank query is
+    // handled immediately - there is nothing to scan. (An explicit state + LaunchedEffect rather
+    // than produceState: this form is unambiguous to both the compiler and lint.)
+    var visibleNotes by remember { mutableStateOf(trashedNotes) }
+    LaunchedEffect(trashedNotes, searchQuery) {
+        if (searchQuery.isBlank()) {
+            visibleNotes = trashedNotes
+            return@LaunchedEffect
+        }
+        delay(TRASH_SEARCH_DEBOUNCE_MS)
+        visibleNotes = withContext(Dispatchers.Default) { filterNotes(trashedNotes, searchQuery) }
+    }
     val allSelected = visibleNotes.isNotEmpty() && visibleNotes.all { note ->
         selectedNotes.any { it.id == note.id }
     }
@@ -520,13 +537,19 @@ private fun TrashAttachmentsGrid(
             // readable bytes at the vault's decrypted copy. Null while that copy is being made
             // (or when it cannot be made) is exactly the placeholder case.
             val path = AttachmentRegistry.playablePath(attachment.id)
+            // UX-10: the tile used to have onClick = {} - a tap did nothing and the restore/delete
+            // sheet was only behind a guessed long press. A tap now opens that same sheet, and the
+            // gesture labels tell TalkBack what both actions do.
+            val actionsLabel = stringResource(R.string.cd_attachment_actions)
             Box(
                 modifier = Modifier
                     .aspectRatio(1f)
                     .clip(RoundedCornerShape((cornerRadius / 2).coerceAtLeast(8).dp))
                     .combinedClickable(
-                        onClick = {},
-                        onLongClick = { onLongPress(attachment.id) }
+                        onClick = { onLongPress(attachment.id) },
+                        onLongClick = { onLongPress(attachment.id) },
+                        onClickLabel = actionsLabel,
+                        onLongClickLabel = actionsLabel
                     )
             ) {
                 if (path == null) {
@@ -534,7 +557,7 @@ private fun TrashAttachmentsGrid(
                 } else {
                     AsyncImage(
                         model = path,
-                        contentDescription = null,
+                        contentDescription = stringResource(R.string.cd_attachment_image),
                         contentScale = ContentScale.Crop,
                         modifier = Modifier.fillMaxSize()
                     )
@@ -573,26 +596,43 @@ private fun TrashAttachmentsList(
             // readable bytes at the vault's decrypted copy. Null while that copy is being made
             // (or when it cannot be made) is exactly the placeholder case.
             val path = AttachmentRegistry.playablePath(attachment.id)
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .combinedClickable(
-                        onClick = {},
-                        onLongClick = { onLongPress(attachment.id) }
-                    )
+            // UX-10: the card owns the playback controls, so the restore/delete sheet gets an
+            // explicit overflow target next to it instead of competing with the play button. The
+            // rest of the row is still tappable and labelled.
+            val actionsLabel = stringResource(R.string.cd_attachment_actions)
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.fillMaxWidth()
             ) {
-                if (path == null) {
-                    MissingAttachment(
-                        radius = cornerRadius,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(vertical = 4.dp)
-                    )
-                } else {
-                    AudioPlayerCard(
-                        audioUri = path,
-                        radius = cornerRadius,
-                        caption = attachment.caption.takeIf { it.isNotBlank() }
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .combinedClickable(
+                            onClick = { onLongPress(attachment.id) },
+                            onLongClick = { onLongPress(attachment.id) },
+                            onClickLabel = actionsLabel,
+                            onLongClickLabel = actionsLabel
+                        )
+                ) {
+                    if (path == null) {
+                        MissingAttachment(
+                            radius = cornerRadius,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 4.dp)
+                        )
+                    } else {
+                        AudioPlayerCard(
+                            audioUri = path,
+                            radius = cornerRadius,
+                            caption = attachment.caption.takeIf { it.isNotBlank() }
+                        )
+                    }
+                }
+                IconButton(onClick = { onLongPress(attachment.id) }) {
+                    Icon(
+                        imageVector = Icons.Rounded.MoreVert,
+                        contentDescription = actionsLabel
                     )
                 }
             }

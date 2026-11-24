@@ -23,7 +23,7 @@ A clean, intuitive note-taking app with *Material You* design — open source an
 
 WriteOn is an offline-first notepad for Android. Notes, tags and attachments live in a local Room
 database — there is no account, no sync service and no analytics. The interface follows Material 3
-and picks up the wallpaper colours on Android 12+, with optional AMOLED and "extreme AMOLED" themes
+and picks up the wallpaper colours, with optional AMOLED and "extreme AMOLED" themes
 for people who want a true black background.
 
 It is a small app by design: two APK variants of a few megabytes, no runtime permission prompts, no
@@ -54,9 +54,18 @@ foreground services, and only the permissions the features actually need.
 **Extras**
 - Adaptive Material 3 & HyperOS home-screen widgets (free-form resizing with 24dp rounded corners, vertically centred note text, quick add + note preview), built-in calendar, calculator, scratchpad and dynamic-themed flashcards
 - Share text or images into the app from any other app's share sheet; each share opens a new note, and shared images are copied in as attachments
-- Save a note as an image — a note taller than one bitmap is split into numbered pages instead of being cut off — export to TXT/Markdown, and local backup / restore (with an optional password). WebDAV uploads check the server's copy before replacing it, so a backup written by another device is never silently overwritten: the newer upload is kept beside it under its own name, and the cloud screen shows where that copy went
-- Trash search, a note count beside every drawer item and tag, ten-second undo after a save, and a note you empty is moved to the trash instead of lingering as a blank row
-- Layout that scales from phone to tablet: the home grid adds columns with the available width and the editor caps its text column at a readable width
+- Save a note as a WebP card that uses the app's Material 3 surfaces and the font size from
+  Settings — the whole note goes into one tall picture instead of numbered pages — export to
+  TXT/Markdown, and local backup / restore (password-encrypted by default, and always encrypted
+  when the library holds Vault notes). WebDAV uploads check the server's copy before replacing it,
+  so a backup written by another device is never silently overwritten: an unreadable or
+  unvalidated remote is refused instead of guessed at, the newer upload is kept beside it under its
+  own name, and the cloud screen shows where that copy went
+- Trash search, a note count beside every drawer item and tag, an **Untagged** filter plus long-press multi-select tag deletion that only removes tags (never notes), ten-second undo after a save, and a note you empty is moved to the trash instead of lingering as a blank row
+- One menu per recording in the editor: save to folder, rename, edit the Markdown line and delete the attachment all live in the same overflow instead of behind two competing buttons; the editor-behaviour switches (Markdown, LaTeX, live attachment preview, show-only title) live in Tools as one grouped card block
+- Layout that scales from phone to tablet: the home grid adds columns with the available width, the editor caps its text column at a readable width and opens the split preview on any tablet at least 720 dp wide, and settings stay at a centred 840 dp maximum with a two-column card grid on wide screens
+- Audit-hardened privacy and accessibility: enabling or engaging the app lock immediately redacts widgets and drops pinned notifications, an unlocked Vault re-locks after the background grace period even when no app lock is set, the pattern grid and PIN indicators have screen-reader actions, and the quick-action button works with TalkBack and hardware keyboards
+
 
 ---
 
@@ -65,9 +74,10 @@ foreground services, and only the permissions the features actually need.
 - **Permissions are requested only when they are needed.** Nothing is asked at launch. The microphone permission is requested the first time a recording is inserted into a note, and the notification permission only when a note is pinned to the shade; both are optional and the feature degrades instead of crashing when they are denied. No storage, location or network-state access is ever requested.
 - **Everything stays on the device.** Note data lives in a local database; the optional cloud backup is a user-configured WebDAV target and nothing is uploaded anywhere by default.
 - **Encrypted at rest.** When encryption is enabled, note titles and bodies are sealed with a per-device Keystore key. The note id, pin flag, timestamps and tags stay readable so that ordering, pinning and the tag filter keep working without extra queries — which also means **a database file copied off the device without "Export backup" cannot be read back**.
+- **Database backups are encrypted by default**, and a library that holds Vault notes always forces a password: the archive contains a portable database, the attachment tree and the Vault salt, so a plaintext copy would expose content the app otherwise keeps sealed.
 - **Backups are replaced atomically.** A restore stages the new database next to the live one, verifies its SQLite header, renames it into place and keeps the previous file as `.bak`. An interrupted or corrupt restore leaves the existing notes intact instead of deleting them.
 - **Archive entries cannot escape the target directory.** Backup archives are extracted through a canonical-path check, so an entry named `../../databases/note-list.db` is rejected rather than written.
-- **Locked means locked.** With an app lock configured, the home-screen widgets render a "open the app to view this note" placeholder instead of note text, and pinned-note notifications are marked private.
+- **Locked means locked.** With an app lock configured, the home-screen widgets render a "open the app to view this note" placeholder instead of note text, and pinned-note notifications are marked private; enabling a lock also refreshes already-rendered widgets and notifications. An unlocked Vault re-locks after the background grace period even when no app lock is configured.
 - **Permanent deletion asks first.** Removing notes from the recycle bin — in bulk or via long-press — is confirmed in a dialog.
 
 ---
@@ -96,8 +106,8 @@ Both APK variants are minified and shrunk, so the download stays in the low sing
 
 ## 🧱 Build from source
 
-**Requirements:** JDK 21, an Android SDK with the API 36 platform and build-tools 36.0.0, and the
-Gradle wrapper that ships in this repository (Gradle 8.9, AGP 8.7.0).
+**Requirements:** JDK 21, an Android SDK with the API 37.2 platform and build-tools 36.0.0, and the
+Gradle wrapper that ships in this repository (Gradle 9.9.2, AGP 9.5.2, built-in Kotlin 2.3.21).
 
 ```bash
 ./gradlew assembleDebug      # debug APK  (R8 + resource shrinking, debug keystore)
@@ -106,11 +116,11 @@ Gradle wrapper that ships in this repository (Gradle 8.9, AGP 8.7.0).
 
 The project produces **APK files only** — there is no App Bundle task in the release flow.
 
-Release signing is optional for local builds: create `keystore.properties` in the repository root with
-`storeFile`, `storePassword`, `keyAlias` and `keyPassword`, and the release build type picks it up.
-Without that file the release APK is signed with the debug keystore so that local builds stay
-installable — that fallback is still there, but **v2.0.4 is signed with the project's upload key**
-(`CN=Brandontake, OU=WriteOn, O=WriteOn`).
+Release signing is required for a real release: create `keystore.properties` in the repository root
+with `storeFile`, `storePassword`, `keyAlias` and `keyPassword`. A release build without that file
+**fails** instead of silently producing a debug-signed APK; pass `-PallowDebugSigning=true` only for a
+deliberately local artifact (its `versionName` gets a `-debugsigned` suffix). The published release is
+signed with the project's upload key (`CN=Brandontake, OU=WriteOn, O=WriteOn`).
 
 Two things to get right when you create that file:
 
@@ -127,14 +137,21 @@ somewhere safe. Without it you cannot publish an update that replaces a shipped 
 
 ### Toolchain notes
 
-- `compileSdk` and `targetSdk` are pinned to **36 (Android 16)**, `minSdk` 26. AGP 8.7 is only tested
-  up to `compileSdk` 35, so the build carries `android.suppressUnsupportedCompileSdk=36`; the planned
-  upgrade is **AGP 8.11.x + Gradle 8.13** (AGP 8.9's compatibility line still reports a maximum API
-  level of 35, while 8.11 is the first release that states 36). Two upgrade constraints found while
-  checking it: Hilt 2.52's Gradle plugin does not support AGP 9.x (wait for Hilt ≥ 2.59) and Room
-  2.6.1 → 2.7.0 hits a KSP2 failure on suspend-returning-`Unit` DAO methods — keep those two moves
-  separate.
-- Kotlin 2.0.20 with the Compose compiler plugin, KSP for Room and Hilt.
+- `compileSdk` is **37.2 (Android 17)**, `targetSdk` **36 (Android 16)**, `minSdk` **33 (Android 13)**
+  as of v2.1. The compile SDK is only 37.2 because the current Compose BOM requires at least 37.1;
+  target 36 keeps the 2.1 runtime-behaviour contract unchanged.
+- Toolchain: **Gradle 9.9.2**, **AGP 9.5.2** with built-in Kotlin **2.3.21** (the standalone
+  `org.jetbrains.kotlin.android` plugin is no longer applied), **KSP 2.3.14**, **Compose BOM
+  2026.11.01** (Compose 1.13, Material 3 1.5), **Room 2.7.2**, **Hilt 2.60.1** and the stable
+  **biometric 1.1.0**. `android.suppressUnsupportedCompileSdk` is gone.
+- Room 2.8.x is not used yet: its new `MigrationTestHelper` SQLite driver rejects the absolute
+  database path that the migration tests use. Room 2.7.2 is the upgrade target until that harness is
+  migrated; the rest of Room (Flow, KSP2, schema export) is on the new major line.
+- At `minSdk >= 28`, AGP's `packaging.dex.useLegacyPackaging` default becomes `false`, so the 2.1 APK
+  stores dex uncompressed: the APK is larger than 2.0.4's (~7.7 MB vs ~4.2 MB), but installation no
+  longer extracts the dex, so the installed footprint shrinks. Not a regression.
+- Kotlin is compiled by AGP's built-in Kotlin support with the Compose compiler plugin; KSP still
+  drives Room and Hilt.
 
 ### What keeps the APK small
 
@@ -201,7 +218,7 @@ unlock, and the AA-contrast / 48 dp / screen-reader fixes the accessibility audi
 SHA-256 (Release): `DCAA299BE0E0428D1086089C593F6B86AC3AA3AD7DEA831D8047AA0BAC750DB5`.
 
 Both report `versionCode 16` / `versionName 2.0.4`, `minSdk 26`, `targetSdk 36`, the default + `ja` + `zh`
-locales, and four ABIs. The database moved to **v11** (`MIGRATION_10_11`), which indexes the
+locales, and four ABIs. (These are the published 2.0.4 artifacts; the 2.1 line raises `minSdk` to 33.) The database moved to **v11** (`MIGRATION_10_11`), which indexes the
 `attachments.trashed_at` and `attachments.type` columns the library and recycle bin filter on;
 `app/schemas/.../11.json` is checked in, so the migration is testable offline instead of only on a
 device.

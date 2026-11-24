@@ -29,6 +29,23 @@ interface AttachmentDao {
     suspend fun upsert(item: Attachment)
 
     /**
+     * DAT-07: rewrites one caption only while the row still holds the bytes that were read.
+     *
+     * The caption sweep used to read every row and write each one back as a full-row `REPLACE`. A
+     * user can trash or delete an attachment while that sweep runs: the stale entity then brought
+     * the row back (or re-inserted a deleted one) with its old `trashed_at`. This statement touches
+     * the caption alone and only when `caption` still equals [previousCaption], so a concurrent
+     * trash/delete simply makes it match zero rows.
+     *
+     * @return the number of rows changed (0 means the row was deleted or changed - skip).
+     */
+    @Query(
+        "UPDATE attachments SET caption = :newCaption " +
+            "WHERE `attachment-id` = :id AND caption = :previousCaption"
+    )
+    suspend fun updateCaptionIfMatches(id: String, previousCaption: String, newCaption: String): Int
+
+    /**
      * Gives unclaimed rows (note-id 0) to the note that just got its id.
      *
      * The `note-id = 0` guard matters: this runs again whenever the editor re-subscribes to a note,

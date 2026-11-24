@@ -53,15 +53,22 @@ class SettingsRepositoryImpl (private val context: Context) : SettingsRepository
      * unhandled `viewModelScope.launch` and crash the app - over a font size. The write is now
      * logged and dropped; the setting keeps its previous persisted value and the caller carries on.
      * Cancellation still propagates so structured shutdown is not swallowed by the catch.
+     *
+     * @return true when the write reached the store. R2-11: the Terms acceptance is the one caller
+     *   that must not treat a failed write as success, because the next cold start would show the
+     *   agreement again.
      */
-    private suspend fun editPreferences(label: String, transform: suspend (MutablePreferences) -> Unit) {
-        try {
-            context.dataStore.edit(transform)
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            Log.e(TAG, "Could not persist '$label'; keeping the previous value", e)
-        }
+    private suspend fun editPreferences(
+        label: String,
+        transform: suspend (MutablePreferences) -> Unit,
+    ): Boolean = try {
+        context.dataStore.edit(transform)
+        true
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        Log.e(TAG, "Could not persist '$label'; keeping the previous value", e)
+        false
     }
 
     override suspend fun putString(key: String, value: String) {
@@ -103,11 +110,14 @@ class SettingsRepositoryImpl (private val context: Context) : SettingsRepository
         return preferences[preferencesKey]
     }
 
-    suspend fun saveTermsOfService(accepted: Boolean) {
+    /**
+     * R2-11: reports whether the acceptance reached the store, so the caller can keep the user on
+     * the Terms screen instead of navigating away from a flag that will be false on next launch.
+     */
+    suspend fun saveTermsOfService(accepted: Boolean): Boolean =
         editPreferences(TERMS_OF_SERVICE_KEY.name) { preferences ->
             preferences[TERMS_OF_SERVICE_KEY] = accepted
         }
-    }
 
     fun getTermsOfService(): Flow<Boolean> {
         return context.dataStore.data.map { preferences ->

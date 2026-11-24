@@ -36,6 +36,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -62,6 +63,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.ezpnix.writeon.R
+import com.ezpnix.writeon.presentation.screens.edit.model.CheckboxLineToggle
 import com.ezpnix.writeon.presentation.theme.appCornerShape
 import com.ezpnix.writeon.presentation.theme.CornerFraction
 import com.ezpnix.writeon.presentation.theme.LocalNoteFontFamily
@@ -360,7 +362,9 @@ fun AudioAttachmentBlock(
     modifier: Modifier = Modifier,
     caption: String? = null,
     onRename: ((String) -> Unit)? = null,
-    onDelete: (() -> Unit)? = null
+    onDelete: (() -> Unit)? = null,
+    onEditSource: (() -> Unit)? = null,
+    confirmDelete: Boolean = true
 ) {
     val resolvedPath = AttachmentRegistry.resolve(target)
     if (resolvedPath == null) {
@@ -380,7 +384,9 @@ fun AudioAttachmentBlock(
             .padding(vertical = 4.dp),
         caption = caption,
         onRename = onRename,
-        onDelete = onDelete
+        onDelete = onDelete,
+        onEditSource = onEditSource,
+        confirmDelete = confirmDelete
     )
 }
 
@@ -481,15 +487,25 @@ fun MarkdownText(
     spacing: Dp = 2.dp,
     onContentChange: (String) -> Unit = {},
     /**
-     * SPL-1: when set, a checkbox tap reports the parsed line/text instead of rebuilding the whole
-     * markdown from this (possibly debounced) snapshot. The split preview uses it to toggle against
-     * the editor's live body; the preview page and export leave it null and keep the old behaviour.
+     * SPL-1/UX-08: when set, a checkbox tap reports the parsed line/text instead of rewriting the
+     * body from this (possibly debounced) snapshot. The split preview uses it to toggle against the
+     * editor's live body. When null, the tap falls back to [onContentChange] with the same string
+     * whose single line was edited in place - the preview page and the exporter keep that path.
      */
     onCheckboxToggle: ((lineNumber: Int, text: String, checked: Boolean) -> Unit)? = null,
     maxLines: Int = Int.MAX_VALUE,
     overflow: TextOverflow = TextOverflow.Clip,
     useLazyColumn: Boolean = true,
     onImageLoaded: (String) -> Unit = {},
+    /**
+     * PERF-02: parse the body on [Dispatchers.Default] instead of in composition.
+     *
+     * Opt-in because it is the right trade only for a full-note surface (the split preview and the
+     * preview page): the first frame shows nothing while the parse runs, and a new body keeps the
+     * previously parsed elements on screen until it finishes. Note cards parse bounded summaries
+     * synchronously, and the image exporter needs the content in the same frame it captures.
+     */
+    parseAsync: Boolean = false,
     /**
      * When set, rendered pictures and recordings offer a delete action that calls this with the
      * `attachment://` id. The editor and the home feed pass their handler, so a recording can be
@@ -514,13 +530,7 @@ fun MarkdownText(
     // instantiated for every note card in the grid, so an unremembered pipeline re-tokenised
     // the whole note (and allocated the five line processors) on every scroll frame.
     val latexEnabled = LocalLatexEnabled.current
-    val lines = remember(markdown) { markdown.lines() }
-    val content = remember(lines, latexEnabled) {
-        MarkdownBuilder(
-            lines = lines,
-            lineProcessors = defaultMarkdownLineProcessors(renderLatex = latexEnabled)
-        ).apply { parse() }.content
-    }
+    val parsed = rememberMarkdownContent(markdown, latexEnabled, parseAsync)
 
     // Links are opened through a guarded handler. Providing it here, rather than at each call site,
     // also covers the preview, the editor and the image exporter, which all render this text.
@@ -535,13 +545,13 @@ fun MarkdownText(
         MarkdownContent(
             radius = radius,
             isPreview = isPreview,
-            content = content,
+            content = parsed.content,
             containerColor = containerColor,
             modifier = modifier,
             spacing = spacing,
             weight = weight,
             fontSize = fontSize,
-            lines = lines,
+            markdown = parsed.source,
             onContentChange = onContentChange,
             onCheckboxToggle = onCheckboxToggle,
             maxLines = maxLines,
@@ -552,6 +562,51 @@ fun MarkdownText(
         )
     }
 }
+
+/**
+ * PERF-02: one parse result with the exact source it came from.
+ *
+ * The source travels with the elements so the async preview cannot pair last frame's elements with
+ * this frame's text: a checkbox tap resolves `lineNumber` inside the string that produced it.
+ */
+private data class ParsedMarkdown(
+    val source: String,
+    val content: List<MarkdownElement>,
+)
+
+/**
+ * PERF-02: the element list for [markdown], computed off the main thread when [async] is set.
+ *
+ * The synchronous branch keeps the old behaviour for every small renderer. The async branch parses
+ * in a [LaunchedEffect] on [Dispatchers.Default] and assigns the finished result on the main thread;
+ * because the state is remembered without [markdown] as its key, the previous parse stays visible
+ * while the next one runs instead of blanking the pane on every debounce tick.
+ */
+@Composable
+private fun rememberMarkdownContent(
+    markdown: String,
+    latexEnabled: Boolean,
+    async: Boolean
+): ParsedMarkdown {
+    if (!async) {
+        return remember(markdown, latexEnabled) {
+            ParsedMarkdown(markdown, parseMarkdown(markdown, latexEnabled))
+        }
+    }
+    var parsed by remember { mutableStateOf<ParsedMarkdown?>(null) }
+    LaunchedEffect(markdown, latexEnabled) {
+        val content = withContext(Dispatchers.Default) { parseMarkdown(markdown, latexEnabled) }
+        parsed = ParsedMarkdown(markdown, content)
+    }
+    return parsed ?: ParsedMarkdown(markdown, emptyList())
+}
+
+/** The pure parse behind [MarkdownText], kept separate so a JVM test can pin its output. */
+internal fun parseMarkdown(markdown: String, latexEnabled: Boolean): List<MarkdownElement> =
+    MarkdownBuilder(
+        lines = markdown.lines(),
+        lineProcessors = defaultMarkdownLineProcessors(renderLatex = latexEnabled)
+    ).apply { parse() }.content.toList()
 
 @Composable
 fun StaticMarkdownText(
@@ -584,7 +639,11 @@ fun MarkdownContent(
     spacing: Dp,
     weight: FontWeight,
     fontSize: TextUnit,
-    lines: List<String>,
+    /**
+     * UX-08: the source text, not a `lines()` split of it. A checkbox toggle rewrites one line of
+     * this string in place so the original indentation, CRLF ending and spacing survive.
+     */
+    markdown: String,
     onContentChange: (String) -> Unit,
     onCheckboxToggle: ((lineNumber: Int, text: String, checked: Boolean) -> Unit)? = null,
     maxLines: Int,
@@ -603,7 +662,7 @@ fun MarkdownContent(
                     containerColor = containerColor,
                     weight = weight,
                     fontSize = fontSize,
-                    lines = lines,
+                    markdown = markdown,
                     isPreview = true,
                     onContentChange = onContentChange,
                     onCheckboxToggle = onCheckboxToggle,
@@ -628,7 +687,7 @@ fun MarkdownContent(
                             containerColor = containerColor,
                             weight = weight,
                             fontSize = fontSize,
-                            lines = lines,
+                            markdown = markdown,
                             isPreview = isPreview,
                             onContentChange = onContentChange,
                             onCheckboxToggle = onCheckboxToggle,
@@ -654,7 +713,7 @@ fun MarkdownContent(
                             containerColor = containerColor,
                             weight = weight,
                             fontSize = fontSize,
-                            lines = lines,
+                            markdown = markdown,
                             isPreview = isPreview,
                             onContentChange = onContentChange,
                             onCheckboxToggle = onCheckboxToggle,
@@ -678,7 +737,7 @@ fun RenderMarkdownElement(
     containerColor: Color,
     weight: FontWeight,
     fontSize: TextUnit,
-    lines: List<String>,
+    markdown: String,
     isPreview: Boolean,
     onContentChange: (String) -> Unit,
     onCheckboxToggle: ((lineNumber: Int, text: String, checked: Boolean) -> Unit)? = null,
@@ -731,11 +790,17 @@ fun RenderMarkdownElement(
                             // sampled.
                             semanticToggle(element.lineNumber, element.text, newChecked)
                         } else {
-                            val updatedLines = lines.toMutableList()
-                            val prefix = if (newChecked) "[x]" else "[ ]"
-                            updatedLines[element.lineNumber] = "$prefix ${element.text}"
-                            val updatedMarkdown = updatedLines.joinToString("\n")
-                            onContentChange(updatedMarkdown)
+                            // UX-08: `element.text` is trimmed, so rebuilding the line from it
+                            // moved an indented child to column 0, turned `[ ]task` into
+                            // `[x] [ ]task` and normalised CRLF to LF. The helper replaces only
+                            // the three marker characters at the line's first non-space position.
+                            val updated = CheckboxLineToggle.toggleRenderedLine(
+                                markdown = markdown,
+                                lineNumber = element.lineNumber,
+                                text = element.text,
+                                checked = newChecked
+                            )
+                            if (updated != null) onContentChange(updated)
                         }
                     }
                 )

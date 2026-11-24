@@ -1,6 +1,7 @@
 package com.ezpnix.writeon.widget
 
 import android.appwidget.AppWidgetManager
+import android.content.Context
 import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -49,6 +50,14 @@ class NotesWidgetActivity : ComponentActivity() {
         enableEdgeToEdge()
 
         val appWidgetId = intent?.extras?.getInt(AppWidgetManager.EXTRA_APPWIDGET_ID, AppWidgetManager.INVALID_APPWIDGET_ID,) ?: AppWidgetManager.INVALID_APPWIDGET_ID
+        // CQ-07: the activity is exported, so any app can start it with any (or no) widget id.
+        // Without this check it rendered the whole library for a caller that never placed a widget,
+        // and let that caller rewrite this app's widget selection. Only an id whose provider is our
+        // own receiver is a real configuration request.
+        if (!isOwnWidgetId(this, appWidgetId)) {
+            finish()
+            return
+        }
         setContent {
             val settings = hiltViewModel<SettingsViewModel>()
             val coroutineScope = rememberCoroutineScope()
@@ -100,4 +109,21 @@ class NotesWidgetActivity : ComponentActivity() {
             }
         }
     }
+}
+
+/**
+ * CQ-07: true only when [appWidgetId] belongs to one of this app's `NotesWidgetReceiver` widgets.
+ *
+ * `getAppWidgetInfo` returns null for an id that was never bound (including the exported
+ * `INVALID_APPWIDGET_ID`), and the provider component is what distinguishes our widget from one
+ * another app has placed.
+ */
+private fun isOwnWidgetId(context: Context, appWidgetId: Int): Boolean {
+    if (appWidgetId == AppWidgetManager.INVALID_APPWIDGET_ID) return false
+    val info = runCatching {
+        AppWidgetManager.getInstance(context).getAppWidgetInfo(appWidgetId)
+    }.getOrNull() ?: return false
+    val provider = info.provider
+    return provider.packageName == context.packageName &&
+        provider.className == NotesWidgetReceiver::class.java.name
 }

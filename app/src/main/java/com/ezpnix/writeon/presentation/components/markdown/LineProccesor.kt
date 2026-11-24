@@ -212,8 +212,13 @@ class CheckboxProcessor : MarkdownLineProcessor {
     }
 
     override fun processLine(line: String, builder: MarkdownBuilder) {
-        val checked = line.trim().startsWith("[x]")
-        val text = line.trim().substringAfter("[ ] ").substringAfter("[x] ").trim()
+        val trimmed = line.trim()
+        val checked = trimmed.startsWith("[x]")
+        // REG-10: strip the three marker characters themselves. The old `substringAfter("[ ] ")`
+        // only removed a marker followed by a space, so a hand-written `[ ]task` kept its marker in
+        // `text`: the widget showed `[ ]task` next to the checkbox, and CheckboxLineToggle.matches
+        // compared `task` with `[ ]task` and turned every tap into a silent no-op.
+        val text = trimmed.removePrefix("[ ]").removePrefix("[x]").trimStart()
         builder.add(CheckboxItem(text, checked, lineNumber = builder.lineIndex))
     }
 }

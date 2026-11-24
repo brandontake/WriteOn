@@ -2,7 +2,6 @@ package com.ezpnix.writeon.presentation.theme
 
 import android.app.Activity
 import android.content.Context
-import android.os.Build
 import android.view.WindowManager
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.ColorScheme
@@ -23,7 +22,7 @@ import com.ezpnix.writeon.presentation.lock.rememberLockManager
 import com.ezpnix.writeon.presentation.screens.settings.model.SettingsViewModel
 
 private fun getColorScheme(context: Context, isDarkTheme: Boolean, isDynamicTheme: Boolean, isAmoledTheme: Boolean): ColorScheme {
-    if (isDynamicTheme && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+    if (isDynamicTheme) {
         if (isDarkTheme) {
             if (isAmoledTheme) {
                 return dynamicDarkColorScheme(context).copy(surfaceContainerLow = Color.Black, surface = Color.Black)
@@ -51,19 +50,18 @@ fun LeafNotesTheme(
 ) {
     val settings = settingsModel.settings.value
     val systemInDarkTheme = isSystemInDarkTheme()
-    val supportsDynamic = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
 
     // 真正生效的深色与动态色彩：当开启跟随系统时，直接以系统主题实时派生，保证首帧与冷启动绝对精准，无需异步写库等待
     val effectiveDarkTheme = if (settings.automaticTheme) systemInDarkTheme else settings.darkTheme
-    val effectiveDynamicTheme = if (settings.automaticTheme) supportsDynamic else settings.dynamicTheme
+    val effectiveDynamicTheme = settings.automaticTheme || settings.dynamicTheme
 
     // These two used to be written straight from the composable body. `update()` also persists the
     // settings and (re)schedules the auto-backup work, so every recomposition — a drawer slide, a
     // FAB animation — wrote to disk. Writing only when the derived value actually differs keeps
     // the setting in step with the system without the side effect.
-    LaunchedEffect(settings.automaticTheme, systemInDarkTheme, supportsDynamic) {
+    LaunchedEffect(settings.automaticTheme, systemInDarkTheme) {
         if (!settings.automaticTheme) return@LaunchedEffect
-        val target = settings.copy(dynamicTheme = supportsDynamic, darkTheme = systemInDarkTheme)
+        val target = settings.copy(dynamicTheme = true, darkTheme = systemInDarkTheme)
         if (target.dynamicTheme != settings.dynamicTheme || target.darkTheme != settings.darkTheme) {
             settingsModel.update(target)
         }
@@ -83,6 +81,19 @@ fun LeafNotesTheme(
     val pinEnabled by lockManager.pinEnabled.collectAsStateWithLifecycle()
     val patternEnabled by lockManager.patternEnabled.collectAsStateWithLifecycle()
     val lockConfigured = biometricEnabled || pinEnabled || patternEnabled
+    // REG-06: an open Vault note is plaintext even when no app lock is configured (the Vault
+    // passphrase is a credential of its own). The editor publishes that state, so screenshots,
+    // screen recording and the recents thumbnail are blocked for it exactly like they are for a
+    // configured lock. Plain notes never set this.
+    val vaultContentVisible by lockManager.vaultContentVisible.collectAsStateWithLifecycle()
+    // R2-04: the editor is not the only surface that shows Vault plaintext. Home, the library and
+    // the recycle bin render vault titles/bodies whenever the passphrase is loaded, then re-hide
+    // them when it is evicted - and the recents thumbnail is taken of whatever screen is on top.
+    // While an unlocked Vault is reachable at all, the whole activity therefore counts as
+    // sensitive; no per-screen publish can cover a surface the user has not opened yet.
+    val vaultSessionActive by lockManager.vaultSessionActive.collectAsStateWithLifecycle()
+    val appLocked by lockManager.isLocked.collectAsStateWithLifecycle()
+    val vaultPlaintextAvailable = vaultSessionActive && !appLocked
     // Both of these touch the window, so they also belong in an effect rather than in the body:
     // recomposition can run this function many times per frame.
     SideEffect {
@@ -92,7 +103,9 @@ fun LeafNotesTheme(
         }
         // A configured lock always wins over the privacy switch, so the thumbnail/screenshot
         // protection cannot be silently absent while the lock screen is guarding the content.
-        if (settings.screenProtection || lockConfigured) {
+        // REG-06 adds Vault plaintext on screen as a third reason: the Vault has its own
+        // passphrase, and evicting it is not tied to an app lock.
+        if (settings.screenProtection || lockConfigured || vaultContentVisible || vaultPlaintextAvailable) {
             activity.window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
         } else {
             activity.window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)

@@ -152,6 +152,16 @@ fun PatternSetupDialog(
                 .fillMaxWidth(0.85f)
                 .widthIn(max = 320.dp),
         )
+        Spacer(Modifier.height(16.dp))
+        // REG-12: a drag submits on lift, but a screen reader builds the pattern dot by dot and
+        // has no lift event. This explicit button is the same submit action, enabled under the
+        // same minimum-cell rule the dialog applies to a drawn pattern.
+        Button(
+            onClick = { onFinished(pattern) },
+            enabled = pattern.size >= LockManager.MIN_PATTERN_CELLS,
+        ) {
+            Text(text = stringResource(id = R.string.lock2_confirm_pattern))
+        }
     }
 }
 
@@ -226,6 +236,16 @@ fun PatternVerifyDialog(
                 .fillMaxWidth(0.85f)
                 .widthIn(max = 320.dp),
         )
+        Spacer(Modifier.height(16.dp))
+        // REG-12: a drag submits on lift, but a screen reader builds the pattern dot by dot and
+        // has no lift event. This explicit button is the same submit action, enabled under the
+        // same minimum-cell rule the dialog applies to a drawn pattern.
+        Button(
+            onClick = { onFinished(pattern) },
+            enabled = pattern.size >= LockManager.MIN_PATTERN_CELLS,
+        ) {
+            Text(text = stringResource(id = R.string.lock2_confirm_pattern))
+        }
     }
 }
 

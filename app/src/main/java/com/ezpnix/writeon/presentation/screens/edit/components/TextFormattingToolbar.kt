@@ -1,9 +1,10 @@
 package com.ezpnix.writeon.presentation.screens.edit.components
 
 import android.content.Context
-
 import android.net.Uri
+import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.annotation.StringRes
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -68,6 +69,10 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileOutputStream
+import java.io.InputStream
+import java.nio.file.AtomicMoveNotSupportedException
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
 import androidx.compose.ui.res.stringResource
@@ -77,6 +82,14 @@ private const val TAG = "TextFormattingToolbar"
 
 /** 100 MB: matches the share-path cap, far above any photo, far below "fills the partition". */
 private const val MAX_PICKED_IMAGE_BYTES = 100L * 1024 * 1024
+
+/**
+ * DAT-08: suffix of the same-directory staging file a picked image is copied and encrypted through.
+ *
+ * It is an attachment-directory sibling so the final publish is a rename on the same filesystem;
+ * the name is random (`createTempFile`), so two picks of the same URI cannot share it.
+ */
+private const val IMAGE_PART_SUFFIX = ".image-part"
 
 data class ToolbarItem(
     val icon: ImageVector,
@@ -112,15 +125,22 @@ fun TextFormattingToolbar(viewModel: EditViewModel, modifier: Modifier = Modifie
             // callback on the main thread: the editor froze for the whole copy (P-11). The read is
             // started here, where the grant on `uri` is still valid, and finished on Dispatchers.IO.
             scope.launch {
-                val savedUri = withContext(Dispatchers.IO) {
-                    // The size guard throws; catching keeps an oversized pick from crashing the app
-                    // out of the result callback and turns it into the same "failed" path as I/O.
-                    runCatching { saveImageToAppStorage(context, uri) }.getOrDefault("")
-                }
-                // An empty result means the copy failed; inserting a reference to nothing would
-                // leave a permanently unavailable attachment in the note body.
-                if (savedUri.isNotEmpty()) {
-                    viewModel.insertImageAttachment(savedUri)
+                // UX-11: every failure used to collapse into an empty string and then into silence,
+                // so a pick that could not be read, was too large or could not be encrypted looked
+                // like a broken button. The result now carries a reason, and nothing is inserted
+                // unless the encrypted file really exists.
+                when (val result = withContext(Dispatchers.IO) {
+                    saveImageToAppStorage(context, uri)
+                }) {
+                    is ImageSaveResult.Success -> viewModel.insertImageAttachment(result.path)
+                    is ImageSaveResult.Failure -> Toast.makeText(
+                        context,
+                        context.getString(
+                            R.string.msg_image_insert_failed,
+                            context.getString(result.reasonRes)
+                        ),
+                        Toast.LENGTH_LONG
+                    ).show()
                 }
             }
         }
@@ -310,53 +330,143 @@ fun TextFormattingToolbar(viewModel: EditViewModel, modifier: Modifier = Modifie
     }
 }
 
-private fun saveImageToAppStorage(context: Context, uri: Uri): String {
+/** The outcome of copying a picked image into app storage, with a localizable failure reason. */
+internal sealed interface ImageSaveResult {
+    data class Success(val path: String) : ImageSaveResult
+    data class Failure(@StringRes val reasonRes: Int) : ImageSaveResult
+}
+
+/** Raised when the pick exceeds [MAX_PICKED_IMAGE_BYTES]; kept distinct so the UI can say why. */
+private class PickedImageTooLargeException : java.io.IOException(
+    "picked image exceeds $MAX_PICKED_IMAGE_BYTES bytes"
+)
+
+private fun saveImageToAppStorage(context: Context, uri: Uri): ImageSaveResult {
     // Internal storage, not getExternalFilesDir(): a picked picture is user content and must stay
     // behind the same filesystem boundary as the (encrypted) note database.
     val appStorageDir = AttachmentFiles.directoryFor(context, Attachment.TYPE_IMAGE)
-    if (!appStorageDir.exists() && !appStorageDir.mkdirs()) {
-        android.util.Log.e(TAG, "Could not create the attachment directory")
-        return ""
-    }
-    val imageFile = File(appStorageDir, getImageName(uri))
+    // A null stream means the resolver could not hand back the bytes, which is a read failure
+    // rather than an empty file. The stream is consumed inside saveImageFile and closed by `use`.
+    val input = try {
+        context.contentResolver.openInputStream(uri)
+    } catch (e: Exception) {
+        android.util.Log.e(TAG, "Could not open the picked image", e)
+        return ImageSaveResult.Failure(R.string.image_insert_unreadable)
+    } ?: return ImageSaveResult.Failure(R.string.image_insert_unreadable)
 
-    // `use` already closes the stream; the extra close() below was a double close. If the resolver
-    // cannot hand back a stream the file is never written, so report that instead of returning a
-    // URI that points at nothing.
-    val copied = context.contentResolver.openInputStream(uri)?.use { input ->
-        FileOutputStream(imageFile).use { output ->
-            // Same guard the share path has: a mistaken pick (a video offered as an image) must
-            // not be able to fill the private partition, and a partial copy is removed below.
+    return input.use { stream ->
+        saveImageFile(
+            directory = appStorageDir,
+            fileName = getImageName(uri),
+            source = stream,
+            // SEC-4: encryption happens before the path is returned, on this same IO dispatcher.
+            // A failure returns no path, so the caller never inserts an attachment row for a
+            // plaintext file.
+            encrypt = { temp -> MediaVault.encryptInPlace(context, temp) },
+        )
+    }
+}
+
+/**
+ * Copies [source] into a fresh sibling of [fileName], encrypts it there and only then publishes it.
+ *
+ * DAT-08: the target used to be opened directly with `FileOutputStream`, which truncates an existing
+ * file before the pick has even been read. Re-picking a URI whose name already existed destroyed
+ * the live attachment - and, because [AttachmentSnapshots] hard-links the media trees, the `.bak`
+ * snapshot sharing that inode as well. The copy now goes to a unique temp in the same directory;
+ * [encrypt] runs on the temp, and a same-directory rename publishes the finished bytes. Any failure
+ * deletes only the temp, so the previous target stays byte for byte.
+ *
+ * Size limit, naming and the failure reasons of UX-11 are unchanged. [maxBytes] is a parameter only
+ * so the size branch can be tested without writing 100 MB.
+ */
+internal fun saveImageFile(
+    directory: File,
+    fileName: String,
+    source: InputStream,
+    maxBytes: Long = MAX_PICKED_IMAGE_BYTES,
+    encrypt: (File) -> Boolean,
+): ImageSaveResult {
+    if (!directory.exists() && !directory.mkdirs()) {
+        android.util.Log.e(TAG, "Could not create the attachment directory")
+        return ImageSaveResult.Failure(R.string.image_insert_storage_failed)
+    }
+    val target = File(directory, fileName)
+    val temp = try {
+        File.createTempFile("${target.name}.", IMAGE_PART_SUFFIX, directory)
+    } catch (e: Exception) {
+        android.util.Log.e(TAG, "Could not create the image staging file", e)
+        return ImageSaveResult.Failure(R.string.image_insert_storage_failed)
+    }
+
+    return try {
+        FileOutputStream(temp).use { output ->
             val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
             var total = 0L
             while (true) {
-                val read = input.read(buffer)
+                val read = source.read(buffer)
                 if (read < 0) break
                 total += read
-                if (total > MAX_PICKED_IMAGE_BYTES) {
-                    throw java.io.IOException("picked image exceeds $MAX_PICKED_IMAGE_BYTES bytes")
-                }
+                // Same guard the share path has: a mistaken pick (a video offered as an image) must
+                // not be able to fill the private partition, and a partial copy is only the temp.
+                if (total > maxBytes) throw PickedImageTooLargeException()
                 output.write(buffer, 0, read)
             }
         }
-        true
-    } ?: false
 
-    if (!copied || !imageFile.exists()) {
-        android.util.Log.e(TAG, "Could not save the picked image to app storage")
-        runCatching { imageFile.delete() }
-        return ""
-    }
+        if (!temp.isFile) {
+            android.util.Log.e(TAG, "Could not save the picked image to app storage")
+            return ImageSaveResult.Failure(R.string.image_insert_unreadable)
+        }
 
-    // SEC-4: encrypt before the path is returned, on this same IO dispatcher. Returning "" instead
-    // of a plaintext path means the caller never inserts an attachment row for it, so the rest of
-    // the app cannot reference an unencrypted file.
-    if (!MediaVault.encryptInPlace(context, imageFile)) {
-        android.util.Log.e(TAG, "Could not encrypt the picked image; dropping the plaintext copy")
-        runCatching { imageFile.delete() }
-        return ""
+        if (!encrypt(temp)) {
+            android.util.Log.e(TAG, "Could not encrypt the picked image; dropping the plaintext copy")
+            return ImageSaveResult.Failure(R.string.image_insert_encrypt_failed)
+        }
+
+        if (!publishImage(temp, target)) {
+            android.util.Log.e(TAG, "Could not move the encrypted image into place")
+            return ImageSaveResult.Failure(R.string.image_insert_storage_failed)
+        }
+        // A filesystem path, not a file:// Uri: the attachment row is read with File(path) by the
+        // exporter and by AttachmentFiles, both of which would treat a Uri string as a literal name.
+        ImageSaveResult.Success(target.absolutePath)
+    } catch (e: PickedImageTooLargeException) {
+        android.util.Log.e(TAG, "Picked image is too large to import", e)
+        ImageSaveResult.Failure(R.string.image_insert_too_large)
+    } catch (e: Exception) {
+        // A failed read and a failed write (disk full, revoked URI) both end here; the user-facing
+        // distinction that matters is "could not be written", not the exception type.
+        android.util.Log.e(TAG, "Could not copy the picked image into app storage", e)
+        ImageSaveResult.Failure(R.string.image_insert_storage_failed)
+    } finally {
+        // The rename above consumes the temp on success; every other path must not leave plaintext
+        // or a half copy behind. The existing target is never deleted here.
+        if (temp.exists()) runCatching { temp.delete() }
     }
-    // A filesystem path, not a file:// Uri: the attachment row is read with File(path) by the
-    // exporter and by AttachmentFiles, both of which would treat a Uri string as a literal name.
-    return imageFile.absolutePath
+}
+
+/**
+ * Publishes the encrypted temp over [target] with a same-directory rename.
+ *
+ * Never delete-then-rename: if the target is hard-linked from an attachment snapshot, deleting it
+ * would not harm the snapshot (the inode survives), but a delete followed by a failed rename would
+ * destroy the live attachment with nothing to go back to. The rename swaps only the directory
+ * entry, so a failure leaves the old bytes in place. A provider that cannot do an atomic move gets
+ * the platform's best-effort replace; it never falls back to truncating the target.
+ */
+private fun publishImage(temp: File, target: File): Boolean = try {
+    Files.move(
+        temp.toPath(),
+        target.toPath(),
+        StandardCopyOption.ATOMIC_MOVE,
+        StandardCopyOption.REPLACE_EXISTING
+    )
+    true
+} catch (e: AtomicMoveNotSupportedException) {
+    runCatching {
+        Files.move(temp.toPath(), target.toPath(), StandardCopyOption.REPLACE_EXISTING)
+    }.isSuccess
+} catch (e: Exception) {
+    false
 }

@@ -38,10 +38,24 @@ class SettingsPreferences @Inject constructor(
         private const val DEFAULT_COLUMNS_COUNT = 2
 
         /**
+         * CQ-06: every locale the app actually publishes, derived from the same list as
+         * `res/xml/locales_config.xml` and the `resourceConfigurations` in `build.gradle.kts`.
+         *
+         * The legacy quick-action migration has to know all of them: a label written by an older
+         * build in a locale that is missing here would not map back to its id and the button would
+         * silently disappear on upgrade. Japanese was exactly that gap.
+         */
+        internal val PUBLISHED_LOCALES = listOf(
+            Locale.ENGLISH,
+            Locale.SIMPLIFIED_CHINESE,
+            Locale.JAPANESE,
+        )
+
+        /**
          * Stable ids of the home quick actions, paired with the label each one shows. The ids - not
          * the labels - are what gets persisted.
          */
-        private val FAB_ITEM_IDS = listOf(
+        internal val FAB_ITEM_IDS = listOf(
             "browser" to R.string.quick_action_browser,
             "flashcard" to R.string.quick_action_flashcard,
             "save_txt" to R.string.quick_action_save_txt,
@@ -51,6 +65,23 @@ class SettingsPreferences @Inject constructor(
             "trash" to R.string.trash,
             "add_note" to R.string.add_note,
         )
+
+        /**
+         * Builds the label -> id map for every published locale.
+         *
+         * Kept as an internal function (rather than inlined into [legacyFabLabelToId]) so the
+         * migration can be tested for all locales without exposing the map itself.
+         */
+        internal fun legacyFabLabelMap(context: Context): Map<String, String> = buildMap {
+            FAB_ITEM_IDS.forEach { (id, stringRes) ->
+                PUBLISHED_LOCALES.forEach { locale ->
+                    val configuration = Configuration(context.resources.configuration)
+                    configuration.setLocale(locale)
+                    val label = context.createConfigurationContext(configuration).getString(stringRes)
+                    put(label, id)
+                }
+            }
+        }
     }
 
     val dynamicPlaceholder: Flow<String> = context.dataStore.data
@@ -93,19 +124,9 @@ class SettingsPreferences @Inject constructor(
      * app text changed - after an update, or after switching language - none of the stored labels
      * matched the list any more and every button the user had added disappeared. Entries are now
      * stable ids; this map turns labels written by older builds back into their id, in every
-     * language the app ships.
+     * language the app ships (CQ-06: [PUBLISHED_LOCALES], English/Simplified Chinese/Japanese).
      */
     private val legacyFabLabelToId: Map<String, String> by lazy {
-        val locales = listOf(Locale.ENGLISH, Locale.SIMPLIFIED_CHINESE)
-        buildMap {
-            FAB_ITEM_IDS.forEach { (id, stringRes) ->
-                locales.forEach { locale ->
-                    val configuration = Configuration(context.resources.configuration)
-                    configuration.setLocale(locale)
-                    val label = context.createConfigurationContext(configuration).getString(stringRes)
-                    put(label, id)
-                }
-            }
-        }
+        legacyFabLabelMap(context)
     }
 }

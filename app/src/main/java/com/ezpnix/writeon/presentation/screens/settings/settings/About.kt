@@ -58,7 +58,6 @@ import com.ezpnix.writeon.presentation.screens.settings.loadState
 import com.ezpnix.writeon.presentation.screens.settings.model.SettingsViewModel
 import com.ezpnix.writeon.presentation.screens.settings.saveState
 import com.ezpnix.writeon.presentation.screens.settings.widgets.ActionType
-import com.ezpnix.writeon.presentation.screens.settings.widgets.ListDialog
 import com.ezpnix.writeon.presentation.screens.settings.widgets.SettingsBox
 
 @Composable
@@ -155,33 +154,6 @@ fun AboutScreen(navController: NavController, settingsViewModel: SettingsViewMod
     }
 }
 
-
-@Composable
-fun ContributorsClicked(
-    list: List<Pair<String, String>>,
-    settingsViewModel: SettingsViewModel,
-    onExit: () -> Unit
-) {
-    val context = LocalContext.current
-    val localizedList = list.map { (version, date) ->
-        version to if (date == stringResource(R.string.app_list_latest)) context.getString(R.string.app_list_latest) else date
-    }
-    ListDialog(
-        text = stringResource(R.string.app_list),
-        list = localizedList,
-        settingsViewModel = settingsViewModel,
-        onExit = onExit,
-        extractDisplayData = { it }
-    ) { isFirstItem, isLastItem, displayData ->
-        SettingsBox(
-            title = displayData.first,
-            description = displayData.second,
-            radius = shapeManager(isFirst = isFirstItem, isLast = isLastItem, radius = settingsViewModel.settings.value.cornerRadius),
-            actionType = ActionType.TEXT,
-            customText = "✅"
-        )
-    }
-}
 
 /**
  * Names the two people behind the build instead of leaving the app anonymous: the upstream author

@@ -173,9 +173,9 @@ class NoteDatabaseMigrationTest {
     /** Seeds the three shapes the 7 -> 8 rewrite has to tell apart, at schema version 6. */
     private fun seedVersionSixDatabase() {
         helper.createDatabase(TEST_DB, 6).use { db ->
-            db.execSQL(INSERT_NOTE, arrayOf(LEGACY_NOTE_NAME, LEGACY_BODY, 0, 0, SEEDED_AT, 0, "[]"))
-            db.execSQL(INSERT_NOTE, arrayOf(VAULT_NOTE_NAME, VAULT_BODY, 0, 1, SEEDED_AT, 0, "[]"))
-            db.execSQL(INSERT_NOTE, arrayOf(SEALED_NOTE_NAME, SEALED_BODY, 0, 0, SEEDED_AT, 0, "[]"))
+            db.execSQL(INSERT_NOTE, arrayOf<Any?>(LEGACY_NOTE_NAME, LEGACY_BODY, 0, 0, SEEDED_AT, 0, "[]"))
+            db.execSQL(INSERT_NOTE, arrayOf<Any?>(VAULT_NOTE_NAME, VAULT_BODY, 0, 1, SEEDED_AT, 0, "[]"))
+            db.execSQL(INSERT_NOTE, arrayOf<Any?>(SEALED_NOTE_NAME, SEALED_BODY, 0, 0, SEEDED_AT, 0, "[]"))
         }
     }
 

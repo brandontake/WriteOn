@@ -6,8 +6,10 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ElevatedCard
@@ -25,6 +27,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
@@ -74,22 +77,29 @@ fun SettingCategory(
     ) {
         Row(
             modifier = Modifier
+                .fillMaxWidth()
                 .padding(horizontal = 16.dp, vertical = if (smallSetting) 8.dp else 12.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             if (smallSetting) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
+                Row(
+                    modifier = Modifier.weight(1f),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
                     RenderCategoryTitle(title = title, smallSetting = true)
                     Spacer(modifier = Modifier.weight(1f))
                     RenderCategoryDescription(subTitle = subTitle, smallSetting = true)
-                    RenderCategoryIcon(icon, isHighlighted = true)
                 }
+                Spacer(modifier = Modifier.width(8.dp))
+                RenderCategoryIcon(icon, isHighlighted = true)
             } else {
-                Column {
+                // The text column owns the remaining width so a long subtitle wraps inside it
+                // instead of squeezing the icon into a narrow oval.
+                Column(modifier = Modifier.weight(1f)) {
                     RenderCategoryTitle(title = title, smallSetting = false)
                     RenderCategoryDescription(subTitle = subTitle, smallSetting = false)
                 }
-                Spacer(modifier = Modifier.weight(1f))
+                Spacer(modifier = Modifier.width(12.dp))
                 RenderCategoryIcon(icon, isHighlighted = false)
             }
         }
@@ -103,6 +113,8 @@ private fun RenderCategoryTitle(title: String, smallSetting: Boolean) {
         text = title,
         style = MaterialTheme.typography.titleMedium,
         fontWeight = FontWeight.SemiBold,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
         color = if (smallSetting) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface,
         modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
     )
@@ -115,6 +127,8 @@ private fun RenderCategoryDescription(subTitle: String, smallSetting: Boolean) {
             color = if (smallSetting) MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f) else MaterialTheme.colorScheme.onSurfaceVariant,
             text = subTitle,
             style = MaterialTheme.typography.bodySmall,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
             modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
         )
     }

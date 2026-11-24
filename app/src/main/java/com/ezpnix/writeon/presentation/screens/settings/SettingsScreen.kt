@@ -4,14 +4,19 @@ import android.content.SharedPreferences
 import androidx.compose.foundation.layout.Arrangement
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowForwardIos
 import androidx.compose.material.icons.automirrored.rounded.Help
@@ -24,9 +29,7 @@ import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material.icons.rounded.Palette
 import androidx.compose.material.icons.rounded.TextFields
 import androidx.compose.material.icons.rounded.Translate
-import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material.icons.rounded.Verified
-import androidx.compose.material.icons.rounded.VolunteerActivism
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -61,7 +64,6 @@ import com.ezpnix.writeon.presentation.components.NotesScaffold
 import com.ezpnix.writeon.presentation.components.TitleText
 import com.ezpnix.writeon.presentation.navigation.NavRoutes
 import com.ezpnix.writeon.presentation.screens.settings.model.SettingsViewModel
-import com.ezpnix.writeon.presentation.screens.settings.settings.ContributorsClicked
 import com.ezpnix.writeon.presentation.screens.settings.settings.shapeManager
 import com.ezpnix.writeon.presentation.screens.settings.widgets.ActionType
 import com.ezpnix.writeon.presentation.screens.settings.widgets.SettingActionType
@@ -85,8 +87,22 @@ fun SettingsScaffold(
             }
         },
         content = {
-            Box(Modifier.padding(24.dp, 12.dp, 24.dp, 0.dp)) {
-                content()
+            // Material 3 adaptive: settings are a reading/form surface, so on a tablet they stay at
+            // a comfortable maximum width instead of stretching a two-line card across 1,200 dp.
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(24.dp, 12.dp, 24.dp, 0.dp),
+                contentAlignment = Alignment.TopCenter
+            ) {
+                Box(
+                    modifier = Modifier
+                        .widthIn(max = 840.dp)
+                        .fillMaxWidth()
+                        .fillMaxHeight()
+                ) {
+                    content()
+                }
             }
         }
     )
@@ -116,111 +132,105 @@ fun MainSettings(settingsViewModel: SettingsViewModel, navController: NavControl
         title = stringResource(id = R.string.screen_settings),
         onBackNavClicked = { navController.navigateUp() }
     ) {
-        LazyColumn {
-            item {
-                SettingCategory(
-                    smallSetting = true,
-                    title = stringResource(id = R.string.support),
-                    icon = Icons.AutoMirrored.Rounded.ArrowForwardIos,
-                    shape = shapeManager(radius = settingsViewModel.settings.value.cornerRadius, isBoth = true),
-                    isLast = true,
-                    composableAction = { onExit -> BottomModal(navController = navController, settingsViewModel = settingsViewModel) { onExit() }}
-                )
-            }
-            item {
-                SettingCategory(
-                    title = stringResource(id = R.string.color_styles),
-                    subTitle = stringResource(R.string.description_color_styles),
-                    icon = Icons.Rounded.Palette,
-                    shape = shapeManager(radius = settingsViewModel.settings.value.cornerRadius, isFirst = true),
-                    action = { navController.navigate(NavRoutes.ColorStyles.route) }
-                )
-            }
-            item {
-                SettingCategory(
-                    title = stringResource(id = R.string.privacy),
-                    subTitle = stringResource(id = R.string.backup_restore),
-                    icon = ImageVector.vectorResource(id = R.drawable.incognito_fill),
-                    shape = shapeManager(radius = settingsViewModel.settings.value.cornerRadius, isFirst = false),
-                    action = { navController.navigate(NavRoutes.Privacy.route) }
-                )
-            }
-            item {
-                SettingCategory(
-                    title = stringResource(id = R.string.language),
-                    subTitle = stringResource(id = R.string.language_description),
-                    icon = Icons.Rounded.Translate,
-                    shape = shapeManager(
-                        radius = settingsViewModel.settings.value.cornerRadius,
-                        isFirst = false
-                    ),
-                    action = { navController.navigate(NavRoutes.Language.route) }
-                )
-            }
-            item {
-                // The editor-behaviour screen (Markdown, LaTeX, live attachment preview, edit
-                // mode, show-only-title) was registered as a route but had no menu entry, so it
-                // was unreachable: the LaTeX and live-preview switches had no way to be toggled.
-                SettingCategory(
-                    title = stringResource(id = R.string.Behavior),
-                    subTitle = stringResource(id = R.string.description_behavior),
-                    icon = Icons.Rounded.Tune,
-                    shape = shapeManager(
-                        radius = settingsViewModel.settings.value.cornerRadius,
-                        isFirst = false
-                    ),
-                    action = { navController.navigate(NavRoutes.Markdown.route) }
-                )
-            }
-            item {
-                SettingCategory(
-                    title = stringResource(id = R.string.tools),
-                    subTitle = stringResource(R.string.description_tools),
-                    icon = Icons.Rounded.TextFields,
-                    shape = shapeManager(radius = settingsViewModel.settings.value.cornerRadius, isLast = true),
-                    isLast = true,
-                    action = { navController.navigate(NavRoutes.Tools.route) }
-                )
-            }
-            item {
-                SettingCategory(
-                    title = stringResource(id = R.string.backup),
-                    subTitle = stringResource(R.string.description_cloud),
-                    icon = Icons.Rounded.Cloud,
-                    shape = shapeManager(radius = settingsViewModel.settings.value.cornerRadius, isBoth = true),
-                    isLast = true,
-                    action = { navController.navigate(NavRoutes.Cloud.route) }
-                )
-            }
-            item {
-                SettingCategory(
-                    title = stringResource(id = R.string.issue),
-                    subTitle = stringResource(R.string.issue_description),
-                    icon = Icons.Rounded.BuildCircle,
-                    shape = shapeManager(radius = settingsViewModel.settings.value.cornerRadius, isFirst = true),
-                    actionType = SettingActionType.LINK,
-                    linkClicked = { uriHandler.openUri(ConnectionConst.ISSUES) },
-                    // action = { showDialog = true } // Show pop-up instead of navigation
-                )
-            }
-            item {
-                SettingCategory(
-                    title = stringResource(id = R.string.guide),
-                    subTitle = stringResource(R.string.description_guide),
-                    icon = Icons.AutoMirrored.Rounded.Help,
-                    shape = shapeManager(radius = settingsViewModel.settings.value.cornerRadius, isFirst = false),
-                    action = { navController.navigate(NavRoutes.Guide.route) }
-                )
-            }
-            item {
-                SettingCategory(
-                    title = stringResource(id = R.string.about),
-                    subTitle = stringResource(R.string.description_about),
-                    icon = Icons.Rounded.Info,
-                    shape = shapeManager(radius = settingsViewModel.settings.value.cornerRadius, isLast = true),
-                    isLast = true,
-                    action = { navController.navigate(NavRoutes.About.route) }
-                )
+        BoxWithConstraints {
+            // Two independent cards per row once the sheet is wide enough. In compact mode the
+            // grouped first/middle/last shapes stay as they were; in two-column mode every card is
+            // rounded on all corners, because a column of connected cards no longer exists.
+            val radius = settingsViewModel.settings.value.cornerRadius
+            val twoColumn = maxWidth >= 700.dp
+            val standalone = shapeManager(radius = radius, isBoth = true)
+            LazyVerticalGrid(
+                columns = if (twoColumn) GridCells.Fixed(2) else GridCells.Fixed(1),
+                horizontalArrangement = if (twoColumn) Arrangement.spacedBy(12.dp) else Arrangement.spacedBy(0.dp),
+                verticalArrangement = Arrangement.spacedBy(2.dp)
+            ) {
+                item {
+                    SettingCategory(
+                        smallSetting = true,
+                        title = stringResource(id = R.string.support),
+                        icon = Icons.AutoMirrored.Rounded.ArrowForwardIos,
+                        shape = if (twoColumn) standalone else shapeManager(radius = radius, isBoth = true),
+                        isLast = !twoColumn,
+                        composableAction = { onExit -> BottomModal(navController = navController, settingsViewModel = settingsViewModel) { onExit() } }
+                    )
+                }
+                item {
+                    SettingCategory(
+                        title = stringResource(id = R.string.color_styles),
+                        subTitle = stringResource(R.string.description_color_styles),
+                        icon = Icons.Rounded.Palette,
+                        shape = if (twoColumn) standalone else shapeManager(radius = radius, isFirst = true),
+                        action = { navController.navigate(NavRoutes.ColorStyles.route) }
+                    )
+                }
+                item {
+                    SettingCategory(
+                        title = stringResource(id = R.string.privacy),
+                        subTitle = stringResource(id = R.string.backup_restore),
+                        icon = ImageVector.vectorResource(id = R.drawable.incognito_fill),
+                        shape = if (twoColumn) standalone else shapeManager(radius = radius),
+                        action = { navController.navigate(NavRoutes.Privacy.route) }
+                    )
+                }
+                item {
+                    SettingCategory(
+                        title = stringResource(id = R.string.language),
+                        subTitle = stringResource(id = R.string.language_description),
+                        icon = Icons.Rounded.Translate,
+                        shape = if (twoColumn) standalone else shapeManager(radius = radius),
+                        action = { navController.navigate(NavRoutes.Language.route) }
+                    )
+                }
+                item {
+                    SettingCategory(
+                        title = stringResource(id = R.string.tools),
+                        subTitle = stringResource(R.string.description_tools),
+                        icon = Icons.Rounded.TextFields,
+                        shape = if (twoColumn) standalone else shapeManager(radius = radius, isLast = true),
+                        isLast = !twoColumn,
+                        action = { navController.navigate(NavRoutes.Tools.route) }
+                    )
+                }
+                item {
+                    SettingCategory(
+                        title = stringResource(id = R.string.backup),
+                        subTitle = stringResource(R.string.description_cloud),
+                        icon = Icons.Rounded.Cloud,
+                        shape = if (twoColumn) standalone else shapeManager(radius = radius, isBoth = true),
+                        isLast = !twoColumn,
+                        action = { navController.navigate(NavRoutes.Cloud.route) }
+                    )
+                }
+                item {
+                    SettingCategory(
+                        title = stringResource(id = R.string.issue),
+                        subTitle = stringResource(R.string.issue_description),
+                        icon = Icons.Rounded.BuildCircle,
+                        shape = if (twoColumn) standalone else shapeManager(radius = radius, isFirst = true),
+                        actionType = SettingActionType.LINK,
+                        linkClicked = { uriHandler.openUri(ConnectionConst.ISSUES) },
+                        // action = { showDialog = true } // Show pop-up instead of navigation
+                    )
+                }
+                item {
+                    SettingCategory(
+                        title = stringResource(id = R.string.guide),
+                        subTitle = stringResource(R.string.description_guide),
+                        icon = Icons.AutoMirrored.Rounded.Help,
+                        shape = if (twoColumn) standalone else shapeManager(radius = radius),
+                        action = { navController.navigate(NavRoutes.Guide.route) }
+                    )
+                }
+                item {
+                    SettingCategory(
+                        title = stringResource(id = R.string.about),
+                        subTitle = stringResource(R.string.description_about),
+                        icon = Icons.Rounded.Info,
+                        shape = if (twoColumn) standalone else shapeManager(radius = radius, isLast = true),
+                        isLast = !twoColumn,
+                        action = { navController.navigate(NavRoutes.About.route) }
+                    )
+                }
             }
         }
         ExperimentalFeatureLockedDialog(showDialog = showDialog, onDismiss = { showDialog = false })
@@ -279,8 +289,8 @@ fun saveState(preferences: SharedPreferences, isExpanded: Boolean) {
 @Composable
 fun TitleText(
     titleText: String,
-    textStyle: TextStyle = TextStyle(fontSize = 16.sp),
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    textStyle: TextStyle = TextStyle(fontSize = 16.sp)
 ) {
     Text(
         text = titleText,
@@ -303,17 +313,8 @@ fun BottomModal(navController: NavController,settingsViewModel: SettingsViewMode
             modifier = Modifier.padding(20.dp, 0.dp, 20.dp, 20.dp)
         ) {
             SettingsBox(
-                title = stringResource(id = R.string.app_list),
-                icon = Icons.Rounded.VolunteerActivism,
-                isCentered = true,
-                actionType = ActionType.CUSTOM,
-                radius = shapeManager(isBoth = true, radius = settingsViewModel.settings.value.cornerRadius),
-                customAction = { onExit -> ContributorsClicked(list = ConnectionConst.APP_LIST, settingsViewModel = settingsViewModel) { onExit() } }
-            )
-            Spacer(modifier = Modifier.height(18.dp))
-            SettingsBox(
                 isBig = false,
-                title = "YouTube",
+                title = stringResource(R.string.support_youtube),
                 icon = Icons.Rounded.Verified,
                 isCentered = true,
                 actionType = ActionType.CUSTOM,
@@ -321,7 +322,7 @@ fun BottomModal(navController: NavController,settingsViewModel: SettingsViewMode
                 customAction = { uriHandler.openUri(ConnectionConst.YOUTUBE) }
             )
             SettingsBox(
-                title = "Github",
+                title = stringResource(R.string.support_github),
                 isBig = false,
                 isCentered = true,
                 icon = Icons.Rounded.Android,
@@ -330,7 +331,7 @@ fun BottomModal(navController: NavController,settingsViewModel: SettingsViewMode
                 customAction = { uriHandler.openUri(ConnectionConst.GITHUB) }
             )
             SettingsBox(
-                title = "KoFi",
+                title = stringResource(R.string.support_kofi),
                 isBig = false,
                 icon = Icons.Rounded.Coffee,
                 isCentered = true,

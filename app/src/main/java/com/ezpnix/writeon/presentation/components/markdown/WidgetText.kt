@@ -33,6 +33,69 @@ import androidx.glance.unit.ColorProvider
 import com.ezpnix.writeon.R
 import java.io.File
 
+/**
+ * PERF-13: how much of a note the home-screen widget parses.
+ *
+ * A widget cell shows a handful of lines. Parsing the whole body here meant a 1 MB note paid for a
+ * full `lines()` split and the complete processor pipeline every refresh - and widgets refresh on
+ * screen-on. [widgetPreviewMarkdown] keeps the visible prefix only; the editor, the cards and the
+ * export still read the full text from the database.
+ */
+internal const val WIDGET_PREVIEW_MAX_LINES = 15
+internal const val WIDGET_PREVIEW_MAX_CHARS = 600
+
+/**
+ * The bounded prefix of [markdown] the widget renders.
+ *
+ * At most [WIDGET_PREVIEW_MAX_LINES] lines and [WIDGET_PREVIEW_MAX_CHARS] characters, whichever is
+ * shorter. The character cut is moved one back when it would fall between a surrogate pair, so the
+ * preview never ends in an isolated half of an emoji. The returned string is always a prefix, which
+ * is what keeps parsed line numbers valid in the full text (see [WidgetText]'s checkbox handler).
+ */
+internal fun widgetPreviewMarkdown(markdown: String): String {
+    var scannedLines = 0
+    var end = 0
+    while (scannedLines < WIDGET_PREVIEW_MAX_LINES && end < markdown.length) {
+        val newline = markdown.indexOf('\n', end)
+        if (newline < 0) {
+            end = markdown.length
+            break
+        }
+        end = newline + 1
+        scannedLines++
+    }
+    var limit = minOf(end, WIDGET_PREVIEW_MAX_CHARS, markdown.length)
+    if (
+        limit in 1 until markdown.length &&
+        markdown[limit - 1].isHighSurrogate() &&
+        markdown[limit].isLowSurrogate()
+    ) {
+        limit--
+    }
+    return if (limit >= markdown.length) markdown else markdown.substring(0, limit)
+}
+
+/**
+ * R4-05: maps a rendered widget line back to a line of the note body.
+ *
+ * The widget composes `# <title>`, a blank line, then the body. The old fixed offset of two lines
+ * under-counted a multi-line title (the editor's title field is not `singleLine`), so the first
+ * body checkbox tap landed on the wrong line - and because R3-04 treats a hint that points at a
+ * different checkbox as a deliberate no-op, the tap silently did nothing.
+ *
+ * @return the body line, or null when the line belongs to the title. A continuation line of a
+ *   multi-line title can itself parse as a checkbox, but it is not part of the body.
+ */
+internal fun widgetBodyLine(previewLine: Int, title: String): Int? {
+    if (title.isBlank()) return previewLine
+    // `# <title>\n\n` puts the first body line after the lines this prefix occupies. Count them
+    // the same way the renderer splits (`String.lines()` understands CR, LF and CRLF), so a title
+    // with a lone CR is not off by one. The body itself is still indexed by CheckboxLineToggle's
+    // LF split.
+    val headingLines = "# $title\n\n".lines().size - 1
+    return (previewLine - headingLines).takeIf { it >= 0 }
+}
+
 @Composable
 fun WidgetText(
     modifier: GlanceModifier,
@@ -40,9 +103,19 @@ fun WidgetText(
     weight: FontWeight = FontWeight.Normal,
     fontSize: TextUnit = 16.sp,
     color: ColorProvider,
-    onContentChange: (String) -> Unit = {}
+    /**
+     * R2-03: the tap is reported as *what was tapped*, not as a rebuilt note body.
+     *
+     * The old callback handed back the full markdown parsed from a composition-time snapshot. A
+     * write-back had to trust that snapshot, so it could revert text edited in the app since the
+     * launcher last refreshed. The caller now toggles the marker on the live stored body itself.
+     */
+    onCheckboxChange: (lineNumber: Int, text: String, checked: Boolean) -> Unit = { _, _, _ -> }
 ) {
-    val lines = markdown.lines()
+    // PERF-13: parse a bounded preview, not the whole note. The checkbox handler below still gets
+    // the full [markdown]: a tap rewrites one line of the real body, never the truncated preview.
+    val preview = widgetPreviewMarkdown(markdown)
+    val lines = preview.lines()
     // Same pipeline as MarkdownText. This used to be a copy of the list, which meant every new
     // element had to be added twice and the widget silently fell behind the note list.
     val markdownBuilder = MarkdownBuilder(lines, defaultMarkdownLineProcessors())
@@ -51,10 +124,9 @@ fun WidgetText(
         modifier = modifier,
         content = markdownBuilder.content,
         weight = weight,
-        lines = lines,
         fontSize = fontSize,
         color = color,
-        onContentChange = onContentChange
+        onCheckboxChange = onCheckboxChange
     )
 }
 
@@ -63,10 +135,9 @@ fun MarkdownWidgetContent(
     modifier: GlanceModifier,
     content: List<MarkdownElement>,
     weight: FontWeight,
-    lines: List<String>,
     color: ColorProvider,
     fontSize: TextUnit,
-    onContentChange: (String) -> Unit
+    onCheckboxChange: (lineNumber: Int, text: String, checked: Boolean) -> Unit
 ) {
     LazyColumn(
         modifier = modifier
@@ -79,8 +150,7 @@ fun MarkdownWidgetContent(
                 content = content,
                 weight = weight,
                 fontSize = fontSize,
-                lines = lines,
-                onContentChange = onContentChange
+                onCheckboxChange = onCheckboxChange
             )
         }
     }
@@ -90,13 +160,12 @@ fun MarkdownWidgetContent(
 @Composable
 fun WidgetMarkdownElement(
     modifier: GlanceModifier,
-    lines: List<String>,
     content: List<MarkdownElement>,
     index: Int,
     color: ColorProvider,
     weight: FontWeight,
     fontSize: TextUnit,
-    onContentChange: (String) -> Unit
+    onCheckboxChange: (lineNumber: Int, text: String, checked: Boolean) -> Unit
 ) {
     val element = content[index]
     val context = LocalContext.current
@@ -241,14 +310,11 @@ fun WidgetMarkdownElement(
                     },
                     checked = element.checked,
                     onCheckedChange = { newChecked ->
-                        val newMarkdown = lines.toMutableList().apply {
-                            this[element.lineNumber] = if (newChecked) {
-                                "[x] ${element.text}"
-                            } else {
-                                "[ ] ${element.text}"
-                            }
-                        }
-                        onContentChange(newMarkdown.joinToString("\n"))
+                        // R2-03/REG-10: report the tapped line and its rendered text. Rebuilding
+                        // the body here from the preview snapshot was what let a checkbox tap
+                        // revert text edited in the app since the launcher's last refresh. The
+                        // caller applies the marker to the live stored body.
+                        onCheckboxChange(element.lineNumber, element.text, newChecked)
                     }
                 )
             }
